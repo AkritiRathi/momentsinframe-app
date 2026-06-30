@@ -442,41 +442,6 @@ export default function EventScreen() {
         </View>
       </Modal>
 
-      {/* Select mode sticky bar */}
-      {selectMode && (
-        <View style={styles.selectBar}>
-          <View style={styles.selectBarLeft}>
-            <Text style={styles.selectCount}>{selected.size}</Text>
-            <Text style={styles.selectCountLabel}>selected</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.selectBarBtn}
-            onPress={() => allSelected ? deselectAll([...photos, ...otherPhotos]) : selectAll([...photos, ...otherPhotos])}
-          >
-            <Text style={styles.selectBarBtnText}>Select all</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.selectBarBtn} onPress={exitSelectMode}>
-            <Text style={styles.selectBarBtnText}>Cancel</Text>
-          </TouchableOpacity>
-          {isAdmin && (
-            <TouchableOpacity
-              style={[styles.selectBarBtn, styles.selectBarBtnDel, selected.size === 0 && { opacity: 0.4 }]}
-              disabled={selected.size === 0}
-              onPress={handleBulkDelete}
-            >
-              <Text style={[styles.selectBarBtnText, { color: Colors.danger }]}>Delete</Text>
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={[styles.selectBarBtnPrimary, selected.size === 0 && { opacity: 0.4 }]}
-            disabled={selected.size === 0}
-            onPress={() => Alert.alert('Coming soon', 'Bulk download will be available soon.')}
-          >
-            <Text style={styles.selectBarBtnPrimaryText}>↓ Download</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
       <ScrollView contentContainerStyle={styles.scroll}>
 
         {/* Header */}
@@ -532,6 +497,41 @@ export default function EventScreen() {
           <View style={styles.selectRow}>
             <TouchableOpacity style={styles.selectPhotosBtn} onPress={() => setSelectMode(true)}>
               <Text style={styles.selectPhotosBtnText}>Select photos</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Select mode bar — inline in scroll, not floating */}
+        {selectMode && (
+          <View style={styles.selectBar}>
+            <View style={styles.selectBarLeft}>
+              <Text style={styles.selectCount}>{selected.size}</Text>
+              <Text style={styles.selectCountLabel}>selected</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.selectBarBtn}
+              onPress={() => allSelected ? deselectAll([...photos, ...otherPhotos]) : selectAll([...photos, ...otherPhotos])}
+            >
+              <Text style={styles.selectBarBtnText}>Select all</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.selectBarBtn} onPress={exitSelectMode}>
+              <Text style={styles.selectBarBtnText}>Cancel</Text>
+            </TouchableOpacity>
+            {isAdmin && (
+              <TouchableOpacity
+                style={[styles.selectBarBtn, styles.selectBarBtnDel, selected.size === 0 && { opacity: 0.4 }]}
+                disabled={selected.size === 0}
+                onPress={handleBulkDelete}
+              >
+                <Text style={[styles.selectBarBtnText, { color: Colors.danger }]}>Delete</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[styles.selectBarBtnPrimary, selected.size === 0 && { opacity: 0.4 }]}
+              disabled={selected.size === 0}
+              onPress={() => Alert.alert('Coming soon', 'Bulk download will be available soon.')}
+            >
+              <Text style={styles.selectBarBtnPrimaryText}>↓ Download</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -672,7 +672,7 @@ const styles = StyleSheet.create({
   uploadCancelText: { fontSize: 13, color: Colors.danger },
   uploadCardSub: { fontSize: 13, color: Colors.textMuted, marginBottom: 10 },
   progressBarBg: { height: 8, backgroundColor: '#2a2a2a', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
-  progressBarFill: { height: '100%', backgroundColor: Colors.background === '#0F0F0F' ? Colors.white : Colors.background, borderRadius: 4 },
+  progressBarFill: { height: '100%', backgroundColor: Colors.white, borderRadius: 4 },
   uploadPct: { fontSize: 11, color: '#666' },
 
   // Lightbox

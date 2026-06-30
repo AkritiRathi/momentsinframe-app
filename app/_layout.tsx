@@ -31,6 +31,7 @@ export default function RootLayout() {
       const currentScreen = segments[1] as string | undefined;
       const inMaster = segments[0] === '(master)';
       const inAuth = segments[0] === '(auth)';
+      const inEvent = segments[0] === 'event';
       const master = await isMasterAdmin();
 
       if (!hasProfile) {
@@ -39,6 +40,9 @@ export default function RootLayout() {
         }
         return;
       }
+
+      // Event screen is accessible to all authenticated users (guests, event admins, master admins)
+      if (inEvent) return;
 
       if (master && !inMaster) {
         router.replace('/(master)/dashboard');

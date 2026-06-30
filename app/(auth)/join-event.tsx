@@ -30,8 +30,17 @@ export default function JoinEventScreen() {
           { text: 'Try again', onPress: () => setCode('') },
         ]);
       } else {
-        // Navigate to event — placeholder until Step 3
-        Alert.alert('Joined!', `Welcome to ${result.event.name}`);
+        router.replace({
+          pathname: '/event',
+          params: {
+            slug: result.event.slug,
+            name: result.event.name,
+            expiresAt: result.event.expires_at,
+            createdAt: result.event.created_at ?? new Date().toISOString(),
+            isAdmin: 'false',
+            adminPassword: '',
+          },
+        });
       }
     } catch {
       Alert.alert('Error', 'Something went wrong. Please check your connection and try again.');

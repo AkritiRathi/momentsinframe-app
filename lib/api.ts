@@ -14,6 +14,15 @@ async function get(path: string, headers: Record<string, string> = {}) {
   return res.json();
 }
 
+async function del(path: string, body: object) {
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
 export async function joinEvent(joinCode: string) {
   return post('/api/native/events/join', { joinCode });
 }
@@ -44,4 +53,25 @@ export async function extendEvent(slug: string, masterPassword: string, newExpir
 
 export async function changeEventAdminPassword(slug: string, currentPassword: string, newPassword: string) {
   return post(`/api/native/events/${slug}/change-admin-password`, { currentPassword, newPassword });
+}
+
+// Photo endpoints
+export async function getEventPhotos(slug: string) {
+  return get(`/api/events/${slug}/photos`);
+}
+
+export async function getPhotoUrls(slug: string, ids: string[]) {
+  return post(`/api/events/${slug}/photo-urls`, { ids });
+}
+
+export async function getUploadUrl(eventSlug: string, filename: string, contentType: string) {
+  return post('/api/upload-url', { eventSlug, filename, contentType });
+}
+
+export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string) {
+  return post('/api/upload', { eventSlug, stagingKey, originalFilename });
+}
+
+export async function deletePhotos(slug: string, photoIds: string[], adminPassword: string) {
+  return del(`/api/native/events/${slug}/photos`, { photoIds, adminPassword });
 }

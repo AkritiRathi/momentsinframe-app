@@ -99,8 +99,17 @@ export default function DashboardScreen() {
         </View>
         <View style={styles.cardFooter}>
           <Text style={styles.manageText}>Tap to manage →</Text>
-          <TouchableOpacity onPress={() => Alert.alert('Coming soon', 'Event management will be available in Step 3.')}>
-
+          <TouchableOpacity onPress={() => router.push({
+            pathname: '/event',
+            params: {
+              slug: item.slug,
+              name: item.name,
+              expiresAt: item.expires_at,
+              createdAt: item.created_at,
+              isAdmin: 'true',
+              adminPassword: item.event_admin_password,
+            },
+          })}>
             <Text style={styles.openEventText}>Open Event →</Text>
           </TouchableOpacity>
         </View>

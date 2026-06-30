@@ -42,8 +42,17 @@ export default function EventAdminLoginScreen() {
         return;
       }
 
-      // Navigate to event admin dashboard — placeholder until Step 3
-      Alert.alert('Success', `Logged in as ${loginResult.adminLevel} admin for ${joinResult.event.name}`);
+      router.replace({
+        pathname: '/event',
+        params: {
+          slug: joinResult.event.slug,
+          name: joinResult.event.name,
+          expiresAt: joinResult.event.expires_at,
+          createdAt: joinResult.event.created_at ?? new Date().toISOString(),
+          isAdmin: 'true',
+          adminPassword: password.trim(),
+        },
+      });
     } catch {
       Alert.alert('Error', 'Something went wrong. Please check your connection.');
     } finally {

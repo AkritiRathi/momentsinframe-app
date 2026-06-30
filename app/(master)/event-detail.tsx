@@ -154,7 +154,17 @@ export default function EventDetailScreen() {
 
         <TouchableOpacity
           style={styles.openBtn}
-          onPress={() => Alert.alert('Coming soon', 'Event management will be available in Step 3.')}
+          onPress={() => router.push({
+            pathname: '/event',
+            params: {
+              slug: params.slug,
+              name: params.name,
+              expiresAt: params.expires_at,
+              createdAt: params.created_at,
+              isAdmin: 'true',
+              adminPassword: currentAdminPassword,
+            },
+          })}
         >
           <Text style={styles.openBtnText}>Open Event →</Text>
         </TouchableOpacity>

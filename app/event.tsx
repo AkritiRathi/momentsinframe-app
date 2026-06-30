@@ -1,21 +1,22 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Image, ScrollView,
   Modal, Alert, ActivityIndicator, Dimensions, PanResponder,
-  ActionSheetIOS, Platform,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
 } from '../lib/api';
 import { Colors } from '../constants/colors';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-const THUMB_SIZE = (SCREEN_WIDTH - 2) / 3;
+const GAP = 2;
+const THUMB_SIZE = (SCREEN_WIDTH - GAP * 2) / 3;
 
 type Photo = {
   id: string;
@@ -41,7 +42,9 @@ type UploadProgress = {
 };
 
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  return new Date(iso).toLocaleDateString('en-IN', {
+    day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata',
+  });
 }
 
 function daysUntil(iso: string): number {
@@ -71,14 +74,13 @@ export default function EventScreen() {
   const [otherPhotos, setOtherPhotos] = useState<Photo[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, PhotoUrls>>({});
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
 
   // Lightbox
   const [lightboxVisible, setLightboxVisible] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxSection, setLightboxSection] = useState<'main' | 'other'>('main');
 
-  // Select mode (admin)
+  // Select mode
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -99,8 +101,8 @@ export default function EventScreen() {
 
   useEffect(() => { loadPhotos(); }, []);
 
-  async function loadPhotos(showRefresh = false) {
-    if (showRefresh) setRefreshing(true);
+  async function loadPhotos() {
+    setLoading(true);
     try {
       const data = await getEventPhotos(slug);
       if (data.error) { Alert.alert('Error', data.error); return; }
@@ -108,30 +110,29 @@ export default function EventScreen() {
       const other: Photo[] = data.otherPhotos ?? [];
       setPhotos(main);
       setOtherPhotos(other);
-      await loadAllUrls([...main, ...other], slug);
+      await loadAllUrls([...main, ...other]);
     } catch {
       Alert.alert('Error', 'Could not load photos. Check your connection.');
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }
 
-  async function loadAllUrls(all: Photo[], eventSlug: string) {
+  async function loadAllUrls(all: Photo[]) {
     const ids = all.map(p => p.id);
     const batches: string[][] = [];
     for (let i = 0; i < ids.length; i += 20) batches.push(ids.slice(i, i + 20));
     await Promise.all(
       batches.map(async (batch) => {
         try {
-          const result = await getPhotoUrls(eventSlug, batch);
-          if (result.urls) {
-            setPhotoUrls(prev => ({ ...prev, ...result.urls }));
-          }
-        } catch { /* silently skip failed batches */ }
+          const result = await getPhotoUrls(slug, batch);
+          if (result.urls) setPhotoUrls(prev => ({ ...prev, ...result.urls }));
+        } catch { /* skip failed batches */ }
       })
     );
   }
+
+  const lightboxPhotos = lightboxSection === 'main' ? photos : otherPhotos;
 
   function openLightbox(index: number, section: 'main' | 'other') {
     if (selectMode) return;
@@ -139,8 +140,6 @@ export default function EventScreen() {
     setLightboxSection(section);
     setLightboxVisible(true);
   }
-
-  const lightboxPhotos = lightboxSection === 'main' ? photos : otherPhotos;
 
   function navigateLightbox(delta: number) {
     setLightboxIndex(prev => {
@@ -158,6 +157,22 @@ export default function EventScreen() {
     });
   }
 
+  function selectAll(items: Photo[]) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      items.forEach(p => next.add(p.id));
+      return next;
+    });
+  }
+
+  function deselectAll(items: Photo[]) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      items.forEach(p => next.delete(p.id));
+      return next;
+    });
+  }
+
   function exitSelectMode() {
     setSelectMode(false);
     setSelected(new Set());
@@ -169,19 +184,19 @@ export default function EventScreen() {
       : await ImagePicker.requestMediaLibraryPermissionsAsync();
 
     if (!permResult.granted) {
-      Alert.alert('Permission needed', `Please allow ${source === 'camera' ? 'camera' : 'photo library'} access in Settings.`);
+      Alert.alert('Permission needed', `Allow ${source === 'camera' ? 'camera' : 'photo library'} access in Settings.`);
       return;
     }
 
     const pickResult = source === 'camera'
-      ? await ImagePicker.launchCameraAsync({ quality: 1, allowsEditing: false })
+      ? await ImagePicker.launchCameraAsync({ quality: 1 })
       : await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
           allowsMultipleSelection: true,
           quality: 1,
         });
 
-    if (pickResult.canceled || !pickResult.assets || pickResult.assets.length === 0) return;
+    if (pickResult.canceled || !pickResult.assets?.length) return;
 
     const assets = pickResult.assets;
     uploadCancelledRef.current = false;
@@ -190,7 +205,6 @@ export default function EventScreen() {
 
     let duplicates = 0;
     let failed = 0;
-    const newPhotoIds: string[] = [];
 
     for (let i = 0; i < assets.length; i++) {
       if (uploadCancelledRef.current) break;
@@ -206,20 +220,13 @@ export default function EventScreen() {
         const fileResponse = await fetch(asset.uri);
         const blob = await fileResponse.blob();
         const putRes = await fetch(uploadUrl, {
-          method: 'PUT',
-          body: blob,
-          headers: { 'Content-Type': contentType },
+          method: 'PUT', body: blob, headers: { 'Content-Type': contentType },
         });
         if (!putRes.ok) { failed++; continue; }
 
         const processResult = await processUpload(slug, stagingKey, filename);
-        if (processResult.duplicate) {
-          duplicates++;
-        } else if (processResult.error) {
-          failed++;
-        } else if (processResult.photo?.id) {
-          newPhotoIds.push(processResult.photo.id);
-        }
+        if (processResult.duplicate) duplicates++;
+        else if (processResult.error) failed++;
       } catch {
         failed++;
       }
@@ -229,21 +236,22 @@ export default function EventScreen() {
 
     setUploading(false);
 
+    const uploaded = uploadProgress.current - duplicates - failed;
     const parts: string[] = [];
-    const uploaded = assets.length - duplicates - failed - (uploadCancelledRef.current ? (assets.length - uploadProgress.current) : 0);
     if (uploaded > 0) parts.push(`${uploaded} uploaded`);
     if (duplicates > 0) parts.push(`${duplicates} duplicate${duplicates > 1 ? 's' : ''} skipped`);
     if (failed > 0) parts.push(`${failed} failed`);
-    if (parts.length > 0) Alert.alert('Upload complete', parts.join(' · '));
+    if (parts.length) Alert.alert('Upload complete', parts.join(' · '));
 
     await loadPhotos();
   }
 
   function showUploadOptions() {
     if (Platform.OS === 'ios') {
+      const { ActionSheetIOS } = require('react-native');
       ActionSheetIOS.showActionSheetWithOptions(
         { options: ['Cancel', 'Take a photo', 'Choose from library'], cancelButtonIndex: 0 },
-        (i) => { if (i === 1) handleUpload('camera'); if (i === 2) handleUpload('gallery'); }
+        (i: number) => { if (i === 1) handleUpload('camera'); if (i === 2) handleUpload('gallery'); }
       );
     } else {
       Alert.alert('Upload photos', 'Choose a source', [
@@ -287,24 +295,24 @@ export default function EventScreen() {
 
   async function handleDownloadPhoto(id: string) {
     const urls = photoUrls[id];
-    const photoUrl = urls?.url;
-    if (!photoUrl) { Alert.alert('Not available', 'Photo URL not loaded yet.'); return; }
+    if (!urls?.url) { Alert.alert('Not available', 'Photo URL not loaded yet.'); return; }
     try {
       const filename = urls.originalFilename ?? `photo_${id}.jpg`;
       const localUri = `${FileSystem.cacheDirectory}${filename}`;
-      await FileSystem.downloadAsync(photoUrl, localUri);
+      await FileSystem.downloadAsync(urls.url, localUri);
       await Sharing.shareAsync(localUri, { mimeType: 'image/jpeg' });
     } catch {
       Alert.alert('Error', 'Could not download photo.');
     }
   }
 
-  const currentLightboxPhoto = lightboxPhotos[lightboxIndex];
-  const currentLightboxUrls = currentLightboxPhoto ? photoUrls[currentLightboxPhoto.id] : null;
-  const lightboxImageUrl = currentLightboxUrls?.displayUrl ?? currentLightboxUrls?.url ?? null;
+  const currentPhoto = lightboxPhotos[lightboxIndex];
+  const currentUrls = currentPhoto ? photoUrls[currentPhoto.id] : null;
+  const lightboxImageUrl = currentUrls?.displayUrl ?? currentUrls?.url ?? null;
 
-  const daysLeft = daysUntil(params.expiresAt);
-  const showExpiryBadge = daysLeft <= 3;
+  const daysLeft = params.expiresAt ? daysUntil(params.expiresAt) : 999;
+  const totalPhotos = photos.length + otherPhotos.length;
+  const allSelected = [...photos, ...otherPhotos].every(p => selected.has(p.id));
 
   function renderThumb(photo: Photo, index: number, section: 'main' | 'other') {
     const urls = photoUrls[photo.id];
@@ -312,19 +320,21 @@ export default function EventScreen() {
     return (
       <TouchableOpacity
         key={photo.id}
-        style={[styles.thumb, isSelected && styles.thumbSelected]}
+        style={styles.thumb}
         onPress={() => selectMode ? toggleSelect(photo.id) : openLightbox(index, section)}
-        activeOpacity={0.8}
+        activeOpacity={0.85}
       >
         {urls?.thumbUrl ? (
           <Image source={{ uri: urls.thumbUrl }} style={styles.thumbImage} />
         ) : (
           <View style={styles.thumbPlaceholder}>
-            <ActivityIndicator size="small" color="#333" />
+            <View style={styles.thumbSkeleton} />
           </View>
         )}
-        {selectMode && isSelected && (
-          <View style={styles.thumbCheck}><Text style={styles.thumbCheckText}>✓</Text></View>
+        {selectMode && (
+          <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
+            {isSelected && <Text style={styles.checkboxTick}>✓</Text>}
+          </View>
         )}
       </TouchableOpacity>
     );
@@ -337,7 +347,7 @@ export default function EventScreen() {
       <View key={ri} style={styles.gridRow}>
         {row.map((p, ci) => renderThumb(p, ri * 3 + ci, section))}
         {row.length < 3 && Array(3 - row.length).fill(null).map((_, k) => (
-          <View key={`empty-${k}`} style={{ width: THUMB_SIZE }} />
+          <View key={`e${k}`} style={{ width: THUMB_SIZE }} />
         ))}
       </View>
     ));
@@ -351,46 +361,51 @@ export default function EventScreen() {
     );
   }
 
-  const totalPhotos = photos.length + otherPhotos.length;
-
   return (
     <SafeAreaView style={styles.container}>
+
       {/* Upload progress overlay */}
       {uploading && (
         <View style={styles.uploadOverlay}>
-          <Text style={styles.uploadTitle}>Uploading photos…</Text>
-          <View style={styles.progressBarWrap}>
-            <View style={[styles.progressBarFill, {
-              width: `${uploadProgress.total > 0 ? (uploadProgress.current / uploadProgress.total) * 100 : 0}%` as any,
-            }]} />
+          <View style={styles.uploadCard}>
+            <View style={styles.uploadCardHeader}>
+              <Text style={styles.uploadCardTitle}>Uploading photos</Text>
+              <TouchableOpacity onPress={() => { uploadCancelledRef.current = true; }}>
+                <Text style={styles.uploadCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.uploadCardSub}>
+              {uploadProgress.current} of {uploadProgress.total} uploaded
+              {uploadProgress.duplicates > 0 ? ` · ${uploadProgress.duplicates} duplicate${uploadProgress.duplicates > 1 ? 's' : ''} skipped` : ''}
+            </Text>
+            <View style={styles.progressBarBg}>
+              <View style={[styles.progressBarFill, {
+                width: `${uploadProgress.total > 0 ? Math.round((uploadProgress.current / uploadProgress.total) * 100) : 0}%` as any,
+              }]} />
+            </View>
+            <Text style={styles.uploadPct}>
+              {uploadProgress.total > 0 ? Math.round((uploadProgress.current / uploadProgress.total) * 100) : 0}% complete — keep this screen open
+            </Text>
           </View>
-          <Text style={styles.uploadMeta}>
-            {uploadProgress.current} of {uploadProgress.total} uploaded
-            {uploadProgress.duplicates > 0 ? ` · ${uploadProgress.duplicates} duplicate${uploadProgress.duplicates > 1 ? 's' : ''} skipped` : ''}
-            {uploadProgress.failed > 0 ? ` · ${uploadProgress.failed} failed` : ''}
-          </Text>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => { uploadCancelledRef.current = true; }}>
-            <Text style={styles.cancelBtnText}>Cancel</Text>
-          </TouchableOpacity>
         </View>
       )}
 
       {/* Lightbox */}
       <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
         <View style={styles.lightbox} {...panResponder.panHandlers}>
-          <SafeAreaView style={styles.lightbox}>
+          <SafeAreaView style={styles.lightboxInner}>
             <View style={styles.lbHeader}>
               <TouchableOpacity onPress={() => setLightboxVisible(false)}>
                 <Text style={styles.lbBack}>←</Text>
               </TouchableOpacity>
               <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
               <View style={styles.lbActions}>
-                <TouchableOpacity style={styles.lbActionBtn} onPress={() => currentLightboxPhoto && handleDownloadPhoto(currentLightboxPhoto.id)}>
-                  <Text style={styles.lbActionText}>Download</Text>
+                <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && handleDownloadPhoto(currentPhoto.id)}>
+                  <Text style={styles.lbBtnText}>Download</Text>
                 </TouchableOpacity>
                 {isAdmin && (
-                  <TouchableOpacity style={[styles.lbActionBtn, styles.lbActionDanger]} onPress={() => currentLightboxPhoto && handleDeletePhoto(currentLightboxPhoto.id)}>
-                    <Text style={[styles.lbActionText, { color: Colors.danger }]}>Delete</Text>
+                  <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>
+                    <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -403,22 +418,23 @@ export default function EventScreen() {
                 <ActivityIndicator color={Colors.accent} />
               )}
               {lightboxIndex > 0 && (
-                <TouchableOpacity style={[styles.lbArrow, styles.lbArrowLeft]} onPress={() => navigateLightbox(-1)}>
+                <TouchableOpacity style={[styles.lbArrow, { left: 0 }]} onPress={() => navigateLightbox(-1)}>
                   <Text style={styles.lbArrowText}>‹</Text>
                 </TouchableOpacity>
               )}
               {lightboxIndex < lightboxPhotos.length - 1 && (
-                <TouchableOpacity style={[styles.lbArrow, styles.lbArrowRight]} onPress={() => navigateLightbox(1)}>
+                <TouchableOpacity style={[styles.lbArrow, { right: 0 }]} onPress={() => navigateLightbox(1)}>
                   <Text style={styles.lbArrowText}>›</Text>
                 </TouchableOpacity>
               )}
             </View>
 
-            {currentLightboxPhoto && (
+            {currentPhoto?.taken_at && (
               <Text style={styles.lbMeta}>
-                {currentLightboxPhoto.taken_at
-                  ? new Date(currentLightboxPhoto.taken_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-                  : 'No date available'}
+                {new Date(currentPhoto.taken_at).toLocaleString('en-IN', {
+                  day: '2-digit', month: 'short', year: 'numeric',
+                  hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
+                })}
               </Text>
             )}
             <Text style={styles.lbSwipeHint}>Swipe left / right to navigate</Text>
@@ -426,96 +442,158 @@ export default function EventScreen() {
         </View>
       </Modal>
 
-      {/* Main content */}
+      {/* Select mode sticky bar */}
+      {selectMode && (
+        <View style={styles.selectBar}>
+          <View style={styles.selectBarLeft}>
+            <Text style={styles.selectCount}>{selected.size}</Text>
+            <Text style={styles.selectCountLabel}>selected</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.selectBarBtn}
+            onPress={() => allSelected ? deselectAll([...photos, ...otherPhotos]) : selectAll([...photos, ...otherPhotos])}
+          >
+            <Text style={styles.selectBarBtnText}>Select all</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.selectBarBtn} onPress={exitSelectMode}>
+            <Text style={styles.selectBarBtnText}>Cancel</Text>
+          </TouchableOpacity>
+          {isAdmin && (
+            <TouchableOpacity
+              style={[styles.selectBarBtn, styles.selectBarBtnDel, selected.size === 0 && { opacity: 0.4 }]}
+              disabled={selected.size === 0}
+              onPress={handleBulkDelete}
+            >
+              <Text style={[styles.selectBarBtnText, { color: Colors.danger }]}>Delete</Text>
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={[styles.selectBarBtnPrimary, selected.size === 0 && { opacity: 0.4 }]}
+            disabled={selected.size === 0}
+            onPress={() => Alert.alert('Coming soon', 'Bulk download will be available soon.')}
+          >
+            <Text style={styles.selectBarBtnPrimaryText}>↓ Download</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <ScrollView contentContainerStyle={styles.scroll}>
+
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
             <Text style={styles.backText}>←</Text>
           </TouchableOpacity>
-          <View style={styles.headerContent}>
-            <View style={styles.headerTop}>
-              <Text style={styles.eventName} numberOfLines={2}>{params.name}</Text>
-              {showExpiryBadge && (
-                <View style={styles.expiryBadge}>
-                  <Text style={styles.expiryBadgeText}>
-                    {daysLeft <= 0 ? 'Closed' : daysLeft === 1 ? '1 day left' : `${daysLeft} days left`}
-                  </Text>
+          <View style={styles.headerBody}>
+            <Text style={styles.eventName}>{params.name || 'Event'}</Text>
+            <Text style={styles.eventMeta}>
+              {params.createdAt ? `Created on ${formatDate(params.createdAt)}` : ''}
+              {params.createdAt && params.expiresAt ? ' · ' : ''}
+              {params.expiresAt ? `Event expires ${formatDate(params.expiresAt)}` : ''}
+            </Text>
+            <Text style={styles.photoCountText}>
+              {totalPhotos} photo{totalPhotos !== 1 ? 's' : ''}
+              {otherPhotos.length > 0 ? ` (${photos.length} in Photo Gallery, ${otherPhotos.length} in Other Photos Gallery)` : ''}
+            </Text>
+          </View>
+        </View>
+
+        {/* Expiry warning */}
+        {daysLeft <= 3 && (
+          <View style={styles.expiryBanner}>
+            <Text style={styles.expiryBannerText}>
+              {daysLeft < 0
+                ? 'This event has closed. Download your photos before they are removed.'
+                : daysLeft === 0
+                ? `This event closes today. Download your photos before then.`
+                : daysLeft === 1
+                ? `This event closes tomorrow. Download your photos before then.`
+                : `This event closes in ${daysLeft} days. Download your photos before then.`}
+            </Text>
+          </View>
+        )}
+
+        {/* Upload card */}
+        <View style={styles.uploadCard2}>
+          <TouchableOpacity
+            style={[styles.uploadBtn, uploading && { opacity: 0.5 }]}
+            onPress={showUploadOptions}
+            disabled={uploading}
+          >
+            <Text style={styles.uploadBtnText}>Upload Photos</Text>
+          </TouchableOpacity>
+          <Text style={styles.uploadHint}>
+            You can upload multiple photos at a time. Keep this screen open while uploading.
+          </Text>
+        </View>
+
+        {/* Select photos button (when not in select mode) */}
+        {totalPhotos > 0 && !selectMode && (
+          <View style={styles.selectRow}>
+            <TouchableOpacity style={styles.selectPhotosBtn} onPress={() => setSelectMode(true)}>
+              <Text style={styles.selectPhotosBtnText}>Select photos</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Gallery sections */}
+        {photos.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionTitleRow}>
+                <Text style={styles.sectionTitle}>Photo Gallery</Text>
+                <Text style={styles.sectionCount}>{photos.length}</Text>
+              </View>
+              <Text style={styles.sectionSub}>(sorted by date taken · oldest first)</Text>
+              {selectMode && (
+                <View style={styles.sectionSelectRow}>
+                  <TouchableOpacity onPress={() => {
+                    const allInSection = photos.every(p => selected.has(p.id));
+                    allInSection ? deselectAll(photos) : selectAll(photos);
+                  }}>
+                    <Text style={styles.sectionSelectLink}>
+                      {photos.every(p => selected.has(p.id)) ? 'Deselect all Photo Gallery' : 'Select all Photo Gallery'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               )}
             </View>
-            <Text style={styles.headerMeta}>
-              Created {formatDate(params.createdAt)} · Expires {formatDate(params.expiresAt)}
-            </Text>
-            <Text style={styles.photoCount}>{totalPhotos} photo{totalPhotos !== 1 ? 's' : ''}</Text>
-          </View>
-        </View>
-
-        {/* Upload bar */}
-        <View style={styles.uploadBar}>
-          <TouchableOpacity style={styles.uploadBtn} onPress={showUploadOptions}>
-            <Text style={styles.uploadBtnText}>↑  Upload photos</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Admin select bar */}
-        {isAdmin && !selectMode && (
-          <View style={styles.adminBar}>
-            <TouchableOpacity style={styles.selectBtn} onPress={() => setSelectMode(true)}>
-              <Text style={styles.selectBtnText}>Select photos</Text>
-            </TouchableOpacity>
-            <Text style={styles.adminLabel}>Admin mode</Text>
-          </View>
-        )}
-
-        {/* Select mode active bar */}
-        {selectMode && (
-          <View style={styles.selectActiveBar}>
-            <Text style={styles.selCount}>{selected.size} selected</Text>
-            <TouchableOpacity style={[styles.selBtn, styles.selBtnCancel]} onPress={exitSelectMode}>
-              <Text style={[styles.selBtnText, { color: '#666' }]}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.selBtn, styles.selBtnDl, selected.size === 0 && styles.selBtnDisabled]}
-              disabled={selected.size === 0}
-              onPress={async () => {
-                Alert.alert('Coming soon', 'Bulk download will be available in the next update.');
-              }}
-            >
-              <Text style={[styles.selBtnText, { color: Colors.accent }]}>Download</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.selBtn, styles.selBtnDel, selected.size === 0 && styles.selBtnDisabled]}
-              disabled={selected.size === 0}
-              onPress={handleBulkDelete}
-            >
-              <Text style={[styles.selBtnText, { color: Colors.danger }]}>Delete</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Photo gallery */}
-        {photos.length > 0 && (
-          <>
-            <Text style={styles.sectionLabel}>PHOTO GALLERY</Text>
             <View style={styles.grid}>{renderGrid(photos, 'main')}</View>
-          </>
+          </View>
         )}
 
-        {/* Other photos */}
         {otherPhotos.length > 0 && (
-          <>
-            <Text style={[styles.sectionLabel, { color: '#555' }]}>OTHER PHOTOS</Text>
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionTitleRow}>
+                <Text style={styles.sectionTitle}>Other Photos Gallery</Text>
+                <Text style={styles.sectionCount}>{otherPhotos.length}</Text>
+              </View>
+              <Text style={styles.sectionSub}>(no date info — sorted by upload time)</Text>
+              {selectMode && (
+                <View style={styles.sectionSelectRow}>
+                  <TouchableOpacity onPress={() => {
+                    const allInSection = otherPhotos.every(p => selected.has(p.id));
+                    allInSection ? deselectAll(otherPhotos) : selectAll(otherPhotos);
+                  }}>
+                    <Text style={styles.sectionSelectLink}>
+                      {otherPhotos.every(p => selected.has(p.id)) ? 'Deselect all Other Photos Gallery' : 'Select all Other Photos Gallery'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
             <View style={styles.grid}>{renderGrid(otherPhotos, 'other')}</View>
-          </>
+          </View>
         )}
 
-        {photos.length === 0 && otherPhotos.length === 0 && (
+        {totalPhotos === 0 && (
           <View style={styles.empty}>
             <Text style={styles.emptyText}>No photos yet.</Text>
-            <Text style={styles.emptySubText}>Be the first to upload!</Text>
+            <Text style={styles.emptySub}>Be the first to upload!</Text>
           </View>
         )}
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -523,83 +601,94 @@ export default function EventScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  scroll: { paddingBottom: 40 },
+  scroll: { paddingBottom: 48 },
 
   // Header
-  header: { flexDirection: 'row', padding: 16, paddingBottom: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
-  backBtn: { marginRight: 12, paddingTop: 2 },
+  header: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16 },
+  backBtn: { marginRight: 12, paddingTop: 3 },
   backText: { fontSize: 24, color: Colors.textMuted },
-  headerContent: { flex: 1 },
-  headerTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 4 },
-  eventName: { flex: 1, fontSize: 16, fontWeight: '800', color: Colors.white },
-  expiryBadge: { backgroundColor: 'rgba(245,200,66,0.12)', borderWidth: 0.5, borderColor: 'rgba(245,200,66,0.3)', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
-  expiryBadgeText: { fontSize: 9, fontWeight: '700', color: Colors.accent },
-  headerMeta: { fontSize: 10, color: '#555', marginBottom: 2 },
-  photoCount: { fontSize: 10, color: '#444' },
+  headerBody: { flex: 1, alignItems: 'center' },
+  eventName: { fontSize: 22, fontWeight: '600', color: Colors.white, textAlign: 'center', marginBottom: 4 },
+  eventMeta: { fontSize: 12, color: '#888', textAlign: 'center', marginBottom: 2 },
+  photoCountText: { fontSize: 13, color: '#666', textAlign: 'center' },
 
-  // Upload
-  uploadBar: { padding: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
-  uploadBtn: { backgroundColor: Colors.accent, borderRadius: 10, paddingVertical: 10, paddingHorizontal: 16, alignSelf: 'flex-start' },
-  uploadBtnText: { fontSize: 13, fontWeight: '800', color: Colors.background },
+  // Expiry banner
+  expiryBanner: { marginHorizontal: 16, marginBottom: 12, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(245,158,11,0.4)', backgroundColor: 'rgba(245,158,11,0.08)', paddingHorizontal: 14, paddingVertical: 10 },
+  expiryBannerText: { fontSize: 13, color: '#D97706', lineHeight: 20 },
 
-  // Admin bar
-  adminBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, backgroundColor: 'rgba(245,200,66,0.03)', borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
-  selectBtn: { borderWidth: 0.5, borderColor: 'rgba(245,200,66,0.3)', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5 },
-  selectBtnText: { fontSize: 11, fontWeight: '700', color: Colors.accent },
-  adminLabel: { marginLeft: 'auto', fontSize: 10, color: '#444' },
+  // Upload card
+  uploadCard2: { marginHorizontal: 16, marginBottom: 12, borderRadius: 12, borderWidth: 0.5, borderColor: Colors.cardBorder, backgroundColor: Colors.card, padding: 16, alignItems: 'center' },
+  uploadBtn: { backgroundColor: Colors.background, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 32, marginBottom: 10 },
+  uploadBtnText: { fontSize: 15, fontWeight: '600', color: Colors.white },
+  uploadHint: { fontSize: 12, color: '#666', textAlign: 'center', lineHeight: 18 },
 
-  // Select active bar
-  selectActiveBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 9, backgroundColor: '#111', borderBottomWidth: 0.5, borderBottomColor: 'rgba(245,200,66,0.3)', gap: 6 },
-  selCount: { fontSize: 12, fontWeight: '700', color: Colors.accent, flex: 1 },
-  selBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 7, borderWidth: 0.5 },
-  selBtnCancel: { borderColor: '#2a2a2a' },
-  selBtnDl: { borderColor: 'rgba(245,200,66,0.3)', backgroundColor: 'rgba(245,200,66,0.08)' },
-  selBtnDel: { borderColor: 'rgba(229,57,53,0.3)', backgroundColor: 'rgba(229,57,53,0.08)' },
-  selBtnDisabled: { opacity: 0.4 },
-  selBtnText: { fontSize: 11, fontWeight: '700' },
+  // Select photos button
+  selectRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, marginBottom: 12 },
+  selectPhotosBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  selectPhotosBtnText: { fontSize: 14, fontWeight: '500', color: Colors.textMuted },
+
+  // Select mode bar
+  selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: Colors.card, borderBottomWidth: 0.5, borderBottomColor: Colors.cardBorder, gap: 6, flexWrap: 'wrap' },
+  selectBarLeft: { flexDirection: 'column', marginRight: 4 },
+  selectCount: { fontSize: 20, fontWeight: '500', color: Colors.white, lineHeight: 22 },
+  selectCountLabel: { fontSize: 11, color: '#666', marginTop: 1 },
+  selectBarBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  selectBarBtnText: { fontSize: 13, color: Colors.textMuted },
+  selectBarBtnDel: { borderColor: 'rgba(229,57,53,0.3)' },
+  selectBarBtnPrimary: { backgroundColor: Colors.background, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  selectBarBtnPrimaryText: { fontSize: 13, fontWeight: '600', color: Colors.white },
 
   // Section
-  sectionLabel: { fontSize: 9, fontWeight: '700', color: Colors.accent, letterSpacing: 1, paddingHorizontal: 14, paddingTop: 14, paddingBottom: 6 },
+  section: { marginBottom: 24 },
+  sectionHeader: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10 },
+  sectionTitleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 2 },
+  sectionTitle: { fontSize: 18, fontWeight: '500', color: Colors.white },
+  sectionCount: { fontSize: 14, color: '#888' },
+  sectionSub: { fontSize: 13, color: '#666' },
+  sectionSelectRow: { marginTop: 6 },
+  sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
 
   // Grid
-  grid: { gap: 1 },
-  gridRow: { flexDirection: 'row', gap: 1 },
+  grid: { gap: GAP },
+  gridRow: { flexDirection: 'row', gap: GAP },
   thumb: { width: THUMB_SIZE, height: THUMB_SIZE, backgroundColor: '#1a1a1a' },
-  thumbSelected: { opacity: 0.6 },
   thumbImage: { width: '100%', height: '100%' },
-  thumbPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  thumbCheck: { position: 'absolute', top: 4, left: 4, width: 16, height: 16, borderRadius: 8, backgroundColor: Colors.accent, alignItems: 'center', justifyContent: 'center' },
-  thumbCheckText: { fontSize: 9, fontWeight: '800', color: Colors.background },
+  thumbPlaceholder: { flex: 1 },
+  thumbSkeleton: { flex: 1, backgroundColor: '#252525' },
+  checkbox: { position: 'absolute', top: 5, right: 5, width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: Colors.white, backgroundColor: 'rgba(255,255,255,0.7)', alignItems: 'center', justifyContent: 'center' },
+  checkboxSelected: { backgroundColor: Colors.background, borderColor: Colors.background },
+  checkboxTick: { fontSize: 11, fontWeight: '800', color: Colors.white },
 
   // Empty
-  empty: { alignItems: 'center', paddingTop: 80 },
-  emptyText: { fontSize: 16, fontWeight: '700', color: Colors.textMuted, marginBottom: 6 },
-  emptySubText: { fontSize: 13, color: '#444' },
+  empty: { alignItems: 'center', paddingTop: 60 },
+  emptyText: { fontSize: 16, fontWeight: '500', color: Colors.textMuted, marginBottom: 6 },
+  emptySub: { fontSize: 14, color: '#444' },
 
   // Upload overlay
-  uploadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.92)', zIndex: 100, justifyContent: 'center', alignItems: 'center', padding: 32, gap: 14 },
-  uploadTitle: { fontSize: 15, fontWeight: '700', color: Colors.white },
-  progressBarWrap: { width: '100%', height: 4, backgroundColor: '#2a2a2a', borderRadius: 2, overflow: 'hidden' },
-  progressBarFill: { height: '100%', backgroundColor: Colors.accent, borderRadius: 2 },
-  uploadMeta: { fontSize: 12, color: Colors.textMuted, textAlign: 'center' },
-  cancelBtn: { borderWidth: 0.5, borderColor: '#333', borderRadius: 8, paddingHorizontal: 20, paddingVertical: 8 },
-  cancelBtnText: { fontSize: 12, color: '#666' },
+  uploadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 100, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
+  uploadCard: { width: '100%', backgroundColor: Colors.card, borderRadius: 16, padding: 20 },
+  uploadCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  uploadCardTitle: { fontSize: 16, fontWeight: '600', color: Colors.white },
+  uploadCancelText: { fontSize: 13, color: Colors.danger },
+  uploadCardSub: { fontSize: 13, color: Colors.textMuted, marginBottom: 10 },
+  progressBarBg: { height: 8, backgroundColor: '#2a2a2a', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
+  progressBarFill: { height: '100%', backgroundColor: Colors.background === '#0F0F0F' ? Colors.white : Colors.background, borderRadius: 4 },
+  uploadPct: { fontSize: 11, color: '#666' },
 
   // Lightbox
   lightbox: { flex: 1, backgroundColor: '#000' },
+  lightboxInner: { flex: 1 },
   lbHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   lbBack: { fontSize: 22, color: Colors.textMuted, marginRight: 12 },
-  lbCounter: { fontSize: 12, color: '#555', flex: 1 },
+  lbCounter: { fontSize: 13, color: '#666', flex: 1 },
   lbActions: { flexDirection: 'row', gap: 8 },
-  lbActionBtn: { borderWidth: 0.5, borderColor: '#2a2a2a', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 5 },
-  lbActionDanger: { borderColor: 'rgba(229,57,53,0.3)' },
-  lbActionText: { fontSize: 11, fontWeight: '700', color: '#888' },
+  lbBtn: { borderWidth: 0.5, borderColor: '#2a2a2a', borderRadius: 7, paddingHorizontal: 12, paddingVertical: 6 },
+  lbBtnDanger: { borderColor: 'rgba(229,57,53,0.3)' },
+  lbBtnText: { fontSize: 13, fontWeight: '500', color: '#888' },
   lbImageWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  lbImage: { width: SCREEN_WIDTH, height: SCREEN_WIDTH },
-  lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 48, justifyContent: 'center', alignItems: 'center' },
-  lbArrowLeft: { left: 0 },
-  lbArrowRight: { right: 0 },
-  lbArrowText: { fontSize: 32, color: 'rgba(255,255,255,0.35)' },
-  lbMeta: { fontSize: 11, color: '#555', textAlign: 'center', paddingHorizontal: 16, paddingVertical: 8 },
-  lbSwipeHint: { fontSize: 9, color: '#333', textAlign: 'center', paddingBottom: 8 },
+  lbImage: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },
+  lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },
+  lbArrowText: { fontSize: 36, color: 'rgba(255,255,255,0.35)' },
+  lbMeta: { fontSize: 12, color: '#555', textAlign: 'center', paddingHorizontal: 16, paddingVertical: 8 },
+  lbSwipeHint: { fontSize: 10, color: '#333', textAlign: 'center', paddingBottom: 10 },
 });

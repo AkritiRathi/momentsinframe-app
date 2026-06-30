@@ -1,15 +1,14 @@
 import { Slot, useRouter, useSegments } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { getUserProfile } from '@/lib/storage';
-import { isMasterAdmin } from '@/lib/auth';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { getUserProfile } from '../lib/storage';
+import { isMasterAdmin } from '../lib/auth';
 
 export default function RootLayout() {
   const segments = useSegments();
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
-  const [ready, setReady] = useState(false);
-  const [hasProfile, setHasProfile] = useState(false);
-  const [isMaster, setIsMaster] = useState(false);
+  const [hasProfile, setHasProfile] = useState<boolean | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -17,31 +16,49 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (!mounted) return;
+
     (async () => {
       const profile = await getUserProfile();
-      const master = await isMasterAdmin();
       setHasProfile(!!profile);
-      setIsMaster(master);
-      setReady(true);
     })();
   }, [mounted]);
 
+  // Re-check auth state on every navigation change
   useEffect(() => {
-    if (!mounted || !ready) return;
+    if (!mounted || hasProfile === null) return;
 
-    const inAuth = segments[0] === '(auth)';
-    const inMaster = segments[0] === '(master)';
+    (async () => {
+      const currentScreen = segments[1] as string | undefined;
+      const inMaster = segments[0] === '(master)';
+      const inAuth = segments[0] === '(auth)';
+      const master = await isMasterAdmin();
 
-    if (!hasProfile) {
-      router.replace('/(auth)/name-entry');
-    } else if (isMaster && !inMaster) {
-      router.replace('/(master)/dashboard');
-    } else if (!isMaster && inMaster) {
-      router.replace('/(auth)/home');
-    } else if (!inAuth && !inMaster) {
-      router.replace('/(auth)/home');
-    }
-  }, [mounted, ready, hasProfile, isMaster, segments]);
+      if (!hasProfile) {
+        if (currentScreen !== 'name-entry') {
+          router.replace('/(auth)/name-entry');
+        }
+        return;
+      }
 
-  return <Slot />;
+      if (master && !inMaster) {
+        router.replace('/(master)/dashboard');
+        return;
+      }
+
+      if (!master && inMaster) {
+        router.replace('/(auth)/home');
+        return;
+      }
+
+      if (!master && !inAuth) {
+        router.replace('/(auth)/home');
+      }
+    })();
+  }, [mounted, hasProfile, segments]);
+
+  return (
+    <SafeAreaProvider>
+      <Slot />
+    </SafeAreaProvider>
+  );
 }

@@ -1,12 +1,13 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  SafeAreaView, KeyboardAvoidingView, Platform, Alert,
+  KeyboardAvoidingView, Platform, Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { masterLogin } from '@/lib/api';
-import { saveMasterSession } from '@/lib/auth';
-import { Colors } from '@/constants/colors';
+import { masterLogin } from '../../lib/api';
+import { saveMasterSession } from '../../lib/auth';
+import { Colors } from '../../constants/colors';
 
 export default function MasterAdminLoginScreen() {
   const router = useRouter();

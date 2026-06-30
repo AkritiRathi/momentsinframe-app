@@ -1,12 +1,13 @@
 import {
-  View, Text, TouchableOpacity, StyleSheet, SafeAreaView,
-  FlatList, Alert, Clipboard, RefreshControl, ActivityIndicator,
+  View, Text, TouchableOpacity, StyleSheet,
+  FlatList, RefreshControl, ActivityIndicator, Alert, BackHandler,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useEffect, useState, useCallback } from 'react';
-import { getMasterPassword, clearMasterSession } from '@/lib/auth';
-import { listEvents, extendEvent } from '@/lib/api';
-import { Colors } from '@/constants/colors';
+import { getMasterPassword, clearMasterSession } from '../../lib/auth';
+import { listEvents } from '../../lib/api';
+import { Colors } from '../../constants/colors';
 
 type Event = {
   id: string;
@@ -30,6 +31,11 @@ export default function DashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [masterPassword, setMasterPassword] = useState<string | null>(null);
 
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, []);
+
   const load = useCallback(async (mp?: string) => {
     const pw = mp ?? masterPassword;
     if (!pw) return;
@@ -37,7 +43,7 @@ export default function DashboardScreen() {
       const result = await listEvents(pw);
       if (result.events) setEvents(result.events);
     } catch {
-      Alert.alert('Error', 'Could not load events.');
+      // silently fail on refresh
     }
   }, [masterPassword]);
 
@@ -61,87 +67,44 @@ export default function DashboardScreen() {
     router.replace('/(auth)/home');
   }
 
-  function copyCode(code: string) {
-    Clipboard.setString(code);
-    Alert.alert('Copied', `Event code ${code} copied to clipboard.`);
-  }
-
-  function copyAdminDetails(event: Event) {
-    const text = `Event: ${event.name}\nEvent Code: ${event.join_code}\nAdmin Password: ${event.event_admin_password}`;
-    Clipboard.setString(text);
-    Alert.alert('Copied', 'Admin details copied to clipboard.');
-  }
-
-  async function handleExtend(event: Event) {
-    if (!masterPassword) return;
-    Alert.prompt(
-      'Extend expiry',
-      'Enter new expiry date (YYYY-MM-DD):',
-      async (newDate) => {
-        if (!newDate) return;
-        const result = await extendEvent(event.slug, masterPassword, newDate);
-        if (result.error) {
-          Alert.alert('Error', result.error);
-        } else {
-          Alert.alert('Done', 'Expiry date updated.');
-          await load();
-        }
+  function openEvent(item: Event) {
+    router.push({
+      pathname: '/(master)/event-detail',
+      params: {
+        id: item.id,
+        name: item.name,
+        slug: item.slug,
+        join_code: item.join_code,
+        event_admin_password: item.event_admin_password,
+        created_at: item.created_at,
+        expires_at: item.expires_at,
+        photo_count: String(item.photo_count),
       },
-      'plain-text',
-    );
+    });
   }
 
   function renderEvent({ item }: { item: Event }) {
     return (
-      <View style={styles.card}>
-        <View style={styles.cardHeader}>
-          <View style={styles.cardHeaderLeft}>
-            <Text style={styles.eventName}>{item.name}</Text>
-            <Text style={styles.eventCode}>{item.join_code}</Text>
-          </View>
-          <TouchableOpacity
-            style={styles.deleteBtn}
-            onPress={() => Alert.alert('Delete event', `Delete "${item.name}"? This cannot be undone.`, [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Delete', style: 'destructive', onPress: () => Alert.alert('Coming soon', 'Delete will be available in the next update.') },
-            ])}
-          >
-            <Text style={styles.deleteBtnText}>🗑️</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.copyRow}>
-          <TouchableOpacity style={styles.copyBtn} onPress={() => copyCode(item.join_code)}>
-            <Text style={styles.copyBtnText}>📋 Copy code</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.copyBtn} onPress={() => copyAdminDetails(item)}>
-            <Text style={styles.copyBtnText}>📋 Copy admin details</Text>
-          </TouchableOpacity>
-        </View>
-
+      <TouchableOpacity style={styles.card} onPress={() => openEvent(item)} activeOpacity={0.75}>
+        <Text style={styles.eventName}>{item.name}</Text>
         <View style={styles.metaRow}>
-          <View style={styles.metaItem}>
-            <Text style={styles.metaLabel}>CREATED</Text>
-            <Text style={styles.metaValue}>{formatDate(item.created_at)}</Text>
-          </View>
           <View style={styles.metaItem}>
             <Text style={styles.metaLabel}>EXPIRES</Text>
             <Text style={styles.metaValue}>{formatDate(item.expires_at)}</Text>
           </View>
-        </View>
-
-        <View style={styles.cardFooter}>
-          <Text style={styles.photoCount}>📷 {item.photo_count} photos</Text>
-          <View style={styles.footerRight}>
-            <TouchableOpacity style={styles.extendBtn} onPress={() => handleExtend(item)}>
-              <Text style={styles.extendBtnText}>Extend expiry</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => Alert.alert('Coming soon', 'Event management will be available in Step 3.')}>
-              <Text style={styles.openEventText}>Open Event →</Text>
-            </TouchableOpacity>
+          <View style={styles.metaItem}>
+            <Text style={styles.metaLabel}>PHOTOS</Text>
+            <Text style={styles.metaValue}>{item.photo_count} photos</Text>
           </View>
         </View>
-      </View>
+        <View style={styles.cardFooter}>
+          <Text style={styles.manageText}>Tap to manage →</Text>
+          <TouchableOpacity onPress={() => Alert.alert('Coming soon', 'Event management will be available in Step 3.')}>
+
+            <Text style={styles.openEventText}>Open Event →</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
     );
   }
 
@@ -158,7 +121,7 @@ export default function DashboardScreen() {
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>All Events</Text>
-          <Text style={styles.headerSub}>Master admin · {events.length} event{events.length !== 1 ? 's' : ''}</Text>
+          <Text style={styles.headerSub}>Master Admin · {events.length} event{events.length !== 1 ? 's' : ''}</Text>
         </View>
         <View style={styles.headerRight}>
           <TouchableOpacity style={styles.newBtn} onPress={() => router.push('/(master)/create-event')}>
@@ -184,7 +147,7 @@ export default function DashboardScreen() {
       />
 
       <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Logout master admin</Text>
+        <Text style={styles.logoutText}>Logout Master Admin</Text>
       </TouchableOpacity>
     </SafeAreaView>
   );
@@ -198,7 +161,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 0.5, borderBottomColor: '#222',
   },
   headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.white },
-  headerSub: { fontSize: 11, color: Colors.textMuted, marginTop: 2 },
+  headerSub: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   newBtn: { backgroundColor: Colors.accent, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
   newBtnText: { fontSize: 12, fontWeight: '800', color: Colors.background },
@@ -209,33 +172,19 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.card, borderWidth: 0.5, borderColor: Colors.cardBorder,
     borderRadius: 16, padding: 14,
   },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
-  cardHeaderLeft: { flex: 1 },
-  eventName: { fontSize: 15, fontWeight: '800', color: Colors.white, marginBottom: 2 },
-  eventCode: { fontSize: 14, fontWeight: '800', color: Colors.accent, letterSpacing: 3 },
-  deleteBtn: { padding: 4 },
-  deleteBtnText: { fontSize: 18 },
-  copyRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  copyBtn: {
-    flex: 1, backgroundColor: '#252525', borderWidth: 1, borderColor: '#333',
-    borderRadius: 8, padding: 9, alignItems: 'center',
-  },
-  copyBtnText: { fontSize: 11, fontWeight: '700', color: '#CCC' },
+  eventName: { fontSize: 16, fontWeight: '800', color: Colors.white, marginBottom: 12 },
   metaRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   metaItem: { flex: 1, backgroundColor: '#141414', borderRadius: 8, padding: 10 },
-  metaLabel: { fontSize: 9, color: '#444', fontWeight: '700', letterSpacing: 0.5, marginBottom: 2 },
-  metaValue: { fontSize: 12, color: Colors.textMuted, fontWeight: '600' },
+  metaLabel: { fontSize: 10, color: '#555', fontWeight: '700', letterSpacing: 0.5, marginBottom: 3 },
+  metaValue: { fontSize: 14, color: Colors.textMuted, fontWeight: '600' },
   cardFooter: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingTop: 10, borderTopWidth: 0.5, borderTopColor: '#252525',
   },
-  photoCount: { fontSize: 12, color: '#666' },
-  footerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  extendBtn: { backgroundColor: '#2A2A2A', borderRadius: 7, paddingHorizontal: 10, paddingVertical: 6 },
-  extendBtnText: { fontSize: 11, fontWeight: '700', color: Colors.textMuted },
-  openEventText: { fontSize: 12, fontWeight: '700', color: Colors.accent },
+  manageText: { fontSize: 13, color: '#888', fontWeight: '700' },
+  openEventText: { fontSize: 13, fontWeight: '700', color: Colors.accent },
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyText: { fontSize: 14, color: Colors.textMuted, textAlign: 'center' },
   logoutBtn: { padding: 20, alignItems: 'center', borderTopWidth: 0.5, borderTopColor: '#1A1A1A' },
-  logoutText: { fontSize: 13, color: '#444', fontWeight: '600' },
+  logoutText: { fontSize: 15, color: '#666', fontWeight: '600' },
 });

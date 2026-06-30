@@ -1,30 +1,46 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  SafeAreaView, KeyboardAvoidingView, Platform, ScrollView, Alert,
+  KeyboardAvoidingView, Platform, ScrollView, Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { getMasterPassword } from '@/lib/auth';
-import { createEvent } from '@/lib/api';
-import { Colors } from '@/constants/colors';
+import { getMasterPassword } from '../../lib/auth';
+import { createEvent } from '../../lib/api';
+import { Colors } from '../../constants/colors';
+
+function formatDisplay(date: Date): string {
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = date.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function toAPIFormat(date: Date): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
 
 export default function CreateEventScreen() {
   const router = useRouter();
   const [name, setName] = useState('');
-  const [expiresAt, setExpiresAt] = useState('');
+  const [expiryDate, setExpiryDate] = useState<Date | null>(null);
+  const [showPicker, setShowPicker] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
 
   async function handleCreate() {
     if (!name.trim()) {
       Alert.alert('Missing name', 'Please enter an event name.');
       return;
     }
-    if (!expiresAt.trim()) {
-      Alert.alert('Missing date', 'Please enter an expiry date.');
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(expiresAt.trim())) {
-      Alert.alert('Invalid date', 'Please enter the date in YYYY-MM-DD format (e.g. 2026-07-15).');
+    if (!expiryDate) {
+      Alert.alert('Missing date', 'Please select an expiry date.');
       return;
     }
 
@@ -37,7 +53,7 @@ export default function CreateEventScreen() {
         return;
       }
 
-      const result = await createEvent(masterPassword, name.trim(), expiresAt.trim());
+      const result = await createEvent(masterPassword, name.trim(), toAPIFormat(expiryDate));
       if (result.error) {
         Alert.alert('Error', result.error);
         return;
@@ -67,21 +83,34 @@ export default function CreateEventScreen() {
             <TextInput
               style={styles.input}
               value={name}
-              onChangeText={setName}
+              onChangeText={(v) => setName(v.slice(0, 50))}
               placeholder="e.g. Rathi Family Wedding"
               placeholderTextColor="#444"
+              maxLength={50}
             />
+            <Text style={styles.charCount}>{name.length}/50</Text>
 
             <Text style={styles.label}>EXPIRY DATE</Text>
-            <TextInput
-              style={styles.input}
-              value={expiresAt}
-              onChangeText={setExpiresAt}
-              placeholder="YYYY-MM-DD (e.g. 2026-07-15)"
-              placeholderTextColor="#444"
-              keyboardType="numbers-and-punctuation"
-            />
+            <TouchableOpacity style={styles.dateBtn} onPress={() => setShowPicker(true)}>
+              <Text style={expiryDate ? styles.dateBtnText : styles.dateBtnPlaceholder}>
+                {expiryDate ? formatDisplay(expiryDate) : 'Select date'}
+              </Text>
+              <Text style={styles.dateIcon}>📅</Text>
+            </TouchableOpacity>
             <Text style={styles.hint}>Guests lose access after this date.</Text>
+
+            {showPicker && (
+              <DateTimePicker
+                value={expiryDate ?? tomorrow}
+                mode="date"
+                display="default"
+                minimumDate={tomorrow}
+                onChange={(_, selected) => {
+                  setShowPicker(false);
+                  if (selected) setExpiryDate(selected);
+                }}
+              />
+            )}
 
             <View style={styles.noteCard}>
               <Text style={styles.noteIcon}>ℹ️</Text>
@@ -118,8 +147,23 @@ const styles = StyleSheet.create({
     padding: 14,
     fontSize: 15,
     color: Colors.white,
-    marginBottom: 16,
+    marginBottom: 4,
   },
+  charCount: { fontSize: 11, color: '#444', textAlign: 'right', marginBottom: 20 },
+  dateBtn: {
+    backgroundColor: Colors.card,
+    borderWidth: 1.5,
+    borderColor: Colors.cardBorder,
+    borderRadius: 12,
+    padding: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  dateBtnText: { fontSize: 15, color: Colors.white, fontWeight: '600' },
+  dateBtnPlaceholder: { fontSize: 15, color: '#444' },
+  dateIcon: { fontSize: 18 },
   hint: { fontSize: 12, color: '#444', marginBottom: 20 },
   noteCard: {
     backgroundColor: Colors.card,

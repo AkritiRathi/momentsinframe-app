@@ -1,10 +1,11 @@
 import {
-  View, Text, TouchableOpacity, StyleSheet, SafeAreaView,
+  View, Text, TouchableOpacity, StyleSheet,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { getUserProfile, UserProfile } from '@/lib/storage';
-import { Colors } from '@/constants/colors';
+import { getUserProfile, UserProfile } from '../../lib/storage';
+import { Colors } from '../../constants/colors';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -57,7 +58,7 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
+  container: { flex: 1, backgroundColor: Colors.background, paddingHorizontal: 0 },
   header: {
     paddingHorizontal: 24,
     paddingTop: 24,
@@ -107,5 +108,5 @@ const styles = StyleSheet.create({
     borderTopWidth: 0.5,
     borderTopColor: '#1A1A1A',
   },
-  masterLinkText: { fontSize: 12, color: '#444', fontWeight: '600' },
+  masterLinkText: { fontSize: 15, color: '#666', fontWeight: '600' },
 });

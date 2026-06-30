@@ -1,11 +1,12 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  SafeAreaView, KeyboardAvoidingView, Platform, ScrollView, Alert,
+  KeyboardAvoidingView, Platform, ScrollView, Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { joinEvent, eventAdminLogin } from '@/lib/api';
-import { Colors } from '@/constants/colors';
+import { joinEvent, eventAdminLogin } from '../../lib/api';
+import { Colors } from '../../constants/colors';
 
 export default function EventAdminLoginScreen() {
   const router = useRouter();

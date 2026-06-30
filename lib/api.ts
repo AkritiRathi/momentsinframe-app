@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '@/constants/config';
+import { API_BASE_URL } from '../constants/config';
 
 async function post(path: string, body: object) {
   const res = await fetch(`${API_BASE_URL}${path}`, {

@@ -1,11 +1,12 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  SafeAreaView, ActivityIndicator, Alert,
+  ActivityIndicator, Alert,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { joinEvent } from '@/lib/api';
-import { Colors } from '@/constants/colors';
+import { joinEvent } from '../../lib/api';
+import { Colors } from '../../constants/colors';
 
 export default function JoinEventScreen() {
   const router = useRouter();
@@ -13,10 +14,10 @@ export default function JoinEventScreen() {
   const [loading, setLoading] = useState(false);
 
   async function handleCodeChange(value: string) {
-    const numeric = value.replace(/[^0-9]/g, '').slice(0, 6);
-    setCode(numeric);
-    if (numeric.length === 6) {
-      await attemptJoin(numeric);
+    const cleaned = value.replace(/[^0-9]/g, '').slice(0, 6);
+    setCode(cleaned);
+    if (cleaned.length === 6) {
+      await attemptJoin(cleaned);
     }
   }
 

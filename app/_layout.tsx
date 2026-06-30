@@ -11,8 +11,15 @@ export default function RootLayout() {
   const { isAuthenticated } = useAuth();
   const segments = useSegments();
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+
     const inAuthGroup = segments[0] === '(auth)';
 
     if (!isAuthenticated && !inAuthGroup) {
@@ -20,7 +27,7 @@ export default function RootLayout() {
     } else if (isAuthenticated && inAuthGroup) {
       router.replace('/(app)/albums');
     }
-  }, [isAuthenticated, segments]);
+  }, [isAuthenticated, segments, mounted]);
 
   return <Slot />;
 }

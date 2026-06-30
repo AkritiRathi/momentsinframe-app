@@ -1,17 +1,15 @@
 import { Slot, useRouter, useSegments } from 'expo-router';
 import { useEffect, useState } from 'react';
-
-// Placeholder auth state — replace with real auth logic later
-function useAuth() {
-  const [isAuthenticated] = useState(false);
-  return { isAuthenticated };
-}
+import { getUserProfile } from '@/lib/storage';
+import { isMasterAdmin } from '@/lib/auth';
 
 export default function RootLayout() {
-  const { isAuthenticated } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [hasProfile, setHasProfile] = useState(false);
+  const [isMaster, setIsMaster] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -19,15 +17,31 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (!mounted) return;
+    (async () => {
+      const profile = await getUserProfile();
+      const master = await isMasterAdmin();
+      setHasProfile(!!profile);
+      setIsMaster(master);
+      setReady(true);
+    })();
+  }, [mounted]);
 
-    const inAuthGroup = segments[0] === '(auth)';
+  useEffect(() => {
+    if (!mounted || !ready) return;
 
-    if (!isAuthenticated && !inAuthGroup) {
-      router.replace('/(auth)/login');
-    } else if (isAuthenticated && inAuthGroup) {
-      router.replace('/(app)/albums');
+    const inAuth = segments[0] === '(auth)';
+    const inMaster = segments[0] === '(master)';
+
+    if (!hasProfile) {
+      router.replace('/(auth)/name-entry');
+    } else if (isMaster && !inMaster) {
+      router.replace('/(master)/dashboard');
+    } else if (!isMaster && inMaster) {
+      router.replace('/(auth)/home');
+    } else if (!inAuth && !inMaster) {
+      router.replace('/(auth)/home');
     }
-  }, [isAuthenticated, segments, mounted]);
+  }, [mounted, ready, hasProfile, isMaster, segments]);
 
   return <Slot />;
 }

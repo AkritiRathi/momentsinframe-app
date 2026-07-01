@@ -8,6 +8,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as MediaLibrary from 'expo-media-library';
+import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
@@ -224,7 +226,14 @@ export default function EventScreen() {
   const prevSelectedSize = useRef(0);
 
   const lightboxPhotosRef = useRef<Photo[]>([]);
-  const swipeTouchX = useRef(0);
+
+  // Zoom / pan shared values
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const savedTranslateX = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
 
   useEffect(() => {
     loadPhotos();
@@ -310,6 +319,78 @@ export default function EventScreen() {
       return next;
     });
   }
+
+  // Reset zoom whenever photo changes
+  useEffect(() => {
+    scale.value = 1;
+    savedScale.value = 1;
+    translateX.value = 0;
+    translateY.value = 0;
+    savedTranslateX.value = 0;
+    savedTranslateY.value = 0;
+  }, [lightboxIndex]);
+
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((e) => {
+      scale.value = Math.max(1, Math.min(savedScale.value * e.scale, 5));
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+      if (scale.value < 1.05) {
+        scale.value = withSpring(1);
+        savedScale.value = 1;
+        translateX.value = withSpring(0);
+        translateY.value = withSpring(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      }
+    });
+
+  const panGesture = Gesture.Pan()
+    .onUpdate((e) => {
+      if (savedScale.value > 1) {
+        translateX.value = savedTranslateX.value + e.translationX;
+        translateY.value = savedTranslateY.value + e.translationY;
+      }
+    })
+    .onEnd((e) => {
+      if (savedScale.value > 1) {
+        savedTranslateX.value = translateX.value;
+        savedTranslateY.value = translateY.value;
+      } else {
+        if (Math.abs(e.translationX) > 50 && Math.abs(e.translationX) > Math.abs(e.translationY)) {
+          if (e.translationX < 0) runOnJS(navigateLightbox)(1);
+          else runOnJS(navigateLightbox)(-1);
+        }
+      }
+    });
+
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDuration(250)
+    .onEnd(() => {
+      if (savedScale.value > 1) {
+        scale.value = withSpring(1);
+        savedScale.value = 1;
+        translateX.value = withSpring(0);
+        translateY.value = withSpring(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      } else {
+        scale.value = withSpring(2.5);
+        savedScale.value = 2.5;
+      }
+    });
+
+  const zoomGesture = Gesture.Simultaneous(doubleTapGesture, panGesture, pinchGesture);
+
+  const zoomStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
+  }));
 
   function toggleSelect(id: string) {
     setSelected(prev => {
@@ -1030,25 +1111,20 @@ export default function EventScreen() {
                 )}
               </View>
             </View>
-            <View
-              style={styles.lbImgWrap}
-              onTouchStart={(e) => { swipeTouchX.current = e.nativeEvent.pageX; }}
-              onTouchEnd={(e) => {
-                if (imageLoadingRef.current) return;
-                const dx = e.nativeEvent.pageX - swipeTouchX.current;
-                if (dx < -50) navigateLightbox(1);
-                else if (dx > 50) navigateLightbox(-1);
-              }}
-            >
-              {lightboxImageUrl
-                ? <Image
-                    source={{ uri: lightboxImageUrl }}
-                    style={styles.lbImg}
-                    resizeMode="contain"
-                    onLoad={() => { imageLoadingRef.current = false; setImageLoading(false); }}
-                  />
-                : null
-              }
+            <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
+              <GestureDetector gesture={zoomGesture}>
+                <Animated.View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }, zoomStyle]}>
+                  {lightboxImageUrl
+                    ? <Image
+                        source={{ uri: lightboxImageUrl }}
+                        style={styles.lbImg}
+                        resizeMode="contain"
+                        onLoad={() => { imageLoadingRef.current = false; setImageLoading(false); }}
+                      />
+                    : null
+                  }
+                </Animated.View>
+              </GestureDetector>
               {(!lightboxImageUrl || imageLoading) && (
                 <ActivityIndicator color={Colors.accent} style={StyleSheet.absoluteFill} />
               )}

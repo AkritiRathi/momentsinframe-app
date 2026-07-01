@@ -206,8 +206,10 @@ export default function EventScreen() {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
+  const [selectBarSticky, setSelectBarSticky] = useState(false);
   const mainHeaderY = useRef<number | null>(null);
   const otherHeaderY = useRef<number | null>(null);
+  const selectBarYRef = useRef<number | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const accumulatedHeights = useRef<Record<string, number>>({});
   const listDataRef = useRef<ListItem[]>([]);
@@ -349,13 +351,16 @@ export default function EventScreen() {
     setSelectMode(false);
     setSelected(new Set());
     setStickySection(null);
+    setSelectBarSticky(false);
     mainHeaderY.current = null;
     otherHeaderY.current = null;
+    selectBarYRef.current = null;
   }
 
   function updateSectionPositions() {
     let y = 0;
     for (const item of listDataRef.current) {
+      if (item.type === 'select_bar') selectBarYRef.current = y;
       if (item.type === 'section_header') {
         if (item.section === 'main') mainHeaderY.current = y;
         else otherHeaderY.current = y;
@@ -367,6 +372,10 @@ export default function EventScreen() {
   const handleScroll = useCallback((e: any) => {
     if (!selectMode) return;
     const y = e.nativeEvent.contentOffset.y;
+
+    const newSelectBarSticky = selectBarYRef.current !== null && y >= selectBarYRef.current;
+    setSelectBarSticky(prev => prev === newSelectBarSticky ? prev : newSelectBarSticky);
+
     let next: 'main' | 'other' | null = null;
     if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
     else if (mainHeaderY.current !== null && y >= mainHeaderY.current) next = 'main';
@@ -687,6 +696,10 @@ export default function EventScreen() {
       items.push({ type: 'select_photos_btn', key: 'select_photos_btn' });
     }
 
+    if (selectMode) {
+      items.push({ type: 'select_bar', key: 'select_bar' });
+    }
+
     if (photos.length > 0) {
       items.push({ type: 'section_header', section: 'main', key: 'header_main' });
       for (let i = 0; i < photos.length; i += 3) {
@@ -838,6 +851,13 @@ export default function EventScreen() {
             <TouchableOpacity style={styles.selectPhotosBtn} onPress={() => setSelectMode(true)}>
               <Text style={styles.selectPhotosBtnText}>Select photos</Text>
             </TouchableOpacity>
+          </View>
+        );
+
+      case 'select_bar':
+        return (
+          <View style={{ opacity: selectBarSticky ? 0 : 1 }}>
+            {renderSelectBar()}
           </View>
         );
 
@@ -1070,8 +1090,6 @@ export default function EventScreen() {
         </View>
       </Modal>
 
-      {selectMode && renderSelectBar()}
-
       <View style={{ flex: 1 }}>
         <FlatList
           ref={flatListRef}
@@ -1079,14 +1097,21 @@ export default function EventScreen() {
           data={listData}
           keyExtractor={item => item.key}
           renderItem={renderItem}
-          extraData={[selected, stickySection]}
+          extraData={[selected, stickySection, selectBarSticky]}
           onScroll={handleScroll}
           scrollEventThrottle={16}
           contentContainerStyle={{ paddingBottom: 48 }}
           removeClippedSubviews={false}
         />
+        {selectMode && selectBarSticky && (
+          <View style={styles.stickySelectBar}>
+            {renderSelectBar()}
+          </View>
+        )}
         {selectMode && stickySection && (
-          <View style={styles.stickySectionHeader}>
+          <View style={[styles.stickySectionHeader, {
+            top: selectBarSticky ? (accumulatedHeights.current['select_bar'] ?? 0) : 0,
+          }]}>
             <SectionHeader
               section={stickySection}
               items={stickySection === 'main' ? photos : otherPhotos}
@@ -1139,7 +1164,8 @@ const styles = StyleSheet.create({
   selBtnPrimary: { backgroundColor: Colors.background, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
   selBtnPrimaryText: { fontSize: 13, fontWeight: '600', color: Colors.white },
 
-  stickySectionHeader: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
+  stickySelectBar: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20 },
+  stickySectionHeader: { position: 'absolute', left: 0, right: 0, zIndex: 10 },
 
   // Section header
   sectionBlock: { backgroundColor: Colors.background },

@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
-  Modal, Alert, ActivityIndicator, Dimensions, PanResponder, TextInput,
+  Modal, Alert, ActivityIndicator, Dimensions, TextInput,
   Platform, BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -223,26 +223,8 @@ export default function EventScreen() {
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const prevSelectedSize = useRef(0);
 
-  // Refs so panResponder (created once) always sees current values
   const lightboxPhotosRef = useRef<Photo[]>([]);
-  const lightboxIndexRef = useRef(0);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, { dx, dy }) =>
-        !imageLoadingRef.current && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
-      onPanResponderRelease: (_, { dx }) => {
-        if (imageLoadingRef.current) return;
-        const delta = dx < -50 ? 1 : dx > 50 ? -1 : 0;
-        if (!delta) return;
-        setLightboxIndex(prev => {
-          const next = prev + delta;
-          if (next < 0 || next >= lightboxPhotosRef.current.length) return prev;
-          return next;
-        });
-      },
-    })
-  ).current;
+  const swipeTouchX = useRef(0);
 
   useEffect(() => {
     loadPhotos();
@@ -311,9 +293,7 @@ export default function EventScreen() {
 
   const lightboxPhotos = lightboxSection === 'main' ? photos : otherPhotos;
 
-  // Keep refs in sync so panResponder always has current values
   useEffect(() => { lightboxPhotosRef.current = lightboxPhotos; }, [lightboxPhotos]);
-  useEffect(() => { lightboxIndexRef.current = lightboxIndex; }, [lightboxIndex]);
 
   // Mark image as loading whenever we navigate to a new photo
   useEffect(() => {
@@ -1032,7 +1012,7 @@ export default function EventScreen() {
 
       {/* Lightbox */}
       <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
-        <View style={styles.lightbox} {...panResponder.panHandlers}>
+        <View style={styles.lightbox}>
           <SafeAreaView style={styles.lightboxInner}>
             <View style={styles.lbHeader}>
               <TouchableOpacity onPress={() => setLightboxVisible(false)}>
@@ -1050,7 +1030,16 @@ export default function EventScreen() {
                 )}
               </View>
             </View>
-            <View style={styles.lbImgWrap}>
+            <View
+              style={styles.lbImgWrap}
+              onTouchStart={(e) => { swipeTouchX.current = e.nativeEvent.pageX; }}
+              onTouchEnd={(e) => {
+                if (imageLoadingRef.current) return;
+                const dx = e.nativeEvent.pageX - swipeTouchX.current;
+                if (dx < -50) navigateLightbox(1);
+                else if (dx > 50) navigateLightbox(-1);
+              }}
+            >
               {lightboxImageUrl
                 ? <Image
                     source={{ uri: lightboxImageUrl }}

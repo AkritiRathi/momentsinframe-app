@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
-  Modal, Alert, ActivityIndicator, Dimensions, PanResponder,
+  Modal, Alert, ActivityIndicator, Dimensions, PanResponder, TextInput,
   Platform, BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -68,6 +68,104 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
+function SectionHeader({ section, items, selectMode, selected, onGroupToggle }: {
+  section: 'main' | 'other';
+  items: Photo[];
+  selectMode: boolean;
+  selected: Set<string>;
+  onGroupToggle: (photos: Photo[], on: boolean) => void;
+}) {
+  const [rangeFrom, setRangeFrom] = useState('');
+  const [rangeTo, setRangeTo] = useState('');
+  const isMain = section === 'main';
+  const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
+  const allSelected = items.length > 0 && items.every(p => selected.has(p.id));
+
+  useEffect(() => {
+    if (!selectMode) { setRangeFrom(''); setRangeTo(''); }
+  }, [selectMode]);
+
+  function clampFrom(val: string) {
+    const n = parseInt(val, 10);
+    if (isNaN(n)) return;
+    const to = parseInt(rangeTo, 10);
+    const clamped = Math.max(1, Math.min(n, isNaN(to) ? items.length : to));
+    setRangeFrom(String(clamped));
+  }
+
+  function clampTo(val: string) {
+    const n = parseInt(val, 10);
+    if (isNaN(n)) return;
+    const from = parseInt(rangeFrom, 10);
+    const clamped = Math.max(isNaN(from) ? 1 : from, Math.min(n, items.length));
+    setRangeTo(String(clamped));
+  }
+
+  function applyRange() {
+    const from = parseInt(rangeFrom, 10);
+    const to = parseInt(rangeTo, 10);
+    if (isNaN(from) || isNaN(to) || from < 1 || to > items.length || from > to) return;
+    onGroupToggle(items.slice(from - 1, to), true);
+  }
+
+  function clearRange() {
+    onGroupToggle(items, false);
+    setRangeFrom('');
+    setRangeTo('');
+  }
+
+  return (
+    <View style={styles.sectionBlock}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleRow}>
+          <Text style={styles.sectionTitle}>{label}</Text>
+          <Text style={styles.sectionCount}>{items.length}</Text>
+        </View>
+        <Text style={styles.sectionSub}>
+          {isMain ? '(sorted by date taken · oldest first)' : '(no date info — sorted by upload time)'}
+        </Text>
+        {selectMode && (
+          <View style={styles.sectionSelectRow}>
+            <TouchableOpacity onPress={() => onGroupToggle(items, !allSelected)}>
+              <Text style={styles.sectionSelectLink}>
+                {allSelected ? `Deselect all ${label}` : `Select all ${label}`}
+              </Text>
+            </TouchableOpacity>
+            <View style={styles.rangeRow}>
+              <Text style={styles.rangeLabel}>Range:</Text>
+              <TextInput
+                style={styles.rangeInput}
+                keyboardType="number-pad"
+                placeholder="From"
+                placeholderTextColor="#555"
+                value={rangeFrom}
+                onChangeText={setRangeFrom}
+                onEndEditing={() => clampFrom(rangeFrom)}
+              />
+              <Text style={styles.rangeLabel}>–</Text>
+              <TextInput
+                style={styles.rangeInput}
+                keyboardType="number-pad"
+                placeholder="To"
+                placeholderTextColor="#555"
+                value={rangeTo}
+                onChangeText={setRangeTo}
+                onEndEditing={() => clampTo(rangeTo)}
+              />
+              <Pressable style={styles.rangeBtn} onPress={applyRange}>
+                <Text style={styles.rangeBtnText}>Apply</Text>
+              </Pressable>
+              <Pressable style={styles.rangeBtnOutline} onPress={clearRange}>
+                <Text style={styles.rangeBtnOutlineText}>Clear</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
 function getMimeType(uri: string): string {
   const ext = uri.split('.').pop()?.toLowerCase() ?? 'jpg';
   const map: Record<string, string> = {
@@ -101,10 +199,18 @@ export default function EventScreen() {
   const [lightboxVisible, setLightboxVisible] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxSection, setLightboxSection] = useState<'main' | 'other'>('main');
+  const [imageLoading, setImageLoading] = useState(false);
+  const imageLoadingRef = useRef(false);
 
   // Select mode
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
+  const mainHeaderY = useRef<number | null>(null);
+  const otherHeaderY = useRef<number | null>(null);
+  const flatListRef = useRef<FlatList>(null);
+  const accumulatedHeights = useRef<Record<string, number>>({});
+  const listDataRef = useRef<ListItem[]>([]);
 
   // Upload
   const [uploading, setUploading] = useState(false);
@@ -114,30 +220,24 @@ export default function EventScreen() {
   const [downloadingBulk, setDownloadingBulk] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const prevSelectedSize = useRef(0);
-  const [pinnedBarVisible, setPinnedBarVisible] = useState(false);
-  const prevSelectMode = useRef(false);
-  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 90, minimumViewTime: 0 }).current;
-  const onViewableItemsChanged = useCallback(({ viewableItems }: any) => {
-    const naturalBarVisible = viewableItems.some((v: any) => v.item?.key === 'select_bar');
-    setPinnedBarVisible(!naturalBarVisible);
-  }, []);
 
-  useEffect(() => {
-    if (prevSelectMode.current && !selectMode) {
-      setPinnedBarVisible(false);
-    }
-    if (!prevSelectMode.current && selectMode) {
-      setPinnedBarVisible(false);
-    }
-    prevSelectMode.current = selectMode;
-  }, [selectMode]);
+  // Refs so panResponder (created once) always sees current values
+  const lightboxPhotosRef = useRef<Photo[]>([]);
+  const lightboxIndexRef = useRef(0);
 
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, { dx, dy }) => Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
+      onMoveShouldSetPanResponder: (_, { dx, dy }) =>
+        !imageLoadingRef.current && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
       onPanResponderRelease: (_, { dx }) => {
-        if (dx < -50) navigateLightbox(1);
-        else if (dx > 50) navigateLightbox(-1);
+        if (imageLoadingRef.current) return;
+        const delta = dx < -50 ? 1 : dx > 50 ? -1 : 0;
+        if (!delta) return;
+        setLightboxIndex(prev => {
+          const next = prev + delta;
+          if (next < 0 || next >= lightboxPhotosRef.current.length) return prev;
+          return next;
+        });
       },
     })
   ).current;
@@ -209,6 +309,18 @@ export default function EventScreen() {
 
   const lightboxPhotos = lightboxSection === 'main' ? photos : otherPhotos;
 
+  // Keep refs in sync so panResponder always has current values
+  useEffect(() => { lightboxPhotosRef.current = lightboxPhotos; }, [lightboxPhotos]);
+  useEffect(() => { lightboxIndexRef.current = lightboxIndex; }, [lightboxIndex]);
+
+  // Mark image as loading whenever we navigate to a new photo
+  useEffect(() => {
+    if (lightboxVisible) {
+      imageLoadingRef.current = true;
+      setImageLoading(true);
+    }
+  }, [lightboxIndex, lightboxVisible]);
+
   function navigateLightbox(delta: number) {
     setLightboxIndex(prev => {
       const next = prev + delta;
@@ -236,8 +348,30 @@ export default function EventScreen() {
   function exitSelectMode() {
     setSelectMode(false);
     setSelected(new Set());
-    setPinnedBarVisible(false);
+    setStickySection(null);
+    mainHeaderY.current = null;
+    otherHeaderY.current = null;
   }
+
+  function updateSectionPositions() {
+    let y = 0;
+    for (const item of listDataRef.current) {
+      if (item.type === 'section_header') {
+        if (item.section === 'main') mainHeaderY.current = y;
+        else otherHeaderY.current = y;
+      }
+      y += accumulatedHeights.current[item.key] ?? 0;
+    }
+  }
+
+  const handleScroll = useCallback((e: any) => {
+    if (!selectMode) return;
+    const y = e.nativeEvent.contentOffset.y;
+    let next: 'main' | 'other' | null = null;
+    if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
+    else if (mainHeaderY.current !== null && y >= mainHeaderY.current) next = 'main';
+    setStickySection(prev => prev === next ? prev : next);
+  }, [selectMode]);
 
   async function handleUpload(source: 'camera' | 'gallery') {
     const permResult = source === 'camera'
@@ -254,6 +388,7 @@ export default function EventScreen() {
       : await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ImagePicker.MediaTypeOptions.Images,
           allowsMultipleSelection: true,
+          selectionLimit: 40,
           quality: 1,
         });
 
@@ -548,16 +683,11 @@ export default function EventScreen() {
     if (daysLeft <= 3) items.push({ type: 'expiry_banner', key: 'expiry_banner' });
     items.push({ type: 'upload_card', key: 'upload_card' });
 
-    if (totalPhotos > 0) {
-      if (!selectMode) {
-        items.push({ type: 'select_photos_btn', key: 'select_photos_btn' });
-      } else {
-        items.push({ type: 'select_bar', key: 'select_bar' });
-      }
+    if (totalPhotos > 0 && !selectMode) {
+      items.push({ type: 'select_photos_btn', key: 'select_photos_btn' });
     }
 
     if (photos.length > 0) {
-      sticky.push(items.length);
       items.push({ type: 'section_header', section: 'main', key: 'header_main' });
       for (let i = 0; i < photos.length; i += 3) {
         items.push({ type: 'photo_row', photos: photos.slice(i, i + 3), section: 'main', startIndex: i, key: `row_main_${i}` });
@@ -565,7 +695,6 @@ export default function EventScreen() {
     }
 
     if (otherPhotos.length > 0) {
-      sticky.push(items.length);
       items.push({ type: 'section_header', section: 'other', key: 'header_other' });
       for (let i = 0; i < otherPhotos.length; i += 3) {
         items.push({ type: 'photo_row', photos: otherPhotos.slice(i, i + 3), section: 'other', startIndex: i, key: `row_other_${i}` });
@@ -578,6 +707,11 @@ export default function EventScreen() {
 
     return { listData: items, stickyIndices: sticky };
   }, [photos, otherPhotos, selectMode, daysLeft, totalPhotos, loading]);
+
+  useEffect(() => {
+    listDataRef.current = listData;
+    updateSectionPositions();
+  }, [listData]);
 
   function renderSelectBar() {
     return (
@@ -638,6 +772,17 @@ export default function EventScreen() {
   }
 
   function renderItem({ item }: { item: ListItem }) {
+    return (
+      <View onLayout={(e) => {
+        accumulatedHeights.current[item.key] = e.nativeEvent.layout.height;
+        updateSectionPositions();
+      }}>
+        {renderItemContent(item)}
+      </View>
+    );
+  }
+
+  function renderItemContent(item: ListItem) {
     switch (item.type) {
       case 'event_header': {
         const total = totalPhotos;
@@ -696,36 +841,18 @@ export default function EventScreen() {
           </View>
         );
 
-      case 'select_bar':
-        return renderSelectBar();
-
-      case 'section_header': {
-        const isMain = item.section === 'main';
-        const sectionItems = isMain ? photos : otherPhotos;
-        const allInSection = sectionItems.every(p => selected.has(p.id));
+      case 'section_header':
         return (
-          <View style={styles.sectionBlock}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleRow}>
-                <Text style={styles.sectionTitle}>{isMain ? 'Photo Gallery' : 'Other Photos Gallery'}</Text>
-                <Text style={styles.sectionCount}>{sectionItems.length}</Text>
-              </View>
-              <Text style={styles.sectionSub}>
-                {isMain ? '(sorted by date taken · oldest first)' : '(no date info — sorted by upload time)'}
-              </Text>
-              {selectMode && (
-                <TouchableOpacity onPress={() => selectGroup(sectionItems, !allInSection)} style={{ marginTop: 4 }}>
-                  <Text style={styles.sectionSelectLink}>
-                    {allInSection
-                      ? `Deselect all ${isMain ? 'Photo Gallery' : 'Other Photos Gallery'}`
-                      : `Select all ${isMain ? 'Photo Gallery' : 'Other Photos Gallery'}`}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
+          <View style={{ opacity: stickySection === item.section ? 0 : 1 }}>
+            <SectionHeader
+              section={item.section}
+              items={item.section === 'main' ? photos : otherPhotos}
+              selectMode={selectMode}
+              selected={selected}
+              onGroupToggle={selectGroup}
+            />
           </View>
         );
-      }
 
       case 'photo_row':
         return (
@@ -905,15 +1032,23 @@ export default function EventScreen() {
             </View>
             <View style={styles.lbImgWrap}>
               {lightboxImageUrl
-                ? <Image source={{ uri: lightboxImageUrl }} style={styles.lbImg} resizeMode="contain" />
-                : <ActivityIndicator color={Colors.accent} />
+                ? <Image
+                    source={{ uri: lightboxImageUrl }}
+                    style={styles.lbImg}
+                    resizeMode="contain"
+                    onLoad={() => { imageLoadingRef.current = false; setImageLoading(false); }}
+                  />
+                : null
               }
-              {lightboxIndex > 0 && (
+              {(!lightboxImageUrl || imageLoading) && (
+                <ActivityIndicator color={Colors.accent} style={StyleSheet.absoluteFill} />
+              )}
+              {lightboxIndex > 0 && !imageLoading && (
                 <TouchableOpacity style={[styles.lbArrow, { left: 0 }]} onPress={() => navigateLightbox(-1)}>
                   <Text style={styles.lbArrowText}>‹</Text>
                 </TouchableOpacity>
               )}
-              {lightboxIndex < lightboxPhotos.length - 1 && (
+              {lightboxIndex < lightboxPhotos.length - 1 && !imageLoading && (
                 <TouchableOpacity style={[styles.lbArrow, { right: 0 }]} onPress={() => navigateLightbox(1)}>
                   <Text style={styles.lbArrowText}>›</Text>
                 </TouchableOpacity>
@@ -935,19 +1070,33 @@ export default function EventScreen() {
         </View>
       </Modal>
 
-      {selectMode && pinnedBarVisible && renderSelectBar()}
+      {selectMode && renderSelectBar()}
 
-      <FlatList
-        key={selectMode ? 'select' : 'normal'}
-        data={listData}
-        keyExtractor={item => item.key}
-        renderItem={renderItem}
-        onViewableItemsChanged={selectMode ? onViewableItemsChanged : undefined}
-        viewabilityConfig={viewabilityConfig}
-        stickyHeaderIndices={stickyIndices}
-        contentContainerStyle={{ paddingBottom: 48 }}
-        removeClippedSubviews={false}
-      />
+      <View style={{ flex: 1 }}>
+        <FlatList
+          ref={flatListRef}
+          key={selectMode ? 'select' : 'normal'}
+          data={listData}
+          keyExtractor={item => item.key}
+          renderItem={renderItem}
+          extraData={[selected, stickySection]}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          contentContainerStyle={{ paddingBottom: 48 }}
+          removeClippedSubviews={false}
+        />
+        {selectMode && stickySection && (
+          <View style={styles.stickySectionHeader}>
+            <SectionHeader
+              section={stickySection}
+              items={stickySection === 'main' ? photos : otherPhotos}
+              selectMode={selectMode}
+              selected={selected}
+              onGroupToggle={selectGroup}
+            />
+          </View>
+        )}
+      </View>
 
     </SafeAreaView>
   );
@@ -990,7 +1139,9 @@ const styles = StyleSheet.create({
   selBtnPrimary: { backgroundColor: Colors.background, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
   selBtnPrimaryText: { fontSize: 13, fontWeight: '600', color: Colors.white },
 
-  // Section header (sticky — wraps select bar + section title as one unit)
+  stickySectionHeader: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
+
+  // Section header
   sectionBlock: { backgroundColor: Colors.background },
   sectionHeader: { backgroundColor: Colors.background, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 2 },
@@ -998,6 +1149,14 @@ const styles = StyleSheet.create({
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },
   sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
+  sectionSelectRow: { marginTop: 6, gap: 6 },
+  rangeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  rangeLabel: { fontSize: 12, color: '#666' },
+  rangeInput: { width: 52, borderWidth: 1, borderColor: '#333', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, fontSize: 12, color: Colors.white, backgroundColor: '#1a1a1a', textAlign: 'center' },
+  rangeBtn: { backgroundColor: Colors.white, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4 },
+  rangeBtnText: { fontSize: 12, fontWeight: '600', color: Colors.background },
+  rangeBtnOutline: { borderWidth: 1, borderColor: '#444', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4 },
+  rangeBtnOutlineText: { fontSize: 12, color: '#aaa' },
 
   // Photo grid
   photoRow: { flexDirection: 'row', gap: GAP, marginTop: GAP },

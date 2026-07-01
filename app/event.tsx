@@ -11,7 +11,7 @@ import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
-  getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos, downloadZipRaw,
+  getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos, downloadZipRaw, downloadPhotoRaw,
 } from '../lib/api';
 import { getUserProfile } from '../lib/storage';
 import { Colors } from '../constants/colors';
@@ -58,6 +58,16 @@ function daysUntil(iso: string): number {
   return Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
 }
 
+function buildDownloadFilename(id: string, takenAt: string | null, ext: string): string {
+  const date = takenAt ? new Date(takenAt) : new Date();
+  const ist = new Date(date.getTime() + 5.5 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const datePart = `${ist.getUTCFullYear()}${pad(ist.getUTCMonth() + 1)}${pad(ist.getUTCDate())}`;
+  const timePart = `${pad(ist.getUTCHours())}${pad(ist.getUTCMinutes())}`;
+  const idSuffix = id.replace(/-/g, '').slice(0, 6);
+  return `${datePart}_${timePart}_${idSuffix}.${ext}`;
+}
+
 function getMimeType(uri: string): string {
   const ext = uri.split('.').pop()?.toLowerCase() ?? 'jpg';
   const map: Record<string, string> = {
@@ -83,6 +93,9 @@ export default function EventScreen() {
   const [loading, setLoading] = useState(true);
   const [userMobile, setUserMobile] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
+  const [skippedIds, setSkippedIds] = useState<string[]>([]);
+  const [skippedViewerVisible, setSkippedViewerVisible] = useState(false);
+  const [skippedViewerIndex, setSkippedViewerIndex] = useState(0);
 
   // Lightbox
   const [lightboxVisible, setLightboxVisible] = useState(false);
@@ -346,20 +359,23 @@ export default function EventScreen() {
   }
 
   async function handleDownloadPhoto(id: string) {
-    const urls = photoUrls[id];
-    const best = urls?.url ?? urls?.displayUrl ?? null;
-    if (!best) { Alert.alert('Not available', 'Photo URL not loaded yet.'); return; }
+    const photo = [...photos, ...otherPhotos].find(p => p.id === id);
     Alert.alert('Download photo', 'Save this photo to your Downloads folder?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Download', onPress: async () => {
           try {
-            const rawName = urls?.originalFilename ?? `photo_${id}.jpg`;
-            const ext = rawName.match(/(\.[^.]+)$/) ? rawName.match(/(\.[^.]+)$/)![1] : '.jpg';
-            const base = rawName.replace(/(\.[^.]+)$/, '').replace(/[^a-zA-Z0-9-]/g, '_');
-            const filename = `MIF_${base}_${Date.now()}${ext}`;
+            const rawName = photo?.original_filename ?? `photo_${id}.jpg`;
+            const ext = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
+            const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
             const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-            await FileSystem.downloadAsync(best, cacheUri);
+            const res = await downloadPhotoRaw(id, isAdmin ? params.adminPassword : undefined);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const buffer = await res.arrayBuffer();
+            const uint8 = new Uint8Array(buffer);
+            let binary = '';
+            for (let j = 0; j < uint8.length; j++) binary += String.fromCharCode(uint8[j]);
+            await FileSystem.writeAsStringAsync(cacheUri, btoa(binary), { encoding: FileSystem.EncodingType.Base64 });
             await saveToDownloads(filename, cacheUri, 'image/jpeg');
             Alert.alert('Done', 'Photo saved to Downloads.');
           } catch {
@@ -383,14 +399,14 @@ export default function EventScreen() {
       if (!u?.url) { failed++; setDownloadProgress({ current: i + 1, total: ids.length }); continue; }
       try {
         const rawName = u.originalFilename ?? `photo_${id}.jpg`;
-        const ext = rawName.match(/(\.[^.]+)$/) ? rawName.match(/(\.[^.]+)$/)![1] : '.jpg';
-        const base = rawName.replace(/(\.[^.]+)$/, '').replace(/[^a-zA-Z0-9-]/g, '_');
-        const filename = `MIF_${i + 1}_${base}${ext}`;
-        const cacheUri = `${FileSystem.cacheDirectory}dl_${i}_${filename}`;
+        const ext = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
+        const filename = buildDownloadFilename(id, u.takenAt ?? null, ext);
+        const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
         const dlResult = await FileSystem.downloadAsync(u.url, cacheUri);
         if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
         await saveToDownloads(filename, cacheUri, 'image/jpeg');
         saved++;
+        await new Promise(r => setTimeout(r, 200));
       } catch { failed++; }
       setDownloadProgress({ current: i + 1, total: ids.length });
     }
@@ -409,6 +425,7 @@ export default function EventScreen() {
     setDownloadingBulk(true);
     setDownloadProgress({ current: 0, total: totalBatches });
     let savedBatches = 0;
+    const allSkippedIds: string[] = [];
     try {
       for (let i = 0; i < totalBatches; i++) {
         if (downloadCancelledRef.current) break;
@@ -422,7 +439,18 @@ export default function EventScreen() {
           throw new Error(`HTTP ${res.status} — ${text.slice(0, 300)}`);
         }
         const buffer = await res.arrayBuffer();
-        const uint8 = new Uint8Array(buffer);
+
+        // Parse trailer: [zip bytes][JSON utf8][4-byte LE uint32 = JSON length]
+        const view = new DataView(buffer);
+        const trailerLen = view.getUint32(buffer.byteLength - 4, true);
+        const jsonBytes = buffer.slice(buffer.byteLength - 4 - trailerLen, buffer.byteLength - 4);
+        try {
+          const trailer = JSON.parse(new TextDecoder().decode(jsonBytes)) as { skippedIds?: string[] };
+          if (trailer.skippedIds?.length) allSkippedIds.push(...trailer.skippedIds);
+        } catch { /* no trailer — older backend */ }
+        const zipBuffer = buffer.slice(0, buffer.byteLength - 4 - trailerLen);
+
+        const uint8 = new Uint8Array(zipBuffer);
         let binary = '';
         for (let j = 0; j < uint8.length; j++) binary += String.fromCharCode(uint8[j]);
         const base64 = btoa(binary);
@@ -438,14 +466,20 @@ export default function EventScreen() {
         ? `${savedBatches} of ${totalBatches} ZIP files saved to Downloads.`
         : 'ZIP saved to Downloads.';
       Alert.alert('Download complete', msg);
+      if (allSkippedIds.length > 0) {
+        setSkippedIds(allSkippedIds);
+        setSkippedViewerIndex(0);
+        setSkippedViewerVisible(true);
+      }
     } catch (e: any) {
       setDownloadingBulk(false);
       Alert.alert('Error', `ZIP failed: ${e?.message ?? 'unknown error'}`);
     }
   }
 
-  async function resolveUrlsForIds(ids: string[]): Promise<Record<string, { url: string | null; originalFilename: string | null }>> {
-    const result: Record<string, { url: string | null; originalFilename: string | null }> = {};
+  async function resolveUrlsForIds(ids: string[]): Promise<Record<string, { url: string | null; originalFilename: string | null; takenAt: string | null }>> {
+    const result: Record<string, { url: string | null; originalFilename: string | null; takenAt: string | null }> = {};
+    const allPhotos = [...photos, ...otherPhotos];
     // Always fetch fresh signed URLs — cached ones may have expired
     try {
       const fetched = await getPhotoUrls(slug, ids);
@@ -453,7 +487,8 @@ export default function EventScreen() {
         setPhotoUrls(prev => ({ ...prev, ...fetched.urls }));
         for (const id of ids) {
           const p = fetched.urls[id];
-          result[id] = { url: p?.url ?? p?.displayUrl ?? null, originalFilename: p?.originalFilename ?? null };
+          const photo = allPhotos.find(ph => ph.id === id);
+          result[id] = { url: p?.url ?? p?.displayUrl ?? null, originalFilename: p?.originalFilename ?? null, takenAt: photo?.taken_at ?? null };
         }
         return result;
       }
@@ -461,7 +496,8 @@ export default function EventScreen() {
     // Fallback: use cached state
     for (const id of ids) {
       const p = photoUrls[id];
-      result[id] = { url: p?.url ?? p?.displayUrl ?? null, originalFilename: p?.originalFilename ?? null };
+      const photo = allPhotos.find(ph => ph.id === id);
+      result[id] = { url: p?.url ?? p?.displayUrl ?? null, originalFilename: p?.originalFilename ?? null, takenAt: photo?.taken_at ?? null };
     }
     return result;
   }
@@ -718,6 +754,12 @@ export default function EventScreen() {
   const currentUrls = currentPhoto ? photoUrls[currentPhoto.id] : null;
   const lightboxImageUrl = currentUrls?.displayUrl ?? currentUrls?.url ?? null;
 
+  const skippedPhotoList = useMemo(() => {
+    const allPhotos = [...photos, ...otherPhotos];
+    return skippedIds.map(id => allPhotos.find(p => p.id === id)).filter(Boolean) as Photo[];
+  }, [skippedIds, photos, otherPhotos]);
+  const currentSkipped = skippedPhotoList[skippedViewerIndex];
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -766,7 +808,7 @@ export default function EventScreen() {
               </TouchableOpacity>
             </View>
             <Text style={styles.uploadOverlaySub}>
-              {downloadProgress.current} of {downloadProgress.total} downloaded
+              Downloading photo {downloadProgress.current} of {downloadProgress.total}…
             </Text>
             <View style={styles.progressBg}>
               <View style={[styles.progressFill, {
@@ -779,6 +821,67 @@ export default function EventScreen() {
           </View>
         </View>
       )}
+
+      {/* Skipped Photos Viewer */}
+      <Modal visible={skippedViewerVisible} animationType="slide" onRequestClose={() => setSkippedViewerVisible(false)}>
+        <SafeAreaView style={styles.container}>
+          <View style={styles.skippedHeader}>
+            <Text style={styles.skippedTitle}>
+              Missing from download — {skippedViewerIndex + 1} of {skippedPhotoList.length}
+            </Text>
+            <TouchableOpacity onPress={() => setSkippedViewerVisible(false)}>
+              <Text style={styles.skippedClose}>×</Text>
+            </TouchableOpacity>
+          </View>
+          {currentSkipped && (
+            <View style={styles.skippedBody}>
+              {photoUrls[currentSkipped.id]?.thumbUrl
+                ? <Image source={{ uri: photoUrls[currentSkipped.id].thumbUrl! }} style={styles.skippedThumb} resizeMode="contain" />
+                : <View style={styles.skippedThumbPlaceholder} />
+              }
+              <Text style={styles.skippedFilename}>{currentSkipped.original_filename}</Text>
+            </View>
+          )}
+          <View style={styles.skippedNav}>
+            <TouchableOpacity
+              style={[styles.skippedNavBtn, skippedViewerIndex === 0 && { opacity: 0.3 }]}
+              onPress={() => setSkippedViewerIndex(i => Math.max(0, i - 1))}
+              disabled={skippedViewerIndex === 0}
+            >
+              <Text style={styles.skippedNavBtnText}>‹ Previous</Text>
+            </TouchableOpacity>
+            {skippedViewerIndex < skippedPhotoList.length - 1 ? (
+              <TouchableOpacity style={styles.skippedNavBtn} onPress={() => setSkippedViewerIndex(i => i + 1)}>
+                <Text style={styles.skippedNavBtnText}>Next ›</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.skippedNavBtn} onPress={() => setSkippedViewerIndex(i => i + 1)}>
+                <Text style={[styles.skippedNavBtnText, { opacity: 0.3 }]}>Next ›</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {skippedViewerIndex === skippedPhotoList.length - 1 && (
+            <View style={styles.skippedActions}>
+              <TouchableOpacity style={styles.skippedActionBtn} onPress={() => {
+                setSkippedViewerVisible(false);
+                const ids = skippedPhotoList.map(p => p.id);
+                resolveUrlsForIds(ids).then(urlMap => saveAsJpgs(ids, urlMap));
+              }}>
+                <Text style={styles.skippedActionText}>Download as JPGs</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.skippedActionBtn} onPress={() => {
+                setSkippedViewerVisible(false);
+                downloadAsZip(skippedPhotoList.map(p => p.id));
+              }}>
+                <Text style={styles.skippedActionText}>Download as ZIP</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.skippedActionBtn, { borderColor: 'transparent' }]} onPress={() => setSkippedViewerVisible(false)}>
+                <Text style={[styles.skippedActionText, { color: Colors.textMuted }]}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
 
       {/* Lightbox */}
       <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
@@ -935,6 +1038,21 @@ const styles = StyleSheet.create({
   lbImg: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },
   lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },
   lbArrowText: { fontSize: 36, color: 'rgba(255,255,255,0.35)' },
+  // Skipped Photos Viewer
+  skippedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
+  skippedTitle: { fontSize: 14, fontWeight: '600', color: Colors.white, flex: 1 },
+  skippedClose: { fontSize: 26, color: Colors.textMuted, paddingLeft: 16 },
+  skippedBody: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
+  skippedThumb: { width: SCREEN_WIDTH - 48, height: SCREEN_WIDTH - 48, borderRadius: 12, marginBottom: 16 },
+  skippedThumbPlaceholder: { width: SCREEN_WIDTH - 48, height: SCREEN_WIDTH - 48, borderRadius: 12, backgroundColor: '#1a1a1a', marginBottom: 16 },
+  skippedFilename: { fontSize: 13, color: Colors.textMuted, textAlign: 'center' },
+  skippedNav: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingBottom: 16 },
+  skippedNavBtn: { paddingVertical: 10, paddingHorizontal: 16 },
+  skippedNavBtnText: { fontSize: 15, color: Colors.accent, fontWeight: '600' },
+  skippedActions: { paddingHorizontal: 20, paddingBottom: 32, gap: 10 },
+  skippedActionBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 12, padding: 14, alignItems: 'center' },
+  skippedActionText: { fontSize: 14, fontWeight: '600', color: Colors.white },
+
   lbMeta: { fontSize: 12, color: '#555', textAlign: 'center', paddingHorizontal: 16, paddingVertical: 8 },
   lbUploadedBy: { fontSize: 12, color: '#444', textAlign: 'center', paddingHorizontal: 16, paddingBottom: 4 },
   lbSwipeHint: { fontSize: 10, color: '#333', textAlign: 'center', paddingBottom: 10 },

@@ -90,3 +90,7 @@ export async function deletePhotos(slug: string, photoIds: string[], adminPasswo
 export async function downloadZipRaw(slug: string, photoIds: string[]): Promise<Response> {
   return postRaw(`/api/native/events/${slug}/download-zip`, { photoIds });
 }
+
+export async function downloadPhotoRaw(photoId: string, adminPassword?: string): Promise<Response> {
+  return postRaw('/api/download-photo', { photoId, adminPassword: adminPassword ?? '' });
+}

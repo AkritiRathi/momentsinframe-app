@@ -13,6 +13,7 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos, downloadZipRaw,
 } from '../lib/api';
+import { getUserProfile } from '../lib/storage';
 import { Colors } from '../constants/colors';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -26,6 +27,8 @@ type Photo = {
   taken_at: string;
   date_source: string;
   original_filename: string;
+  uploaded_by_name: string | null;
+  uploaded_by_mobile: string | null;
 };
 
 type PhotoUrls = {
@@ -78,6 +81,8 @@ export default function EventScreen() {
   const [otherPhotos, setOtherPhotos] = useState<Photo[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, PhotoUrls>>({});
   const [loading, setLoading] = useState(true);
+  const [userMobile, setUserMobile] = useState<string | null>(null);
+  const [userName, setUserName] = useState<string | null>(null);
 
   // Lightbox
   const [lightboxVisible, setLightboxVisible] = useState(false);
@@ -124,7 +129,15 @@ export default function EventScreen() {
     })
   ).current;
 
-  useEffect(() => { loadPhotos(); }, []);
+  useEffect(() => {
+    loadPhotos();
+    getUserProfile().then(p => {
+      if (p) {
+        setUserMobile(p.mobile);
+        setUserName(`${p.firstName} ${p.lastName}`.trim());
+      }
+    });
+  }, []);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -254,7 +267,7 @@ export default function EventScreen() {
         const blob = await (await fetch(asset.uri)).blob();
         const putRes = await fetch(uploadUrl, { method: 'PUT', body: blob, headers: { 'Content-Type': contentType } });
         if (!putRes.ok) { failed++; continue; }
-        const proc = await processUpload(slug, stagingKey, filename);
+        const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined);
         if (proc.duplicate) duplicates++;
         else if (proc.error) failed++;
       } catch { failed++; }
@@ -294,7 +307,9 @@ export default function EventScreen() {
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
-          const result = await deletePhotos(slug, [id], params.adminPassword);
+          const result = isAdmin
+            ? await deletePhotos(slug, [id], params.adminPassword)
+            : await deletePhotos(slug, [id], '', userMobile ?? undefined);
           if (result.error) { Alert.alert('Error', result.error); return; }
           setLightboxVisible(false);
           await loadPhotos();
@@ -778,7 +793,7 @@ export default function EventScreen() {
                 <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && handleDownloadPhoto(currentPhoto.id)}>
                   <Text style={styles.lbBtnText}>Download</Text>
                 </TouchableOpacity>
-                {isAdmin && (
+                {(isAdmin || (currentPhoto?.uploaded_by_mobile && currentPhoto.uploaded_by_mobile === userMobile)) && (
                   <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>
                     <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
                   </TouchableOpacity>
@@ -808,6 +823,9 @@ export default function EventScreen() {
                   hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
                 })}
               </Text>
+            )}
+            {currentPhoto?.uploaded_by_name && (
+              <Text style={styles.lbUploadedBy}>Uploaded by {currentPhoto.uploaded_by_name}</Text>
             )}
             <Text style={styles.lbSwipeHint}>Swipe left / right to navigate</Text>
           </SafeAreaView>
@@ -918,5 +936,6 @@ const styles = StyleSheet.create({
   lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },
   lbArrowText: { fontSize: 36, color: 'rgba(255,255,255,0.35)' },
   lbMeta: { fontSize: 12, color: '#555', textAlign: 'center', paddingHorizontal: 16, paddingVertical: 8 },
+  lbUploadedBy: { fontSize: 12, color: '#444', textAlign: 'center', paddingHorizontal: 16, paddingBottom: 4 },
   lbSwipeHint: { fontSize: 10, color: '#333', textAlign: 'center', paddingBottom: 10 },
 });

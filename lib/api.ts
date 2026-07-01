@@ -23,6 +23,14 @@ async function del(path: string, body: object) {
   return res.json();
 }
 
+async function postRaw(path: string, body: object): Promise<Response> {
+  return fetch(`${API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export async function joinEvent(joinCode: string) {
   return post('/api/native/events/join', { joinCode });
 }
@@ -68,10 +76,17 @@ export async function getUploadUrl(eventSlug: string, filename: string, contentT
   return post('/api/upload-url', { eventSlug, filename, contentType });
 }
 
-export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string) {
-  return post('/api/upload', { eventSlug, stagingKey, originalFilename });
+export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, uploaderMobile?: string, uploaderName?: string) {
+  return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName });
 }
 
-export async function deletePhotos(slug: string, photoIds: string[], adminPassword: string) {
-  return del(`/api/native/events/${slug}/photos`, { photoIds, adminPassword });
+export async function deletePhotos(slug: string, photoIds: string[], adminPassword: string, uploaderMobile?: string) {
+  const body = adminPassword
+    ? { photoIds, adminPassword }
+    : { photoIds, uploaderMobile };
+  return del(`/api/native/events/${slug}/photos`, body);
+}
+
+export async function downloadZipRaw(slug: string, photoIds: string[]): Promise<Response> {
+  return postRaw(`/api/native/events/${slug}/download-zip`, { photoIds });
 }

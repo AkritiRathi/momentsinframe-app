@@ -1,16 +1,17 @@
 import {
-  View, Text, TouchableOpacity, StyleSheet, Image, ScrollView,
+  View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
   Modal, Alert, ActivityIndicator, Dimensions, PanResponder,
-  Platform,
+  Platform, BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
-  getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
+  getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos, downloadZipRaw,
 } from '../lib/api';
 import { Colors } from '../constants/colors';
 
@@ -34,12 +35,15 @@ type PhotoUrls = {
   originalFilename: string | null;
 };
 
-type UploadProgress = {
-  current: number;
-  total: number;
-  duplicates: number;
-  failed: number;
-};
+type ListItem =
+  | { type: 'event_header'; key: string }
+  | { type: 'expiry_banner'; key: string }
+  | { type: 'upload_card'; key: string }
+  | { type: 'select_photos_btn'; key: string }
+  | { type: 'select_bar'; key: string }
+  | { type: 'section_header'; section: 'main' | 'other'; key: string }
+  | { type: 'photo_row'; photos: Photo[]; section: 'main' | 'other'; startIndex: number; key: string }
+  | { type: 'empty'; key: string };
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-IN', {
@@ -86,8 +90,29 @@ export default function EventScreen() {
 
   // Upload
   const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress>({ current: 0, total: 0, duplicates: 0, failed: 0 });
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, duplicates: 0 });
   const uploadCancelledRef = useRef(false);
+  const downloadCancelledRef = useRef(false);
+  const [downloadingBulk, setDownloadingBulk] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
+  const prevSelectedSize = useRef(0);
+  const [pinnedBarVisible, setPinnedBarVisible] = useState(false);
+  const prevSelectMode = useRef(false);
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 90, minimumViewTime: 0 }).current;
+  const onViewableItemsChanged = useCallback(({ viewableItems }: any) => {
+    const naturalBarVisible = viewableItems.some((v: any) => v.item?.key === 'select_bar');
+    setPinnedBarVisible(!naturalBarVisible);
+  }, []);
+
+  useEffect(() => {
+    if (prevSelectMode.current && !selectMode) {
+      setPinnedBarVisible(false);
+    }
+    if (!prevSelectMode.current && selectMode) {
+      setPinnedBarVisible(false);
+    }
+    prevSelectMode.current = selectMode;
+  }, [selectMode]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -100,6 +125,30 @@ export default function EventScreen() {
   ).current;
 
   useEffect(() => { loadPhotos(); }, []);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (selectMode) {
+        exitSelectMode();
+        return true;
+      }
+      router.replace('/(auth)/home');
+      return true;
+    });
+    return () => sub.remove();
+  }, [selectMode]);
+
+  useEffect(() => {
+    const JPG_LIMIT = 25;
+    if (prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
+      Alert.alert(
+        'Downloading as ZIP',
+        `You've selected more than ${JPG_LIMIT} photos. When you tap Download, all selected photos will be bundled into a ZIP file — not downloaded as individual JPGs.\n\nTo download as individual JPGs instead, select ${JPG_LIMIT} or fewer photos.`,
+        [{ text: 'Got it' }]
+      );
+    }
+    prevSelectedSize.current = selected.size;
+  }, [selected.size]);
 
   async function loadPhotos() {
     setLoading(true);
@@ -127,19 +176,12 @@ export default function EventScreen() {
         try {
           const result = await getPhotoUrls(slug, batch);
           if (result.urls) setPhotoUrls(prev => ({ ...prev, ...result.urls }));
-        } catch { /* skip failed batches */ }
+        } catch { /* skip */ }
       })
     );
   }
 
   const lightboxPhotos = lightboxSection === 'main' ? photos : otherPhotos;
-
-  function openLightbox(index: number, section: 'main' | 'other') {
-    if (selectMode) return;
-    setLightboxIndex(index);
-    setLightboxSection(section);
-    setLightboxVisible(true);
-  }
 
   function navigateLightbox(delta: number) {
     setLightboxIndex(prev => {
@@ -157,18 +199,10 @@ export default function EventScreen() {
     });
   }
 
-  function selectAll(items: Photo[]) {
+  function selectGroup(items: Photo[], on: boolean) {
     setSelected(prev => {
       const next = new Set(prev);
-      items.forEach(p => next.add(p.id));
-      return next;
-    });
-  }
-
-  function deselectAll(items: Photo[]) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      items.forEach(p => next.delete(p.id));
+      items.forEach(p => on ? next.add(p.id) : next.delete(p.id));
       return next;
     });
   }
@@ -176,6 +210,7 @@ export default function EventScreen() {
   function exitSelectMode() {
     setSelectMode(false);
     setSelected(new Set());
+    setPinnedBarVisible(false);
   }
 
   async function handleUpload(source: 'camera' | 'gallery') {
@@ -201,7 +236,7 @@ export default function EventScreen() {
     const assets = pickResult.assets;
     uploadCancelledRef.current = false;
     setUploading(true);
-    setUploadProgress({ current: 0, total: assets.length, duplicates: 0, failed: 0 });
+    setUploadProgress({ current: 0, total: assets.length, duplicates: 0 });
 
     let duplicates = 0;
     let failed = 0;
@@ -215,34 +250,25 @@ export default function EventScreen() {
       try {
         const urlResult = await getUploadUrl(slug, filename, contentType);
         if (urlResult.error) { failed++; continue; }
-
         const { uploadUrl, stagingKey } = urlResult;
-        const fileResponse = await fetch(asset.uri);
-        const blob = await fileResponse.blob();
-        const putRes = await fetch(uploadUrl, {
-          method: 'PUT', body: blob, headers: { 'Content-Type': contentType },
-        });
+        const blob = await (await fetch(asset.uri)).blob();
+        const putRes = await fetch(uploadUrl, { method: 'PUT', body: blob, headers: { 'Content-Type': contentType } });
         if (!putRes.ok) { failed++; continue; }
+        const proc = await processUpload(slug, stagingKey, filename);
+        if (proc.duplicate) duplicates++;
+        else if (proc.error) failed++;
+      } catch { failed++; }
 
-        const processResult = await processUpload(slug, stagingKey, filename);
-        if (processResult.duplicate) duplicates++;
-        else if (processResult.error) failed++;
-      } catch {
-        failed++;
-      }
-
-      setUploadProgress({ current: i + 1, total: assets.length, duplicates, failed });
+      setUploadProgress({ current: i + 1, total: assets.length, duplicates });
     }
 
     setUploading(false);
-
-    const uploaded = uploadProgress.current - duplicates - failed;
-    const parts: string[] = [];
+    const uploaded = assets.length - duplicates - failed;
+    const parts = [];
     if (uploaded > 0) parts.push(`${uploaded} uploaded`);
     if (duplicates > 0) parts.push(`${duplicates} duplicate${duplicates > 1 ? 's' : ''} skipped`);
     if (failed > 0) parts.push(`${failed} failed`);
     if (parts.length) Alert.alert('Upload complete', parts.join(' · '));
-
     await loadPhotos();
   }
 
@@ -293,26 +319,241 @@ export default function EventScreen() {
     ]);
   }
 
-  async function handleDownloadPhoto(id: string) {
-    const urls = photoUrls[id];
-    if (!urls?.url) { Alert.alert('Not available', 'Photo URL not loaded yet.'); return; }
-    try {
-      const filename = urls.originalFilename ?? `photo_${id}.jpg`;
-      const localUri = `${FileSystem.cacheDirectory}${filename}`;
-      await FileSystem.downloadAsync(urls.url, localUri);
-      await Sharing.shareAsync(localUri, { mimeType: 'image/jpeg' });
-    } catch {
-      Alert.alert('Error', 'Could not download photo.');
+  const JPG_LIMIT = 25;
+
+  async function saveToDownloads(filename: string, cacheUri: string, mimeType: string) {
+    if (Platform.OS === 'android') {
+      const destPath = `/storage/emulated/0/Download/${filename}`;
+      await FileSystem.copyAsync({ from: cacheUri, to: destPath });
+    } else {
+      await Sharing.shareAsync(cacheUri, { mimeType, dialogTitle: 'Save file' });
     }
   }
 
-  const currentPhoto = lightboxPhotos[lightboxIndex];
-  const currentUrls = currentPhoto ? photoUrls[currentPhoto.id] : null;
-  const lightboxImageUrl = currentUrls?.displayUrl ?? currentUrls?.url ?? null;
+  async function handleDownloadPhoto(id: string) {
+    const urls = photoUrls[id];
+    const best = urls?.url ?? urls?.displayUrl ?? null;
+    if (!best) { Alert.alert('Not available', 'Photo URL not loaded yet.'); return; }
+    Alert.alert('Download photo', 'Save this photo to your Downloads folder?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Download', onPress: async () => {
+          try {
+            const rawName = urls?.originalFilename ?? `photo_${id}.jpg`;
+            const ext = rawName.match(/(\.[^.]+)$/) ? rawName.match(/(\.[^.]+)$/)![1] : '.jpg';
+            const base = rawName.replace(/(\.[^.]+)$/, '').replace(/[^a-zA-Z0-9-]/g, '_');
+            const filename = `MIF_${base}_${Date.now()}${ext}`;
+            const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+            await FileSystem.downloadAsync(best, cacheUri);
+            await saveToDownloads(filename, cacheUri, 'image/jpeg');
+            Alert.alert('Done', 'Photo saved to Downloads.');
+          } catch {
+            Alert.alert('Error', 'Could not download photo.');
+          }
+        },
+      },
+    ]);
+  }
+
+  async function saveAsJpgs(ids: string[], urlMap: Record<string, { url: string | null; originalFilename: string | null }>) {
+    downloadCancelledRef.current = false;
+    setDownloadingBulk(true);
+    setDownloadProgress({ current: 0, total: ids.length });
+    let saved = 0;
+    let failed = 0;
+    for (let i = 0; i < ids.length; i++) {
+      if (downloadCancelledRef.current) break;
+      const id = ids[i];
+      const u = urlMap[id];
+      if (!u?.url) { failed++; setDownloadProgress({ current: i + 1, total: ids.length }); continue; }
+      try {
+        const rawName = u.originalFilename ?? `photo_${id}.jpg`;
+        const ext = rawName.match(/(\.[^.]+)$/) ? rawName.match(/(\.[^.]+)$/)![1] : '.jpg';
+        const base = rawName.replace(/(\.[^.]+)$/, '').replace(/[^a-zA-Z0-9-]/g, '_');
+        const filename = `MIF_${i + 1}_${base}${ext}`;
+        const cacheUri = `${FileSystem.cacheDirectory}dl_${i}_${filename}`;
+        const dlResult = await FileSystem.downloadAsync(u.url, cacheUri);
+        if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+        await saveToDownloads(filename, cacheUri, 'image/jpeg');
+        saved++;
+      } catch { failed++; }
+      setDownloadProgress({ current: i + 1, total: ids.length });
+    }
+    setDownloadingBulk(false);
+    exitSelectMode();
+    const parts: string[] = [];
+    if (saved > 0) parts.push(`${saved} saved to Downloads`);
+    if (failed > 0) parts.push(`${failed} failed`);
+    if (parts.length) Alert.alert('Download complete', parts.join(' · '));
+  }
+
+  async function downloadAsZip(ids: string[]) {
+    const BATCH_SIZE = 50;
+    const totalBatches = Math.ceil(ids.length / BATCH_SIZE);
+    downloadCancelledRef.current = false;
+    setDownloadingBulk(true);
+    setDownloadProgress({ current: 0, total: totalBatches });
+    let savedBatches = 0;
+    try {
+      for (let i = 0; i < totalBatches; i++) {
+        if (downloadCancelledRef.current) break;
+        const batchIds = ids.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
+        const filename = totalBatches > 1
+          ? `${slug}-photos-part${i + 1}of${totalBatches}.zip`
+          : `${slug}-photos.zip`;
+        const res = await downloadZipRaw(slug, batchIds);
+        if (!res.ok) {
+          const text = await res.text().catch(() => 'no body');
+          throw new Error(`HTTP ${res.status} — ${text.slice(0, 300)}`);
+        }
+        const buffer = await res.arrayBuffer();
+        const uint8 = new Uint8Array(buffer);
+        let binary = '';
+        for (let j = 0; j < uint8.length; j++) binary += String.fromCharCode(uint8[j]);
+        const base64 = btoa(binary);
+        const cacheZipPath = `${FileSystem.cacheDirectory}${filename}`;
+        await FileSystem.writeAsStringAsync(cacheZipPath, base64, { encoding: FileSystem.EncodingType.Base64 });
+        await saveToDownloads(filename, cacheZipPath, 'application/zip');
+        savedBatches++;
+        setDownloadProgress({ current: savedBatches, total: totalBatches });
+      }
+      setDownloadingBulk(false);
+      exitSelectMode();
+      const msg = totalBatches > 1
+        ? `${savedBatches} of ${totalBatches} ZIP files saved to Downloads.`
+        : 'ZIP saved to Downloads.';
+      Alert.alert('Download complete', msg);
+    } catch (e: any) {
+      setDownloadingBulk(false);
+      Alert.alert('Error', `ZIP failed: ${e?.message ?? 'unknown error'}`);
+    }
+  }
+
+  async function resolveUrlsForIds(ids: string[]): Promise<Record<string, { url: string | null; originalFilename: string | null }>> {
+    const result: Record<string, { url: string | null; originalFilename: string | null }> = {};
+    // Always fetch fresh signed URLs — cached ones may have expired
+    try {
+      const fetched = await getPhotoUrls(slug, ids);
+      if (fetched.urls) {
+        setPhotoUrls(prev => ({ ...prev, ...fetched.urls }));
+        for (const id of ids) {
+          const p = fetched.urls[id];
+          result[id] = { url: p?.url ?? p?.displayUrl ?? null, originalFilename: p?.originalFilename ?? null };
+        }
+        return result;
+      }
+    } catch { /* fall through to cached */ }
+    // Fallback: use cached state
+    for (const id of ids) {
+      const p = photoUrls[id];
+      result[id] = { url: p?.url ?? p?.displayUrl ?? null, originalFilename: p?.originalFilename ?? null };
+    }
+    return result;
+  }
+
+  async function handleBulkDownload() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+
+    if (ids.length > JPG_LIMIT) {
+      Alert.alert(
+        `Download ${ids.length} photos as ZIP`,
+        `${Math.ceil(ids.length / 50)} ZIP file${Math.ceil(ids.length / 50) > 1 ? 's' : ''} will be saved to your Downloads folder.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Download', onPress: () => downloadAsZip(ids) },
+        ]
+      );
+      return;
+    }
+
+    Alert.alert(
+      `Download ${ids.length} photo${ids.length > 1 ? 's' : ''}`,
+      'How would you like to download?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Save as JPG',
+          onPress: async () => {
+            const urlMap = await resolveUrlsForIds(ids);
+            await saveAsJpgs(ids, urlMap);
+          },
+        },
+        { text: 'Save as ZIP', onPress: () => downloadAsZip(ids) },
+      ]
+    );
+  }
 
   const daysLeft = params.expiresAt ? daysUntil(params.expiresAt) : 999;
   const totalPhotos = photos.length + otherPhotos.length;
-  const allSelected = [...photos, ...otherPhotos].every(p => selected.has(p.id));
+  const allSelected = totalPhotos > 0 && [...photos, ...otherPhotos].every(p => selected.has(p.id));
+
+  // Build flat list data + compute sticky indices
+  const { listData, stickyIndices } = useMemo(() => {
+    const items: ListItem[] = [];
+    const sticky: number[] = [];
+
+    items.push({ type: 'event_header', key: 'event_header' });
+    if (daysLeft <= 3) items.push({ type: 'expiry_banner', key: 'expiry_banner' });
+    items.push({ type: 'upload_card', key: 'upload_card' });
+
+    if (totalPhotos > 0) {
+      if (!selectMode) {
+        items.push({ type: 'select_photos_btn', key: 'select_photos_btn' });
+      } else {
+        items.push({ type: 'select_bar', key: 'select_bar' });
+      }
+    }
+
+    if (photos.length > 0) {
+      sticky.push(items.length);
+      items.push({ type: 'section_header', section: 'main', key: 'header_main' });
+      for (let i = 0; i < photos.length; i += 3) {
+        items.push({ type: 'photo_row', photos: photos.slice(i, i + 3), section: 'main', startIndex: i, key: `row_main_${i}` });
+      }
+    }
+
+    if (otherPhotos.length > 0) {
+      sticky.push(items.length);
+      items.push({ type: 'section_header', section: 'other', key: 'header_other' });
+      for (let i = 0; i < otherPhotos.length; i += 3) {
+        items.push({ type: 'photo_row', photos: otherPhotos.slice(i, i + 3), section: 'other', startIndex: i, key: `row_other_${i}` });
+      }
+    }
+
+    if (totalPhotos === 0 && !loading) {
+      items.push({ type: 'empty', key: 'empty' });
+    }
+
+    return { listData: items, stickyIndices: sticky };
+  }, [photos, otherPhotos, selectMode, daysLeft, totalPhotos, loading]);
+
+  function renderSelectBar() {
+    return (
+      <View style={styles.selectBar}>
+        <View>
+          <Text style={styles.selectCount}>{selected.size}</Text>
+          <Text style={styles.selectCountLabel}>selected</Text>
+        </View>
+        <View style={styles.selectBarBtns}>
+          <Pressable style={styles.selBtn} onPress={() => selectGroup([...photos, ...otherPhotos], !allSelected)}>
+            <Text style={styles.selBtnText}>Select all</Text>
+          </Pressable>
+          <Pressable style={styles.selBtn} onPress={exitSelectMode}>
+            <Text style={styles.selBtnText}>Cancel</Text>
+          </Pressable>
+          {isAdmin && (
+            <Pressable style={[styles.selBtn, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={handleBulkDelete}>
+              <Text style={[styles.selBtnText, { color: Colors.danger }]}>Delete</Text>
+            </Pressable>
+          )}
+          <Pressable style={[styles.selBtnPrimary, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={handleBulkDownload}>
+            <Text style={styles.selBtnPrimaryText}>↓ Download</Text>
+          </Pressable>
+        </View>
+      </View>
+    );
+  }
 
   function renderThumb(photo: Photo, index: number, section: 'main' | 'other') {
     const urls = photoUrls[photo.id];
@@ -321,16 +562,21 @@ export default function EventScreen() {
       <TouchableOpacity
         key={photo.id}
         style={styles.thumb}
-        onPress={() => selectMode ? toggleSelect(photo.id) : openLightbox(index, section)}
+        onPress={() => {
+          if (selectMode) {
+            toggleSelect(photo.id);
+          } else {
+            setLightboxIndex(index);
+            setLightboxSection(section);
+            setLightboxVisible(true);
+          }
+        }}
         activeOpacity={0.85}
       >
-        {urls?.thumbUrl ? (
-          <Image source={{ uri: urls.thumbUrl }} style={styles.thumbImage} />
-        ) : (
-          <View style={styles.thumbPlaceholder}>
-            <View style={styles.thumbSkeleton} />
-          </View>
-        )}
+        {urls?.thumbUrl
+          ? <Image source={{ uri: urls.thumbUrl }} style={styles.thumbImage} />
+          : <View style={styles.thumbSkeleton} />
+        }
         {selectMode && (
           <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
             {isSelected && <Text style={styles.checkboxTick}>✓</Text>}
@@ -340,18 +586,122 @@ export default function EventScreen() {
     );
   }
 
-  function renderGrid(items: Photo[], section: 'main' | 'other') {
-    const rows: Photo[][] = [];
-    for (let i = 0; i < items.length; i += 3) rows.push(items.slice(i, i + 3));
-    return rows.map((row, ri) => (
-      <View key={ri} style={styles.gridRow}>
-        {row.map((p, ci) => renderThumb(p, ri * 3 + ci, section))}
-        {row.length < 3 && Array(3 - row.length).fill(null).map((_, k) => (
-          <View key={`e${k}`} style={{ width: THUMB_SIZE }} />
-        ))}
-      </View>
-    ));
+  function renderItem({ item }: { item: ListItem }) {
+    switch (item.type) {
+      case 'event_header': {
+        const total = totalPhotos;
+        return (
+          <View style={styles.eventHeader}>
+            <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/(auth)/home')}>
+              <Text style={styles.backText}>←</Text>
+            </TouchableOpacity>
+            <View style={styles.eventHeaderBody}>
+              <Text style={styles.eventName}>{params.name || 'Event'}</Text>
+              {params.expiresAt && (
+                <Text style={styles.eventMeta}>
+                  Event expires {formatDate(params.expiresAt)}
+                  {total > 0 ? ` · ${total} photo${total !== 1 ? 's' : ''}` : ''}
+                </Text>
+              )}
+              {photos.length > 0 && otherPhotos.length > 0 && (
+                <Text style={styles.eventMetaSub}>
+                  {photos.length} in Photo Gallery · {otherPhotos.length} in Other Photos Gallery
+                </Text>
+              )}
+            </View>
+          </View>
+        );
+      }
+
+      case 'expiry_banner':
+        return (
+          <View style={styles.expiryBanner}>
+            <Text style={styles.expiryText}>
+              {daysLeft < 0
+                ? 'This event has closed. Download your photos before they are removed.'
+                : daysLeft === 0 ? 'This event closes today. Download your photos before then.'
+                : daysLeft === 1 ? 'This event closes tomorrow. Download your photos before then.'
+                : `This event closes in ${daysLeft} days. Download your photos before then.`}
+            </Text>
+          </View>
+        );
+
+      case 'upload_card':
+        return (
+          <View style={styles.uploadCard}>
+            <TouchableOpacity style={[styles.uploadBtn, uploading && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={uploading}>
+              <Text style={styles.uploadBtnText}>Upload Photos</Text>
+            </TouchableOpacity>
+            <Text style={styles.uploadHint}>Don't close the app while uploading.</Text>
+          </View>
+        );
+
+      case 'select_photos_btn':
+        return (
+          <View style={styles.selectPhotosRow}>
+            <TouchableOpacity style={styles.selectPhotosBtn} onPress={() => setSelectMode(true)}>
+              <Text style={styles.selectPhotosBtnText}>Select photos</Text>
+            </TouchableOpacity>
+          </View>
+        );
+
+      case 'select_bar':
+        return renderSelectBar();
+
+      case 'section_header': {
+        const isMain = item.section === 'main';
+        const sectionItems = isMain ? photos : otherPhotos;
+        const allInSection = sectionItems.every(p => selected.has(p.id));
+        return (
+          <View style={styles.sectionBlock}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionTitleRow}>
+                <Text style={styles.sectionTitle}>{isMain ? 'Photo Gallery' : 'Other Photos Gallery'}</Text>
+                <Text style={styles.sectionCount}>{sectionItems.length}</Text>
+              </View>
+              <Text style={styles.sectionSub}>
+                {isMain ? '(sorted by date taken · oldest first)' : '(no date info — sorted by upload time)'}
+              </Text>
+              {selectMode && (
+                <TouchableOpacity onPress={() => selectGroup(sectionItems, !allInSection)} style={{ marginTop: 4 }}>
+                  <Text style={styles.sectionSelectLink}>
+                    {allInSection
+                      ? `Deselect all ${isMain ? 'Photo Gallery' : 'Other Photos Gallery'}`
+                      : `Select all ${isMain ? 'Photo Gallery' : 'Other Photos Gallery'}`}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+        );
+      }
+
+      case 'photo_row':
+        return (
+          <View style={styles.photoRow}>
+            {item.photos.map((p, ci) => renderThumb(p, item.startIndex + ci, item.section))}
+            {item.photos.length < 3 && Array(3 - item.photos.length).fill(null).map((_, k) => (
+              <View key={`e${k}`} style={{ width: THUMB_SIZE }} />
+            ))}
+          </View>
+        );
+
+      case 'empty':
+        return (
+          <View style={styles.empty}>
+            <Text style={styles.emptyText}>No photos yet.</Text>
+            <Text style={styles.emptySub}>Be the first to upload!</Text>
+          </View>
+        );
+
+      default:
+        return null;
+    }
   }
+
+  const currentPhoto = lightboxPhotos[lightboxIndex];
+  const currentUrls = currentPhoto ? photoUrls[currentPhoto.id] : null;
+  const lightboxImageUrl = currentUrls?.displayUrl ?? currentUrls?.url ?? null;
 
   if (loading) {
     return (
@@ -367,24 +717,49 @@ export default function EventScreen() {
       {/* Upload progress overlay */}
       {uploading && (
         <View style={styles.uploadOverlay}>
-          <View style={styles.uploadCard}>
-            <View style={styles.uploadCardHeader}>
-              <Text style={styles.uploadCardTitle}>Uploading photos</Text>
+          <View style={styles.uploadOverlayCard}>
+            <View style={styles.uploadOverlayHeader}>
+              <Text style={styles.uploadOverlayTitle}>Uploading photos</Text>
               <TouchableOpacity onPress={() => { uploadCancelledRef.current = true; }}>
-                <Text style={styles.uploadCancelText}>Cancel</Text>
+                <Text style={styles.uploadOverlayCancel}>Cancel</Text>
               </TouchableOpacity>
             </View>
-            <Text style={styles.uploadCardSub}>
+            <Text style={styles.uploadOverlaySub}>
               {uploadProgress.current} of {uploadProgress.total} uploaded
               {uploadProgress.duplicates > 0 ? ` · ${uploadProgress.duplicates} duplicate${uploadProgress.duplicates > 1 ? 's' : ''} skipped` : ''}
             </Text>
-            <View style={styles.progressBarBg}>
-              <View style={[styles.progressBarFill, {
+            <View style={styles.progressBg}>
+              <View style={[styles.progressFill, {
                 width: `${uploadProgress.total > 0 ? Math.round((uploadProgress.current / uploadProgress.total) * 100) : 0}%` as any,
               }]} />
             </View>
-            <Text style={styles.uploadPct}>
+            <Text style={styles.uploadOverlayPct}>
               {uploadProgress.total > 0 ? Math.round((uploadProgress.current / uploadProgress.total) * 100) : 0}% complete — keep this screen open
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* Download progress overlay */}
+      {downloadingBulk && (
+        <View style={styles.uploadOverlay}>
+          <View style={styles.uploadOverlayCard}>
+            <View style={styles.uploadOverlayHeader}>
+              <Text style={styles.uploadOverlayTitle}>Downloading</Text>
+              <TouchableOpacity onPress={() => { downloadCancelledRef.current = true; }}>
+                <Text style={styles.uploadOverlayCancel}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.uploadOverlaySub}>
+              {downloadProgress.current} of {downloadProgress.total} downloaded
+            </Text>
+            <View style={styles.progressBg}>
+              <View style={[styles.progressFill, {
+                width: `${downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}%` as any,
+              }]} />
+            </View>
+            <Text style={styles.uploadOverlayPct}>
+              {downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}% complete — keep this screen open
             </Text>
           </View>
         </View>
@@ -410,13 +785,11 @@ export default function EventScreen() {
                 )}
               </View>
             </View>
-
-            <View style={styles.lbImageWrap}>
-              {lightboxImageUrl ? (
-                <Image source={{ uri: lightboxImageUrl }} style={styles.lbImage} resizeMode="contain" />
-              ) : (
-                <ActivityIndicator color={Colors.accent} />
-              )}
+            <View style={styles.lbImgWrap}>
+              {lightboxImageUrl
+                ? <Image source={{ uri: lightboxImageUrl }} style={styles.lbImg} resizeMode="contain" />
+                : <ActivityIndicator color={Colors.accent} />
+              }
               {lightboxIndex > 0 && (
                 <TouchableOpacity style={[styles.lbArrow, { left: 0 }]} onPress={() => navigateLightbox(-1)}>
                   <Text style={styles.lbArrowText}>‹</Text>
@@ -428,7 +801,6 @@ export default function EventScreen() {
                 </TouchableOpacity>
               )}
             </View>
-
             {currentPhoto?.taken_at && (
               <Text style={styles.lbMeta}>
                 {new Date(currentPhoto.taken_at).toLocaleString('en-IN', {
@@ -442,238 +814,94 @@ export default function EventScreen() {
         </View>
       </Modal>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
+      {selectMode && pinnedBarVisible && renderSelectBar()}
 
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-            <Text style={styles.backText}>←</Text>
-          </TouchableOpacity>
-          <View style={styles.headerBody}>
-            <Text style={styles.eventName}>{params.name || 'Event'}</Text>
-            <Text style={styles.eventMeta}>
-              {params.createdAt ? `Created on ${formatDate(params.createdAt)}` : ''}
-              {params.createdAt && params.expiresAt ? ' · ' : ''}
-              {params.expiresAt ? `Event expires ${formatDate(params.expiresAt)}` : ''}
-            </Text>
-            <Text style={styles.photoCountText}>
-              {totalPhotos} photo{totalPhotos !== 1 ? 's' : ''}
-              {otherPhotos.length > 0 ? ` (${photos.length} in Photo Gallery, ${otherPhotos.length} in Other Photos Gallery)` : ''}
-            </Text>
-          </View>
-        </View>
+      <FlatList
+        key={selectMode ? 'select' : 'normal'}
+        data={listData}
+        keyExtractor={item => item.key}
+        renderItem={renderItem}
+        onViewableItemsChanged={selectMode ? onViewableItemsChanged : undefined}
+        viewabilityConfig={viewabilityConfig}
+        stickyHeaderIndices={stickyIndices}
+        contentContainerStyle={{ paddingBottom: 48 }}
+        removeClippedSubviews={false}
+      />
 
-        {/* Expiry warning */}
-        {daysLeft <= 3 && (
-          <View style={styles.expiryBanner}>
-            <Text style={styles.expiryBannerText}>
-              {daysLeft < 0
-                ? 'This event has closed. Download your photos before they are removed.'
-                : daysLeft === 0
-                ? `This event closes today. Download your photos before then.`
-                : daysLeft === 1
-                ? `This event closes tomorrow. Download your photos before then.`
-                : `This event closes in ${daysLeft} days. Download your photos before then.`}
-            </Text>
-          </View>
-        )}
-
-        {/* Upload card */}
-        <View style={styles.uploadCard2}>
-          <TouchableOpacity
-            style={[styles.uploadBtn, uploading && { opacity: 0.5 }]}
-            onPress={showUploadOptions}
-            disabled={uploading}
-          >
-            <Text style={styles.uploadBtnText}>Upload Photos</Text>
-          </TouchableOpacity>
-          <Text style={styles.uploadHint}>
-            You can upload multiple photos at a time. Keep this screen open while uploading.
-          </Text>
-        </View>
-
-        {/* Select photos button (when not in select mode) */}
-        {totalPhotos > 0 && !selectMode && (
-          <View style={styles.selectRow}>
-            <TouchableOpacity style={styles.selectPhotosBtn} onPress={() => setSelectMode(true)}>
-              <Text style={styles.selectPhotosBtnText}>Select photos</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Select mode bar — inline in scroll, not floating */}
-        {selectMode && (
-          <View style={styles.selectBar}>
-            <View style={styles.selectBarLeft}>
-              <Text style={styles.selectCount}>{selected.size}</Text>
-              <Text style={styles.selectCountLabel}>selected</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.selectBarBtn}
-              onPress={() => allSelected ? deselectAll([...photos, ...otherPhotos]) : selectAll([...photos, ...otherPhotos])}
-            >
-              <Text style={styles.selectBarBtnText}>Select all</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.selectBarBtn} onPress={exitSelectMode}>
-              <Text style={styles.selectBarBtnText}>Cancel</Text>
-            </TouchableOpacity>
-            {isAdmin && (
-              <TouchableOpacity
-                style={[styles.selectBarBtn, styles.selectBarBtnDel, selected.size === 0 && { opacity: 0.4 }]}
-                disabled={selected.size === 0}
-                onPress={handleBulkDelete}
-              >
-                <Text style={[styles.selectBarBtnText, { color: Colors.danger }]}>Delete</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={[styles.selectBarBtnPrimary, selected.size === 0 && { opacity: 0.4 }]}
-              disabled={selected.size === 0}
-              onPress={() => Alert.alert('Coming soon', 'Bulk download will be available soon.')}
-            >
-              <Text style={styles.selectBarBtnPrimaryText}>↓ Download</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Gallery sections */}
-        {photos.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleRow}>
-                <Text style={styles.sectionTitle}>Photo Gallery</Text>
-                <Text style={styles.sectionCount}>{photos.length}</Text>
-              </View>
-              <Text style={styles.sectionSub}>(sorted by date taken · oldest first)</Text>
-              {selectMode && (
-                <View style={styles.sectionSelectRow}>
-                  <TouchableOpacity onPress={() => {
-                    const allInSection = photos.every(p => selected.has(p.id));
-                    allInSection ? deselectAll(photos) : selectAll(photos);
-                  }}>
-                    <Text style={styles.sectionSelectLink}>
-                      {photos.every(p => selected.has(p.id)) ? 'Deselect all Photo Gallery' : 'Select all Photo Gallery'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-            <View style={styles.grid}>{renderGrid(photos, 'main')}</View>
-          </View>
-        )}
-
-        {otherPhotos.length > 0 && (
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <View style={styles.sectionTitleRow}>
-                <Text style={styles.sectionTitle}>Other Photos Gallery</Text>
-                <Text style={styles.sectionCount}>{otherPhotos.length}</Text>
-              </View>
-              <Text style={styles.sectionSub}>(no date info — sorted by upload time)</Text>
-              {selectMode && (
-                <View style={styles.sectionSelectRow}>
-                  <TouchableOpacity onPress={() => {
-                    const allInSection = otherPhotos.every(p => selected.has(p.id));
-                    allInSection ? deselectAll(otherPhotos) : selectAll(otherPhotos);
-                  }}>
-                    <Text style={styles.sectionSelectLink}>
-                      {otherPhotos.every(p => selected.has(p.id)) ? 'Deselect all Other Photos Gallery' : 'Select all Other Photos Gallery'}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-            <View style={styles.grid}>{renderGrid(otherPhotos, 'other')}</View>
-          </View>
-        )}
-
-        {totalPhotos === 0 && (
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>No photos yet.</Text>
-            <Text style={styles.emptySub}>Be the first to upload!</Text>
-          </View>
-        )}
-
-      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  scroll: { paddingBottom: 48 },
 
-  // Header
-  header: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 16 },
-  backBtn: { marginRight: 12, paddingTop: 3 },
+  // Event header
+  eventHeader: { paddingTop: 12, paddingBottom: 16, paddingHorizontal: 16 },
+  backBtn: { marginBottom: 8 },
   backText: { fontSize: 24, color: Colors.textMuted },
-  headerBody: { flex: 1, alignItems: 'center' },
+  eventHeaderBody: { alignItems: 'center' },
   eventName: { fontSize: 22, fontWeight: '600', color: Colors.white, textAlign: 'center', marginBottom: 4 },
   eventMeta: { fontSize: 12, color: '#888', textAlign: 'center', marginBottom: 2 },
-  photoCountText: { fontSize: 13, color: '#666', textAlign: 'center' },
+  eventMetaSub: { fontSize: 12, color: '#666', textAlign: 'center' },
 
   // Expiry banner
   expiryBanner: { marginHorizontal: 16, marginBottom: 12, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(245,158,11,0.4)', backgroundColor: 'rgba(245,158,11,0.08)', paddingHorizontal: 14, paddingVertical: 10 },
-  expiryBannerText: { fontSize: 13, color: '#D97706', lineHeight: 20 },
+  expiryText: { fontSize: 13, color: '#D97706', lineHeight: 20 },
 
   // Upload card
-  uploadCard2: { marginHorizontal: 16, marginBottom: 12, borderRadius: 12, borderWidth: 0.5, borderColor: Colors.cardBorder, backgroundColor: Colors.card, padding: 16, alignItems: 'center' },
+  uploadCard: { marginHorizontal: 16, marginBottom: 12, borderRadius: 12, borderWidth: 0.5, borderColor: Colors.cardBorder, backgroundColor: Colors.card, padding: 16, alignItems: 'center' },
   uploadBtn: { backgroundColor: Colors.background, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 32, marginBottom: 10 },
   uploadBtnText: { fontSize: 15, fontWeight: '600', color: Colors.white },
-  uploadHint: { fontSize: 12, color: '#666', textAlign: 'center', lineHeight: 18 },
+  uploadHint: { fontSize: 12, color: '#666', textAlign: 'center' },
 
   // Select photos button
-  selectRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, marginBottom: 12 },
+  selectPhotosRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, paddingBottom: 8 },
   selectPhotosBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
   selectPhotosBtnText: { fontSize: 14, fontWeight: '500', color: Colors.textMuted },
 
-  // Select mode bar
-  selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: Colors.card, borderBottomWidth: 0.5, borderBottomColor: Colors.cardBorder, gap: 6, flexWrap: 'wrap' },
-  selectBarLeft: { flexDirection: 'column', marginRight: 4 },
-  selectCount: { fontSize: 20, fontWeight: '500', color: Colors.white, lineHeight: 22 },
-  selectCountLabel: { fontSize: 11, color: '#666', marginTop: 1 },
-  selectBarBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
-  selectBarBtnText: { fontSize: 13, color: Colors.textMuted },
-  selectBarBtnDel: { borderColor: 'rgba(229,57,53,0.3)' },
-  selectBarBtnPrimary: { backgroundColor: Colors.background, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, flexDirection: 'row', alignItems: 'center', gap: 4 },
-  selectBarBtnPrimaryText: { fontSize: 13, fontWeight: '600', color: Colors.white },
+  // Select mode bar (sticky)
+  selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: Colors.card, borderBottomWidth: 0.5, borderBottomColor: Colors.cardBorder, gap: 8 },
+  selectCount: { fontSize: 22, fontWeight: '500', color: Colors.white, lineHeight: 24 },
+  selectCountLabel: { fontSize: 11, color: '#666' },
+  selectBarBtns: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' },
+  selBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  selBtnText: { fontSize: 13, color: Colors.textMuted },
+  selBtnPrimary: { backgroundColor: Colors.background, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
+  selBtnPrimaryText: { fontSize: 13, fontWeight: '600', color: Colors.white },
 
-  // Section
-  section: { marginBottom: 24 },
-  sectionHeader: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 10 },
+  // Section header (sticky — wraps select bar + section title as one unit)
+  sectionBlock: { backgroundColor: Colors.background },
+  sectionHeader: { backgroundColor: Colors.background, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 2 },
   sectionTitle: { fontSize: 18, fontWeight: '500', color: Colors.white },
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },
-  sectionSelectRow: { marginTop: 6 },
   sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
 
-  // Grid
-  grid: { gap: GAP },
-  gridRow: { flexDirection: 'row', gap: GAP },
+  // Photo grid
+  photoRow: { flexDirection: 'row', gap: GAP, marginTop: GAP },
   thumb: { width: THUMB_SIZE, height: THUMB_SIZE, backgroundColor: '#1a1a1a' },
   thumbImage: { width: '100%', height: '100%' },
-  thumbPlaceholder: { flex: 1 },
   thumbSkeleton: { flex: 1, backgroundColor: '#252525' },
-  checkbox: { position: 'absolute', top: 5, right: 5, width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: Colors.white, backgroundColor: 'rgba(255,255,255,0.7)', alignItems: 'center', justifyContent: 'center' },
-  checkboxSelected: { backgroundColor: Colors.background, borderColor: Colors.background },
+  checkbox: { position: 'absolute', top: 5, right: 5, width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.8)', backgroundColor: 'rgba(255,255,255,0.5)', alignItems: 'center', justifyContent: 'center' },
+  checkboxSelected: { backgroundColor: Colors.background, borderColor: Colors.white },
   checkboxTick: { fontSize: 11, fontWeight: '800', color: Colors.white },
 
-  // Empty
+  // Empty state
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyText: { fontSize: 16, fontWeight: '500', color: Colors.textMuted, marginBottom: 6 },
   emptySub: { fontSize: 14, color: '#444' },
 
   // Upload overlay
   uploadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 100, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
-  uploadCard: { width: '100%', backgroundColor: Colors.card, borderRadius: 16, padding: 20 },
-  uploadCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  uploadCardTitle: { fontSize: 16, fontWeight: '600', color: Colors.white },
-  uploadCancelText: { fontSize: 13, color: Colors.danger },
-  uploadCardSub: { fontSize: 13, color: Colors.textMuted, marginBottom: 10 },
-  progressBarBg: { height: 8, backgroundColor: '#2a2a2a', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
-  progressBarFill: { height: '100%', backgroundColor: Colors.white, borderRadius: 4 },
-  uploadPct: { fontSize: 11, color: '#666' },
+  uploadOverlayCard: { width: '100%', backgroundColor: Colors.card, borderRadius: 16, padding: 20 },
+  uploadOverlayHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  uploadOverlayTitle: { fontSize: 16, fontWeight: '600', color: Colors.white },
+  uploadOverlayCancel: { fontSize: 13, color: Colors.danger },
+  uploadOverlaySub: { fontSize: 13, color: Colors.textMuted, marginBottom: 10 },
+  progressBg: { height: 8, backgroundColor: '#2a2a2a', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
+  progressFill: { height: '100%', backgroundColor: Colors.white, borderRadius: 4 },
+  uploadOverlayPct: { fontSize: 11, color: '#666' },
 
   // Lightbox
   lightbox: { flex: 1, backgroundColor: '#000' },
@@ -685,8 +913,8 @@ const styles = StyleSheet.create({
   lbBtn: { borderWidth: 0.5, borderColor: '#2a2a2a', borderRadius: 7, paddingHorizontal: 12, paddingVertical: 6 },
   lbBtnDanger: { borderColor: 'rgba(229,57,53,0.3)' },
   lbBtnText: { fontSize: 13, fontWeight: '500', color: '#888' },
-  lbImageWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', position: 'relative' },
-  lbImage: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },
+  lbImgWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  lbImg: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },
   lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },
   lbArrowText: { fontSize: 36, color: 'rgba(255,255,255,0.35)' },
   lbMeta: { fontSize: 12, color: '#555', textAlign: 'center', paddingHorizontal: 16, paddingVertical: 8 },

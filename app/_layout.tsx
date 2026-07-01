@@ -11,7 +11,15 @@ export default function RootLayout() {
   const [mounted, setMounted] = useState(false);
   const [hasProfile, setHasProfile] = useState<boolean | null>(null);
 
-  // Auto-check for OTA updates on every launch and apply immediately
+  // Watch for a pending update (downloaded by ON_LOAD or our manual check) and apply immediately
+  const { isUpdatePending } = __DEV__ ? { isUpdatePending: false } : Updates.useUpdates();
+  useEffect(() => {
+    if (isUpdatePending) {
+      Updates.reloadAsync().catch(() => {});
+    }
+  }, [isUpdatePending]);
+
+  // Also manually trigger a check on launch in case ON_LOAD hasn't fired yet
   useEffect(() => {
     if (__DEV__) return;
     (async () => {
@@ -19,9 +27,8 @@ export default function RootLayout() {
         const check = await Updates.checkForUpdateAsync();
         if (check.isAvailable) {
           await Updates.fetchUpdateAsync();
-          await Updates.reloadAsync();
         }
-      } catch { /* ignore — running in dev or no network */ }
+      } catch { }
     })();
   }, []);
 

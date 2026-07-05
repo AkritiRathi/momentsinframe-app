@@ -1,38 +1,44 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  ActivityIndicator, Alert,
+  ActivityIndicator, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import * as Updates from 'expo-updates';
 import { getUserProfile, UserProfile } from '../../lib/storage';
 import { Colors } from '../../constants/colors';
+import { Typography } from '../../constants/typography';
+import { useAlert } from '../../lib/useAlert';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { showAlert, alertOverlay } = useAlert();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [dropPos, setDropPos] = useState({ top: 0, right: 0 });
+  const gearRef = useRef<TouchableOpacity>(null);
 
   useEffect(() => {
     getUserProfile().then(setProfile);
   }, []);
 
   async function checkForUpdates() {
+    setSettingsVisible(false);
+    await new Promise(r => setTimeout(r, 300));
     if (__DEV__) {
-      Alert.alert('Updates disabled', 'Update checks only work in the built app, not in Expo Go.');
+      showAlert('Updates disabled', 'Update checks only work in the built app, not in Expo Go.');
       return;
     }
     setCheckingUpdate(true);
     try {
       const result = await Updates.checkForUpdateAsync();
       if (result.isAvailable) {
-        Alert.alert(
+        showAlert(
           'Update available',
           'A new version is ready. The app will restart to apply it.',
           [
-            { text: 'Later', style: 'cancel' },
             {
               text: 'Update now',
               onPress: async () => {
@@ -40,13 +46,14 @@ export default function HomeScreen() {
                 await Updates.reloadAsync();
               },
             },
+            { text: 'Later', style: 'cancel' },
           ]
         );
       } else {
-        Alert.alert('Up to date', 'You already have the latest version.');
+        showAlert('Up to date', 'You already have the latest version.');
       }
     } catch {
-      Alert.alert('Error', 'Could not check for updates. Make sure you are connected to the internet.');
+      showAlert('Error', 'Could not check for updates. Make sure you are connected to the internet.');
     } finally {
       setCheckingUpdate(false);
     }
@@ -63,11 +70,8 @@ export default function HomeScreen() {
         onRequestClose={() => setSettingsVisible(false)}
       >
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setSettingsVisible(false)}>
-          <View style={styles.settingsSheet}>
-            <Text style={styles.settingsTitle}>Settings</Text>
-
+          <View style={[styles.settingsSheet, { position: 'absolute', top: dropPos.top, right: dropPos.right }]}>
             <TouchableOpacity style={styles.settingsRow} onPress={checkForUpdates} disabled={checkingUpdate}>
-              <Text style={styles.settingsRowIcon}>🔄</Text>
               <View style={styles.settingsRowBody}>
                 <Text style={styles.settingsRowLabel}>Check for Updates</Text>
                 <Text style={styles.settingsRowSub}>Version {Updates.runtimeVersion ?? '1.0.0'}</Text>
@@ -82,13 +86,17 @@ export default function HomeScreen() {
       <View style={styles.header}>
         <View style={styles.headerTop}>
           <Text style={styles.appName}>MomentsInFrame</Text>
-          <TouchableOpacity style={styles.settingsBtn} onPress={() => setSettingsVisible(true)}>
-            <Text style={styles.settingsIcon}>⚙</Text>
+          <TouchableOpacity ref={gearRef} style={styles.settingsBtn} onPress={() => {
+            gearRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
+              setDropPos({ top: pageY + height + 4, right: Dimensions.get('window').width - pageX - width });
+              setSettingsVisible(true);
+            });
+          }}>
+            <Text style={styles.settingsIcon}>⚙️</Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.greeting}>Welcome back,</Text>
         <Text style={styles.heading}>
-          Hello, <Text style={styles.accent}>{profile?.firstName ?? '...'}</Text> 👋
+          Welcome <Text style={styles.accent}>{profile?.firstName ?? '...'}</Text> 👋
         </Text>
       </View>
 
@@ -122,6 +130,7 @@ export default function HomeScreen() {
         <Text style={styles.masterLinkText}>Master admin →</Text>
       </TouchableOpacity>
 
+      {alertOverlay}
     </SafeAreaView>
   );
 }
@@ -145,14 +154,14 @@ const styles = StyleSheet.create({
   },
   appName: { fontSize: 18, fontWeight: '800', color: Colors.white, letterSpacing: 0.3 },
   settingsBtn: { padding: 4 },
-  settingsIcon: { fontSize: 22, color: '#555' },
+  settingsIcon: { fontSize: 20 },
   greeting: { fontSize: 12, color: Colors.textMuted, marginBottom: 2 },
-  heading: { fontSize: 22, fontWeight: '800', color: Colors.white },
+  heading: { ...Typography.heading, color: Colors.white },
   accent: { color: Colors.accent },
 
   // Body
   body: { flex: 1, padding: 24 },
-  sectionLabel: { fontSize: 10, fontWeight: '700', color: Colors.accent, letterSpacing: 1, marginBottom: 16 },
+  sectionLabel: { ...Typography.inputLabel, color: Colors.accent, marginBottom: 16 },
 
   // Cards
   cardPrimary: {
@@ -194,45 +203,28 @@ const styles = StyleSheet.create({
     borderTopWidth: 0.5,
     borderTopColor: '#1A1A1A',
   },
-  masterLinkText: { fontSize: 15, color: '#666', fontWeight: '600' },
+  masterLinkText: { ...Typography.buttonText, color: '#666' },
 
   // Settings modal
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'flex-start',
-    alignItems: 'flex-end',
-    paddingTop: 80,
-    paddingRight: 16,
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   settingsSheet: {
-    backgroundColor: Colors.card,
-    borderRadius: 14,
+    backgroundColor: '#1C1C1C',
+    borderRadius: 12,
     borderWidth: 0.5,
-    borderColor: Colors.cardBorder,
-    minWidth: 220,
+    borderColor: '#333',
     overflow: 'hidden',
-  },
-  settingsTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#555',
-    letterSpacing: 0.8,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 8,
   },
   settingsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     gap: 12,
-    borderTopWidth: 0.5,
-    borderTopColor: '#2a2a2a',
   },
-  settingsRowIcon: { fontSize: 18 },
-  settingsRowBody: { flex: 1 },
+  settingsRowBody: {},
   settingsRowLabel: { fontSize: 14, fontWeight: '600', color: Colors.white },
   settingsRowSub: { fontSize: 11, color: '#555', marginTop: 1 },
 });

@@ -1,22 +1,37 @@
 import {
   View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
-  Modal, Alert, ActivityIndicator, Dimensions, TextInput,
-  Platform, BackHandler,
+  Modal, ActivityIndicator, Dimensions, TextInput,
+  Platform, BackHandler, AppState, RefreshControl,
 } from 'react-native';
+import MediaStore from 'media-store';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as MediaLibrary from 'expo-media-library';
-import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import * as SecureStore from 'expo-secure-store';
+import RNFetchBlob from 'react-native-blob-util';
+import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import BackgroundUpload from 'background-upload';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
-  getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos, downloadZipRaw, downloadPhotoRaw,
+  getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
+  getPhotoDownloadUrl, prepareZip, changeEventAdminPassword,
 } from '../lib/api';
-import { getUserProfile } from '../lib/storage';
+import {
+  getUserProfile, getEventUserId, getDeviceId,
+  saveUploadNotification, getUploadNotifications, markNotificationsRead,
+  deleteUploadNotification, mergeUploadNotification,
+  saveLastEvent, clearLastEvent,
+  type UploadNotification,
+} from '../lib/storage';
+import { setupNotifications, showUploadCompleteNotification, showDownloadCompleteNotification } from '../lib/notifications';
 import { Colors } from '../constants/colors';
+import { Typography } from '../constants/typography';
+import { useAlert, alertStyles } from '../lib/useAlert';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const GAP = 2;
@@ -49,6 +64,32 @@ type ListItem =
   | { type: 'section_header'; section: 'main' | 'other'; key: string }
   | { type: 'photo_row'; photos: Photo[]; section: 'main' | 'other'; startIndex: number; key: string }
   | { type: 'empty'; key: string };
+
+type UploadFileResult = {
+  status: 'success' | 'duplicate' | 'upgraded' | 'failed' | 'cancelled';
+  section: 'main' | 'other' | null;
+  existingPhotoId?: string;
+  newPhotoId?: string;
+  uri: string;
+  filename: string;
+};
+
+function summarizeUploadResults(results: UploadFileResult[]): string {
+  const mainSuccess = results.filter(r => r.status === 'success' && r.section === 'main').length;
+  const otherSuccess = results.filter(r => r.status === 'success' && r.section === 'other').length;
+  const upgraded = results.filter(r => r.status === 'upgraded').length;
+  const duplicates = results.filter(r => r.status === 'duplicate').length;
+  const failed = results.filter(r => r.status === 'failed').length;
+  const cancelled = results.filter(r => r.status === 'cancelled').length;
+  const parts: string[] = [];
+  if (mainSuccess > 0) parts.push(`${mainSuccess} added to Photo Gallery`);
+  if (otherSuccess > 0) parts.push(`${otherSuccess} added to Other Photos Gallery`);
+  if (upgraded > 0) parts.push(`${upgraded} better quality photo${upgraded > 1 ? 's' : ''} uploaded`);
+  if (duplicates > 0) parts.push(`${duplicates} duplicate${duplicates > 1 ? 's' : ''} skipped`);
+  if (failed > 0) parts.push(`${failed} failed`);
+  if (cancelled > 0) parts.push(`${cancelled} cancelled`);
+  return parts.join(' · ') || 'Nothing uploaded';
+}
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-IN', {
@@ -168,6 +209,7 @@ function SectionHeader({ section, items, selectMode, selected, onGroupToggle }: 
   );
 }
 
+
 function getMimeType(uri: string): string {
   const ext = uri.split('.').pop()?.toLowerCase() ?? 'jpg';
   const map: Record<string, string> = {
@@ -175,6 +217,173 @@ function getMimeType(uri: string): string {
     heic: 'image/heic', heif: 'image/heif', webp: 'image/webp',
   };
   return map[ext] ?? 'image/jpeg';
+}
+
+// Module-level state shared with the background upload task
+let _bgSlug = '';
+let _bgDate: string = new Date().toISOString();
+let _bgUserMobile: string | null = null;
+let _bgUserName: string | null = null;
+let _bgEventUserId: string | null = null;
+let _bgProgressCb: ((current: number, total: number) => void) | null = null;
+let _bgCompleteCb: ((results: UploadFileResult[], preSkipped: number) => void) | null = null;
+let _bgCancelled = false;
+
+async function backgroundUploadTask(): Promise<void> {
+  const slug = _bgSlug;
+  const userMobile = _bgUserMobile;
+  const userName = _bgUserName;
+  const eventUserId = _bgEventUserId;
+
+  // Pre-check: collect already-uploaded filenames so exact matches are skipped
+  const existingFilenames = new Set<string>();
+  try {
+    const existingRes = await getEventPhotos(slug);
+    if (!existingRes.error) {
+      const allPhotos = [...(existingRes.photos ?? []), ...(existingRes.otherPhotos ?? [])];
+      for (const p of allPhotos) {
+        if (p.original_filename) existingFilenames.add(p.original_filename);
+      }
+    }
+  } catch {}
+
+  // Find the Camera album so only camera photos are uploaded
+  let cameraAlbum: MediaLibrary.Album | null = null;
+  try {
+    const albums = await MediaLibrary.getAlbumsAsync();
+    cameraAlbum = albums.find(a => a.title === 'Camera') ?? null;
+  } catch {}
+
+  // Scan Camera album for photos taken on the selected date
+  const selectedDate = new Date(_bgDate);
+  const startOfDay = new Date(selectedDate);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(selectedDate);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  let allAssets: MediaLibrary.Asset[] = [];
+  try {
+    let cursor: string | undefined;
+    while (true) {
+      const page = await MediaLibrary.getAssetsAsync({
+        mediaType: MediaLibrary.MediaType.photo,
+        createdAfter: startOfDay.getTime(),
+        createdBefore: endOfDay.getTime(),
+        first: 100,
+        after: cursor,
+        sortBy: MediaLibrary.SortBy.creationTime,
+        ...(cameraAlbum ? { album: cameraAlbum } : {}),
+      });
+      allAssets = [...allAssets, ...page.assets];
+      if (!page.hasNextPage) break;
+      cursor = page.endCursor;
+    }
+  } catch {}
+
+  // Filter out exact filename matches (already uploaded — skip without touching duplicate detection)
+  const preSkipped = allAssets.filter(asset => existingFilenames.has(asset.filename)).length;
+  const toUpload = allAssets.filter(asset => !existingFilenames.has(asset.filename));
+
+  if (toUpload.length === 0) {
+    _bgCompleteCb?.([], preSkipped);
+    return;
+  }
+
+  // Pre-fetch all localURIs and presigned URLs in parallel before uploads start
+  // Keep showing "Scanning gallery…" (total=0) during this phase
+  const localUris = await Promise.all(toUpload.map(async (asset) => {
+    try {
+      const info = await MediaLibrary.getAssetInfoAsync(asset.id);
+      return info?.localUri ?? asset.uri;
+    } catch { return asset.uri; }
+  }));
+
+  if (_bgCancelled) {
+    _bgCompleteCb?.(toUpload.map((a, i) => ({ status: 'cancelled' as const, section: null, uri: localUris[i], filename: a.filename })), preSkipped);
+    return;
+  }
+
+  const presignedUrls = await Promise.all(toUpload.map(async (asset, i) => {
+    try { return await getUploadUrl(slug, asset.filename, getMimeType(localUris[i])); }
+    catch { return { error: true as const }; }
+  }));
+
+  if (_bgCancelled) {
+    _bgCompleteCb?.(toUpload.map((a, i) => ({ status: 'cancelled' as const, section: null, uri: localUris[i], filename: a.filename })), preSkipped);
+    return;
+  }
+
+  // Pre-fetch done — now flip the card to "0 of N uploaded" and begin uploads
+  _bgProgressCb?.(0, toUpload.length);
+  try {
+    await BackgroundUpload.updateService('Uploading photos', `0 of ${toUpload.length} uploaded`, 0, toUpload.length);
+  } catch {}
+
+  const results: UploadFileResult[] = new Array(toUpload.length);
+  let completed = 0;
+  const CONCURRENCY = 4;
+
+  async function uploadOne(asset: MediaLibrary.Asset, index: number): Promise<void> {
+    const filename = asset.filename;
+    const uploadUri = localUris[index];
+    const contentType = getMimeType(uploadUri);
+    const urlResult = presignedUrls[index];
+    let result: UploadFileResult;
+    try {
+      if (urlResult.error) {
+        result = { status: 'failed', section: null, uri: asset.uri, filename };
+      } else {
+        const { uploadUrl, stagingKey } = urlResult;
+        const upRes = await RNFetchBlob.fetch('PUT', uploadUrl,
+          { 'Content-Type': contentType },
+          RNFetchBlob.wrap(uploadUri),
+        );
+        const uploadOk = upRes.respInfo.status >= 200 && upRes.respInfo.status < 300;
+        if (!uploadOk) {
+          result = { status: 'failed', section: null, uri: asset.uri, filename };
+        } else {
+          const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined, eventUserId ?? undefined);
+          if (proc.error) {
+            result = { status: 'failed', section: null, uri: asset.uri, filename };
+          } else if (proc.duplicate) {
+            result = { status: 'duplicate', section: proc.inMainTimeline ? 'main' : 'other', existingPhotoId: proc.existingPhotoId, uri: asset.uri, filename };
+          } else if (proc.upgraded) {
+            result = { status: 'upgraded', section: proc.inMainTimeline ? 'main' : 'other', existingPhotoId: proc.existingPhotoId, newPhotoId: proc.photo?.id, uri: asset.uri, filename };
+          } else {
+            result = { status: 'success', section: proc.inMainTimeline ? 'main' : 'other', newPhotoId: proc.photo?.id, uri: asset.uri, filename };
+          }
+        }
+      }
+    } catch {
+      result = { status: 'failed', section: null, uri: asset.uri, filename };
+    }
+    results[index] = result;
+    completed += 1;
+    _bgProgressCb?.(completed, toUpload.length);
+    try {
+      await BackgroundUpload.updateService('Uploading photos', `${completed} of ${toUpload.length} uploaded`, completed, toUpload.length);
+    } catch {}
+  }
+
+  // Worker pool: always keep CONCURRENCY uploads in flight — no batch stall
+  let nextIndex = 0;
+  async function worker() {
+    while (true) {
+      if (_bgCancelled) break;
+      const i = nextIndex++;
+      if (i >= toUpload.length) break;
+      await uploadOne(toUpload[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+
+  if (_bgCancelled) {
+    for (let j = 0; j < toUpload.length; j++) {
+      if (!results[j]) results[j] = { status: 'cancelled', section: null, uri: toUpload[j].uri, filename: toUpload[j].filename };
+    }
+  }
+
+  _bgCompleteCb?.(results, preSkipped);
 }
 
 export default function EventScreen() {
@@ -193,6 +402,12 @@ export default function EventScreen() {
   const [loading, setLoading] = useState(true);
   const [userMobile, setUserMobile] = useState<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
+  const [eventUserId, setEventUserId] = useState<string | null>(null);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [newlyUploadedIds, setNewlyUploadedIds] = useState<Set<string>>(new Set());
+  const [uploadSummary, setUploadSummary] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [deletingPhoto, setDeletingPhoto] = useState(false);
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [skippedViewerVisible, setSkippedViewerVisible] = useState(false);
   const [skippedViewerIndex, setSkippedViewerIndex] = useState(0);
@@ -219,10 +434,68 @@ export default function EventScreen() {
   // Upload
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, duplicates: 0 });
+  const [uploadCancelRequested, setUploadCancelRequested] = useState(false);
   const uploadCancelledRef = useRef(false);
   const downloadCancelledRef = useRef(false);
+  const bgUploadCancelledRef = useRef(false);
+  const retryNotifIdRef = useRef<string | null>(null);
+
+  // Background upload by date
+  const [bgUploading, setBgUploading] = useState(false);
+  const [bgUploadProgress, setBgUploadProgress] = useState({ current: 0, total: 0 });
+  const [bgCancelRequested, setBgCancelRequested] = useState(false);
+  const [showDatePickerModal, setShowDatePickerModal] = useState(false);
+  const [datePickerDate, setDatePickerDate] = useState(new Date());
+
+  // Admin settings
+  const [adminSettingsVisible, setAdminSettingsVisible] = useState(false);
+  const [adminDropPos, setAdminDropPos] = useState({ top: 0, right: 0 });
+  const adminGearRef = useRef<any>(null);
+  const [changePasswordVisible, setChangePasswordVisible] = useState(false);
+  const [cpNew, setCpNew] = useState('');
+  const [cpConfirm, setCpConfirm] = useState('');
+  const [cpShowNew, setCpShowNew] = useState(false);
+  const [cpShowConfirm, setCpShowConfirm] = useState(false);
+  const [cpError, setCpError] = useState('');
+  const [folderSetupVisible, setFolderSetupVisible] = useState(false);
+  const [folderNameDraft, setFolderNameDraft] = useState('MomentsInFrame');
+  const folderSetupResolveRef = useRef<((name: string | null) => void) | null>(null);
+  const [duplicateResults, setDuplicateResults] = useState<UploadFileResult[]>([]);
+  const [duplicateViewerVisible, setDuplicateViewerVisible] = useState(false);
+  const [duplicateViewerIndex, setDuplicateViewerIndex] = useState(0);
+  const [failedResults, setFailedResults] = useState<UploadFileResult[]>([]);
+  const [failedViewerVisible, setFailedViewerVisible] = useState(false);
+  const failedAssetsRef = useRef<ImagePicker.ImagePickerAsset[]>([]);
+  const { showAlert, alertOverlay } = useAlert();
+
+  // Notifications panel
+  const [notificationsVisible, setNotificationsVisible] = useState(false);
+  const [notifications, setNotifications] = useState<UploadNotification[]>([]);
+  const [hasUnread, setHasUnread] = useState(false);
+
+  async function submitChangePassword() {
+    setCpError('');
+    if (!cpNew.trim() || !cpConfirm.trim()) {
+      setCpError('Please fill in both fields.');
+      return;
+    }
+    if (cpNew.trim() !== cpConfirm.trim()) {
+      setCpError('Passwords do not match.');
+      return;
+    }
+    const result = await changeEventAdminPassword(slug, params.adminPassword, cpNew.trim());
+    if (result.error) {
+      setCpError(result.error);
+    } else {
+      setChangePasswordVisible(false);
+      setCpNew(''); setCpConfirm(''); setCpError('');
+      showAlert('Done', 'Password updated successfully.');
+    }
+  }
   const [downloadingBulk, setDownloadingBulk] = useState(false);
+  const [downloadMode, setDownloadMode] = useState<'jpg' | 'zip'>('jpg');
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
+  const [downloadingPhoto, setDownloadingPhoto] = useState(false);
   const prevSelectedSize = useRef(0);
 
   const lightboxPhotosRef = useRef<Photo[]>([]);
@@ -235,7 +508,14 @@ export default function EventScreen() {
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
 
+  async function refreshNotifications() {
+    const notifs = await getUploadNotifications(slug);
+    setNotifications(notifs);
+    setHasUnread(notifs.some(n => !n.read));
+  }
+
   useEffect(() => {
+    setupNotifications();
     loadPhotos();
     getUserProfile().then(p => {
       if (p) {
@@ -243,24 +523,62 @@ export default function EventScreen() {
         setUserName(`${p.firstName} ${p.lastName}`.trim());
       }
     });
+    getEventUserId().then(id => { if (id) setEventUserId(id); });
+    getDeviceId().then(id => { if (id) setDeviceId(id); });
+    refreshNotifications();
+    saveLastEvent({
+      slug: params.slug,
+      name: params.name ?? '',
+      expiresAt: params.expiresAt ?? '',
+      createdAt: params.createdAt ?? '',
+      isAdmin: params.isAdmin ?? 'false',
+      adminPassword: params.adminPassword ?? '',
+    });
+
+    const appStateSub = AppState.addEventListener('change', state => {
+      if (state === 'active') refreshNotifications();
+    });
+    return () => appStateSub.remove();
   }, []);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (uploading) {
+        showAlert(
+          'Cancel upload?',
+          'Photos uploaded so far will be saved.',
+          [
+            { text: 'Stop Upload', style: 'destructive', onPress: () => { uploadCancelledRef.current = true; setUploadCancelRequested(true); } },
+            { text: 'Keep Uploading', style: 'cancel' },
+          ]
+        );
+        return true;
+      }
+      if (bgUploading) {
+        showAlert(
+          'Cancel upload?',
+          'Photos uploaded so far will be saved.',
+          [
+            { text: 'Stop Upload', style: 'destructive', onPress: () => { bgUploadCancelledRef.current = true; _bgCancelled = true; setBgCancelRequested(true); } },
+            { text: 'Keep Uploading', style: 'cancel' },
+          ]
+        );
+        return true;
+      }
       if (selectMode) {
         exitSelectMode();
         return true;
       }
-      router.replace('/(auth)/home');
+      BackHandler.exitApp();
       return true;
     });
     return () => sub.remove();
-  }, [selectMode]);
+  }, [selectMode, uploading, bgUploading]);
 
   useEffect(() => {
     const JPG_LIMIT = 25;
     if (prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
-      Alert.alert(
+      showAlert(
         'Downloading as ZIP',
         `You've selected more than ${JPG_LIMIT} photos. When you tap Download, all selected photos will be bundled into a ZIP file — not downloaded as individual JPGs.\n\nTo download as individual JPGs instead, select ${JPG_LIMIT} or fewer photos.`,
         [{ text: 'Got it' }]
@@ -271,17 +589,19 @@ export default function EventScreen() {
 
   async function loadPhotos() {
     setLoading(true);
+    setUploadSummary(null);
+    setNewlyUploadedIds(new Set());
     try {
       const data = await getEventPhotos(slug);
-      if (data.error) { Alert.alert('Error', data.error); return; }
+      if (data.error) { showAlert('Error', data.error); return; }
       const main: Photo[] = data.photos ?? [];
       const other: Photo[] = data.otherPhotos ?? [];
       setPhotos(main);
       setOtherPhotos(other);
-      await loadAllUrls([...main, ...other]);
+      setLoading(false);
+      loadAllUrls([...main, ...other]);
     } catch {
-      Alert.alert('Error', 'Could not load photos. Check your connection.');
-    } finally {
+      showAlert('Error', 'Could not load photos. Check your connection.');
       setLoading(false);
     }
   }
@@ -443,242 +763,598 @@ export default function EventScreen() {
     setStickySection(prev => prev === next ? prev : next);
   }, [selectMode]);
 
-  async function handleUpload(source: 'camera' | 'gallery') {
-    const permResult = source === 'camera'
-      ? await ImagePicker.requestCameraPermissionsAsync()
-      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+  async function handleUpload(source: 'camera' | 'gallery', retryAssets?: ImagePicker.ImagePickerAsset[]) {
+    let assets: ImagePicker.ImagePickerAsset[];
 
-    if (!permResult.granted) {
-      Alert.alert('Permission needed', `Allow ${source === 'camera' ? 'camera' : 'photo library'} access in Settings.`);
+    if (retryAssets) {
+      assets = retryAssets;
+    } else {
+      const permResult = source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permResult.granted) {
+        showAlert('Permission needed', `Allow ${source === 'camera' ? 'camera' : 'photo library'} access in Settings.`);
+        return;
+      }
+
+      const pickResult = source === 'camera'
+        ? await ImagePicker.launchCameraAsync({ quality: 1 })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsMultipleSelection: true,
+            selectionLimit: 40,
+            quality: 1,
+          });
+
+      if (pickResult.canceled || !pickResult.assets?.length) return;
+      assets = pickResult.assets;
+      if (source === 'gallery' && assets.length === 40) {
+        showAlert('40-photo limit reached', 'Upload these first, then upload more if needed.');
+      }
+
+      const shouldUpload = await new Promise<boolean>(resolve =>
+        showAlert(
+          'Start upload?',
+          `Uploading ${assets.length} photo${assets.length !== 1 ? 's' : ''}. You can close the app while uploading.`,
+          [
+            { text: 'Start Upload', onPress: () => resolve(true) },
+            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          ]
+        )
+      );
+      if (!shouldUpload) return;
+    }
+
+    if (bgUploading) {
+      showAlert('Upload in progress', 'A background upload is already running. Please wait for it to complete.');
       return;
     }
 
-    const pickResult = source === 'camera'
-      ? await ImagePicker.launchCameraAsync({ quality: 1 })
-      : await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          allowsMultipleSelection: true,
-          selectionLimit: 40,
-          quality: 1,
-        });
+    bgUploadCancelledRef.current = false;
+    _bgCancelled = false;
+    setBgCancelRequested(false);
+    setBgUploading(true);
+    setBgUploadProgress({ current: 0, total: assets.length });
+    setNewlyUploadedIds(new Set());
+    setUploadSummary(null);
 
-    if (pickResult.canceled || !pickResult.assets?.length) return;
+    // Pre-fetch all localURIs in parallel
+    const localUris = await Promise.all(assets.map(async (asset) => {
+      if (asset.assetId) {
+        try {
+          const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
+          if (info?.localUri) return info.localUri;
+        } catch {}
+      }
+      return asset.uri;
+    }));
 
-    const assets = pickResult.assets;
-    uploadCancelledRef.current = false;
-    setUploading(true);
-    setUploadProgress({ current: 0, total: assets.length, duplicates: 0 });
-
-    let duplicates = 0;
-    let failed = 0;
-
-    for (let i = 0; i < assets.length; i++) {
-      if (uploadCancelledRef.current) break;
-      const asset = assets[i];
-      const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
-      const contentType = getMimeType(asset.uri);
-
-      try {
-        const urlResult = await getUploadUrl(slug, filename, contentType);
-        if (urlResult.error) { failed++; continue; }
-        const { uploadUrl, stagingKey } = urlResult;
-        const blob = await (await fetch(asset.uri)).blob();
-        const putRes = await fetch(uploadUrl, { method: 'PUT', body: blob, headers: { 'Content-Type': contentType } });
-        if (!putRes.ok) { failed++; continue; }
-        const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined);
-        if (proc.duplicate) duplicates++;
-        else if (proc.error) failed++;
-      } catch { failed++; }
-
-      setUploadProgress({ current: i + 1, total: assets.length, duplicates });
+    if (bgUploadCancelledRef.current) {
+      setBgUploading(false);
+      setBgUploadProgress({ current: 0, total: 0 });
+      setBgCancelRequested(false);
+      return;
     }
 
-    setUploading(false);
-    const uploaded = assets.length - duplicates - failed;
-    const parts = [];
-    if (uploaded > 0) parts.push(`${uploaded} uploaded`);
-    if (duplicates > 0) parts.push(`${duplicates} duplicate${duplicates > 1 ? 's' : ''} skipped`);
-    if (failed > 0) parts.push(`${failed} failed`);
-    if (parts.length) Alert.alert('Upload complete', parts.join(' · '));
+    // Pre-fetch all presigned URLs in parallel
+    const presignedUrls = await Promise.all(assets.map(async (asset, i) => {
+      const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
+      try { return await getUploadUrl(slug, filename, getMimeType(localUris[i])); }
+      catch { return { error: true as const }; }
+    }));
+
+    if (bgUploadCancelledRef.current) {
+      setBgUploading(false);
+      setBgUploadProgress({ current: 0, total: 0 });
+      setBgCancelRequested(false);
+      return;
+    }
+
+    const CONCURRENCY = 4;
+    const results: (UploadFileResult | null)[] = new Array(assets.length).fill(null);
+    let completedCount = 0;
+
+    async function uploadOne(asset: ImagePicker.ImagePickerAsset, index: number) {
+      const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
+      const uploadUri = localUris[index];
+      const contentType = getMimeType(uploadUri);
+      const urlResult = presignedUrls[index];
+      let result: UploadFileResult;
+
+      if (bgUploadCancelledRef.current) {
+        result = { status: 'cancelled', section: null, uri: asset.uri, filename };
+      } else {
+        try {
+          if (urlResult.error) {
+            result = { status: 'failed', section: null, uri: asset.uri, filename };
+          } else {
+            const { uploadUrl, stagingKey } = urlResult;
+            const upRes = await RNFetchBlob.fetch('PUT', uploadUrl,
+              { 'Content-Type': contentType },
+              RNFetchBlob.wrap(uploadUri),
+            );
+            const uploadOk = upRes.respInfo.status >= 200 && upRes.respInfo.status < 300;
+            if (!uploadOk) {
+              result = { status: 'failed', section: null, uri: asset.uri, filename };
+            } else {
+              const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined, eventUserId ?? undefined);
+              if (proc.error) {
+                result = { status: 'failed', section: null, uri: asset.uri, filename };
+              } else if (proc.duplicate) {
+                result = { status: 'duplicate', section: proc.inMainTimeline ? 'main' : 'other', existingPhotoId: proc.existingPhotoId, uri: asset.uri, filename };
+              } else if (proc.upgraded) {
+                result = { status: 'upgraded', section: proc.inMainTimeline ? 'main' : 'other', existingPhotoId: proc.existingPhotoId, newPhotoId: proc.photo?.id, uri: asset.uri, filename };
+              } else {
+                result = { status: 'success', section: proc.inMainTimeline ? 'main' : 'other', newPhotoId: proc.photo?.id, uri: asset.uri, filename };
+              }
+            }
+          }
+        } catch {
+          result = { status: 'failed', section: null, uri: asset.uri, filename };
+        }
+      }
+
+      results[index] = result;
+      completedCount++;
+      setBgUploadProgress({ current: completedCount, total: assets.length });
+    }
+
+    // Worker pool: always keep CONCURRENCY uploads in flight — no batch stall
+    let nextIndex = 0;
+    async function worker() {
+      while (true) {
+        if (bgUploadCancelledRef.current) break;
+        const i = nextIndex++;
+        if (i >= assets.length) break;
+        await uploadOne(assets[i], i);
+      }
+    }
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+
+    const finalResults = results.filter(Boolean) as UploadFileResult[];
+
+    setBgUploading(false);
+    setBgUploadProgress({ current: 0, total: 0 });
+    setBgCancelRequested(false);
     await loadPhotos();
+    const newIds = finalResults
+      .filter(r => r.status === 'success' || r.status === 'upgraded')
+      .map(r => r.newPhotoId)
+      .filter(Boolean) as string[];
+    setNewlyUploadedIds(new Set(newIds));
+    setUploadSummary(summarizeUploadResults(finalResults));
+
+    const summary = summarizeUploadResults(finalResults);
+    const dupsAndUpgrades = finalResults.filter(r => r.status === 'duplicate' || r.status === 'upgraded');
+    const failed = finalResults.filter(r => r.status === 'failed');
+    const failedAssets = assets.filter((_, i) => results[i]?.status === 'failed');
+
+    const alertButtons: { text: string; onPress?: () => void }[] = [];
+    if (dupsAndUpgrades.length > 0) {
+      alertButtons.push({
+        text: 'View duplicates',
+        onPress: () => { setDuplicateResults(dupsAndUpgrades); setDuplicateViewerIndex(0); setDuplicateViewerVisible(true); },
+      });
+    }
+    if (failed.length > 0) {
+      failedAssetsRef.current = failedAssets;
+      alertButtons.push({
+        text: 'View failed',
+        onPress: () => { setFailedResults(failed); setFailedViewerVisible(true); },
+      });
+    }
+    alertButtons.push({ text: 'OK' });
+    const notifPayload = {
+      photosAdded: finalResults.filter(r => r.status === 'success').length,
+      duplicatesSkipped: finalResults.filter(r => r.status === 'duplicate').length,
+      upgradesFound: finalResults.filter(r => r.status === 'upgraded').length,
+      failedCount: failed.length,
+      duplicateData: dupsAndUpgrades,
+      failedData: failed,
+    };
+    if (retryNotifIdRef.current) {
+      await mergeUploadNotification(slug, retryNotifIdRef.current, notifPayload);
+      retryNotifIdRef.current = null;
+    } else {
+      await saveUploadNotification(slug, { timestamp: new Date().toISOString(), source: 'individual', ...notifPayload });
+    }
+    await refreshNotifications();
+    if (AppState.currentState !== 'active') {
+      await showUploadCompleteNotification(summary);
+    } else {
+      showAlert('Upload complete', summary, alertButtons);
+    }
+  }
+
+  async function startDateUpload(date: Date) {
+    const perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
+    if (!perm.granted) {
+      showAlert('Permission required', 'Please allow access to your photos and videos to use this feature.');
+      return;
+    }
+
+    _bgCancelled = false;
+    bgUploadCancelledRef.current = false;
+    setBgCancelRequested(false);
+    _bgSlug = slug;
+    _bgDate = date.toISOString();
+    _bgUserMobile = userMobile;
+    _bgUserName = userName;
+    _bgEventUserId = eventUserId;
+
+    _bgProgressCb = (current: number, total: number) => {
+      if (bgUploadCancelledRef.current) _bgCancelled = true;
+      setBgUploadProgress({ current, total });
+    };
+
+    _bgCompleteCb = async (results: UploadFileResult[], preSkipped: number) => {
+      _bgCompleteCb = null;
+      try { await BackgroundUpload.stopService(); } catch {}
+      setBgUploading(false);
+      setBgUploadProgress({ current: 0, total: 0 });
+      setBgCancelRequested(false);
+      await loadPhotos();
+      const newIds = results
+        .filter(r => r.status === 'success' || r.status === 'upgraded')
+        .map(r => r.newPhotoId)
+        .filter(Boolean) as string[];
+      setNewlyUploadedIds(new Set(newIds));
+      let summary: string;
+      if (results.length === 0 && preSkipped > 0) {
+        summary = `All ${preSkipped} photo${preSkipped > 1 ? 's' : ''} from this date were already uploaded. No new photos found.`;
+      } else if (results.length === 0 && preSkipped === 0) {
+        summary = 'No photos found for this date';
+      } else {
+        const base = summarizeUploadResults(results);
+        summary = preSkipped > 0 ? `${base} · ${preSkipped} already uploaded` : base;
+      }
+      setUploadSummary(summary);
+      const dupsAndUpgrades = results.filter(r => r.status === 'duplicate' || r.status === 'upgraded');
+      const failedResults = results.filter(r => r.status === 'failed');
+      const byDateNotifPayload = {
+        photosAdded: results.filter(r => r.status === 'success').length,
+        duplicatesSkipped: results.filter(r => r.status === 'duplicate').length,
+        upgradesFound: results.filter(r => r.status === 'upgraded').length,
+        failedCount: failedResults.length,
+        duplicateData: dupsAndUpgrades,
+        failedData: failedResults,
+      };
+      if (retryNotifIdRef.current) {
+        await mergeUploadNotification(slug, retryNotifIdRef.current, byDateNotifPayload);
+        retryNotifIdRef.current = null;
+      } else {
+        await saveUploadNotification(slug, { timestamp: new Date().toISOString(), source: 'by_date', uploadDate: _bgDate, preSkipped, ...byDateNotifPayload });
+      }
+      await refreshNotifications();
+      if (AppState.currentState !== 'active') {
+        await showUploadCompleteNotification(summary);
+      } else if (dupsAndUpgrades.length > 0) {
+        showAlert('Upload complete', summary, [
+          { text: 'View duplicates', onPress: () => { setDuplicateResults(dupsAndUpgrades); setDuplicateViewerIndex(0); setDuplicateViewerVisible(true); } },
+          { text: 'OK' },
+        ]);
+      }
+    };
+
+    setBgUploading(true);
+    setBgUploadProgress({ current: 0, total: 0 });
+
+    const dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    try {
+      await BackgroundUpload.startService('Uploading photos', `Scanning photos from ${dateStr}…`);
+      backgroundUploadTask();
+    } catch {
+      setBgUploading(false);
+      showAlert('Upload failed', 'Could not start background upload. Please try again.');
+    }
+  }
+
+  function handleDateUpload() {
+    if (bgUploading) {
+      showAlert('Upload in progress', 'A background upload is already running. Please wait for it to complete.');
+      return;
+    }
+    showAlert(
+      'Upload by date',
+      'This will upload all photos taken on the selected date from your Camera folder. Photos already uploaded by this feature will be skipped automatically.',
+      [
+        {
+          text: 'Continue', onPress: () => {
+            if (Platform.OS === 'android') {
+              DateTimePickerAndroid.open({
+                value: new Date(),
+                mode: 'date',
+                maximumDate: new Date(),
+                onChange: (_event: any, date?: Date) => {
+                  if (date) {
+                    const dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+                    showAlert(
+                      'Upload photos from this date',
+                      `Upload all photos from your Camera folder taken on ${dateStr}?`,
+                      [
+                        { text: 'Upload', onPress: () => startDateUpload(date) },
+                        { text: 'Cancel', style: 'cancel' },
+                      ]
+                    );
+                  }
+                },
+              });
+            } else {
+              setDatePickerDate(new Date());
+              setShowDatePickerModal(true);
+            }
+          }
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
   }
 
   function showUploadOptions() {
     if (Platform.OS === 'ios') {
       const { ActionSheetIOS } = require('react-native');
       ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Cancel', 'Take a photo', 'Choose from library'], cancelButtonIndex: 0 },
-        (i: number) => { if (i === 1) handleUpload('camera'); if (i === 2) handleUpload('gallery'); }
+        { options: ['Cancel', 'Upload by date', 'Choose from library'], cancelButtonIndex: 0 },
+        (i: number) => { if (i === 1) handleDateUpload(); if (i === 2) handleUpload('gallery'); }
       );
     } else {
-      Alert.alert('Upload photos', 'Choose a source', [
-        { text: 'Take a photo', onPress: () => handleUpload('camera') },
+      showAlert('Upload photos', 'Choose a source', [
         { text: 'Choose from library', onPress: () => handleUpload('gallery') },
+        { text: 'Upload by date', onPress: () => handleDateUpload() },
         { text: 'Cancel', style: 'cancel' },
       ]);
     }
   }
 
   async function handleDeletePhoto(id: string) {
-    Alert.alert('Delete photo', 'This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
+    showAlert('Delete photo', 'This cannot be undone.', [
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
+          setDeletingPhoto(true);
           const result = isAdmin
             ? await deletePhotos(slug, [id], params.adminPassword)
-            : await deletePhotos(slug, [id], '', userMobile ?? undefined);
-          if (result.error) { Alert.alert('Error', result.error); return; }
-          setLightboxVisible(false);
-          await loadPhotos();
+            : await deletePhotos(slug, [id], '', userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
+          setDeletingPhoto(false);
+          if (result.error) { showAlert('Error', result.error); return; }
+          const currentIdx = lightboxIndex;
+          if (lightboxSection === 'main') {
+            setPhotos(prev => {
+              const next = prev.filter(p => p.id !== id);
+              if (next.length === 0 || currentIdx >= next.length) setLightboxVisible(false);
+              else setLightboxIndex(currentIdx);
+              return next;
+            });
+          } else {
+            setOtherPhotos(prev => {
+              const next = prev.filter(p => p.id !== id);
+              if (next.length === 0 || currentIdx >= next.length) setLightboxVisible(false);
+              else setLightboxIndex(currentIdx);
+              return next;
+            });
+          }
         },
       },
+      { text: 'Cancel', style: 'cancel' },
     ]);
   }
 
   async function handleBulkDelete() {
     const ids = Array.from(selected);
-    Alert.alert('Delete photos', `Delete ${ids.length} photo${ids.length > 1 ? 's' : ''}? This cannot be undone.`, [
-      { text: 'Cancel', style: 'cancel' },
+    showAlert('Delete photos', `Delete ${ids.length} photo${ids.length > 1 ? 's' : ''}? This cannot be undone.`, [
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
-          const result = await deletePhotos(slug, ids, params.adminPassword);
-          if (result.error) { Alert.alert('Error', result.error); return; }
+          const result = isAdmin
+            ? await deletePhotos(slug, ids, params.adminPassword)
+            : await deletePhotos(slug, ids, '', userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
+          if (result.error) { showAlert('Error', result.error); return; }
           exitSelectMode();
           await loadPhotos();
         },
       },
+      { text: 'Cancel', style: 'cancel' },
     ]);
   }
 
   const JPG_LIMIT = 25;
 
-  async function saveToDownloads(filename: string, cacheUri: string, mimeType: string) {
+  async function getDownloadFolder(): Promise<string | null> {
+    if (Platform.OS !== 'android') return null;
+    const storeKey = `downloads_folder_name_${slug}`;
+    let folderName = await SecureStore.getItemAsync(storeKey);
+    if (!folderName) {
+      folderName = await new Promise<string | null>(resolve => {
+        setFolderNameDraft(params.name);
+        folderSetupResolveRef.current = resolve;
+        setFolderSetupVisible(true);
+      });
+      if (!folderName) return null;
+      await SecureStore.setItemAsync(storeKey, folderName);
+    }
+    const folderPath = `${RNFetchBlob.fs.dirs.DownloadDir}/${folderName}`;
+    const exists = await RNFetchBlob.fs.exists(folderPath);
+    if (!exists) await RNFetchBlob.fs.mkdir(folderPath);
+    return folderPath;
+  }
+
+  async function ensureStorageMode(): Promise<'downloads' | 'gallery' | null> {
+    return 'downloads';
+  }
+
+  async function saveFileToDownloads(filename: string, url: string, mimeType: string, folderPath: string | null, mode: 'downloads' | 'gallery', notify = false, dateTakenMs?: number): Promise<void> {
     if (Platform.OS === 'android') {
-      const destPath = `/storage/emulated/0/Download/${filename}`;
-      await FileSystem.copyAsync({ from: cacheUri, to: destPath });
+      const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
+      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+      const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+      const localPath = dlResult.uri.replace('file://', '');
+      await MediaStore.saveToDownloads(localPath, filename, folderName, mimeType, dateTakenMs);
+      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
     } else {
+      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+      const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
       await Sharing.shareAsync(cacheUri, { mimeType, dialogTitle: 'Save file' });
+      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+    }
+  }
+
+  async function saveZipToDownloads(filename: string, url: string): Promise<void> {
+    if (Platform.OS === 'android') {
+      const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
+      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+      const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+      const localPath = dlResult.uri.replace('file://', '');
+      await MediaStore.saveToDownloads(localPath, filename, folderName, 'application/zip');
+      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+    } else {
+      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+      const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+      await Sharing.shareAsync(cacheUri, { mimeType: 'application/zip', dialogTitle: 'Save ZIP' });
+      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
     }
   }
 
   async function handleDownloadPhoto(id: string) {
     const photo = [...photos, ...otherPhotos].find(p => p.id === id);
-    Alert.alert('Download photo', 'Save this photo to your Downloads folder?', [
-      { text: 'Cancel', style: 'cancel' },
+    const mode = await ensureStorageMode();
+    if (!mode) return;
+    const folderPath = await getDownloadFolder();
+    if (!folderPath && mode === 'downloads') return;
+
+    showAlert('Download photo', 'Save this photo to your Downloads folder?', [
       {
         text: 'Download', onPress: async () => {
+          setDownloadingPhoto(true);
           try {
             const rawName = photo?.original_filename ?? `photo_${id}.jpg`;
             const ext = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
             const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
-            const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-            const res = await downloadPhotoRaw(id, isAdmin ? params.adminPassword : undefined);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const buffer = await res.arrayBuffer();
-            const uint8 = new Uint8Array(buffer);
-            let binary = '';
-            for (let j = 0; j < uint8.length; j++) binary += String.fromCharCode(uint8[j]);
-            await FileSystem.writeAsStringAsync(cacheUri, btoa(binary), { encoding: FileSystem.EncodingType.Base64 });
-            await saveToDownloads(filename, cacheUri, 'image/jpeg');
-            Alert.alert('Done', 'Photo saved to Downloads.');
-          } catch {
-            Alert.alert('Error', 'Could not download photo.');
+            const urlRes = await getPhotoDownloadUrl(id, isAdmin ? params.adminPassword : undefined);
+            if (urlRes.error) throw new Error(urlRes.error);
+            const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
+            await saveFileToDownloads(filename, urlRes.url, 'image/jpeg', folderPath, mode, true, dateTakenMs);
+            const folderName = folderPath?.split('/').pop() ?? params.name;
+            showAlert('Done', `Photo saved to Downloads/${folderName}.`);
+          } catch (e: any) {
+            showAlert('Error', e?.message ?? 'Could not download photo.');
+          } finally {
+            setDownloadingPhoto(false);
           }
         },
       },
+      { text: 'Cancel', style: 'cancel' },
     ]);
   }
 
-  async function saveAsJpgs(ids: string[], urlMap: Record<string, { url: string | null; originalFilename: string | null }>) {
+  async function saveAsJpgs(ids: string[], folderPath: string | null, mode: 'downloads' | 'gallery') {
+    const CHUNK = 10;
+    const allPhotos = [...photos, ...otherPhotos];
     downloadCancelledRef.current = false;
+    setDownloadMode('jpg');
     setDownloadingBulk(true);
     setDownloadProgress({ current: 0, total: ids.length });
     let saved = 0;
-    let failed = 0;
-    for (let i = 0; i < ids.length; i++) {
+    const failedIds: string[] = [];
+
+    for (let chunkStart = 0; chunkStart < ids.length; chunkStart += CHUNK) {
       if (downloadCancelledRef.current) break;
-      const id = ids[i];
-      const u = urlMap[id];
-      if (!u?.url) { failed++; setDownloadProgress({ current: i + 1, total: ids.length }); continue; }
+      const chunkIds = ids.slice(chunkStart, chunkStart + CHUNK);
+
+      // Fetch fresh signed URLs for this chunk right before downloading
+      let urlMap: Record<string, { url?: string; displayUrl?: string; originalFilename?: string | null }> = {};
       try {
-        const rawName = u.originalFilename ?? `photo_${id}.jpg`;
-        const ext = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
-        const filename = buildDownloadFilename(id, u.takenAt ?? null, ext);
-        const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-        const dlResult = await FileSystem.downloadAsync(u.url, cacheUri);
-        if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-        await saveToDownloads(filename, cacheUri, 'image/jpeg');
-        saved++;
-        await new Promise(r => setTimeout(r, 200));
-      } catch { failed++; }
-      setDownloadProgress({ current: i + 1, total: ids.length });
+        const fetched = await getPhotoUrls(slug, chunkIds);
+        if (fetched.urls) urlMap = fetched.urls;
+      } catch { /* all in chunk will fail */ }
+
+      for (let j = 0; j < chunkIds.length; j++) {
+        if (downloadCancelledRef.current) break;
+        const id = chunkIds[j];
+        const globalIndex = chunkStart + j;
+        const u = urlMap[id];
+        const url = u?.url ?? u?.displayUrl ?? null;
+        if (!url) {
+          failedIds.push(id);
+          setDownloadProgress({ current: globalIndex + 1, total: ids.length });
+          continue;
+        }
+        try {
+          const rawName = u?.originalFilename ?? `photo_${id}.jpg`;
+          const ext = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
+          const photo = allPhotos.find(p => p.id === id);
+          const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
+          const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
+          await saveFileToDownloads(filename, url, 'image/jpeg', folderPath, mode, false, dateTakenMs);
+          saved++;
+        } catch { failedIds.push(id); }
+        setDownloadProgress({ current: globalIndex + 1, total: ids.length });
+      }
     }
+
     setDownloadingBulk(false);
     exitSelectMode();
     const parts: string[] = [];
-    if (saved > 0) parts.push(`${saved} saved to Downloads`);
-    if (failed > 0) parts.push(`${failed} failed`);
-    if (parts.length) Alert.alert('Download complete', parts.join(' · '));
+    const folderName = folderPath?.split('/').pop() ?? params.name;
+    if (saved > 0) parts.push(`${saved} JPG${saved !== 1 ? 's' : ''} saved to Downloads/${folderName}`);
+    if (failedIds.length > 0) parts.push(`${failedIds.length} failed`);
+    const alertButtons: AlertButton[] = [];
+    if (failedIds.length > 0) {
+      alertButtons.push({
+        text: `Retry ${failedIds.length} failed`,
+        onPress: async () => { await saveAsJpgs(failedIds, folderPath, mode); },
+      });
+    }
+    alertButtons.push({ text: 'OK' });
+    const completeMsg = parts.join(' · ');
+    if (parts.length) {
+      if (AppState.currentState !== 'active') {
+        await showDownloadCompleteNotification(completeMsg);
+      } else {
+        showAlert('Download complete', completeMsg, alertButtons);
+      }
+    }
   }
 
   async function downloadAsZip(ids: string[]) {
     const BATCH_SIZE = 50;
     const totalBatches = Math.ceil(ids.length / BATCH_SIZE);
     downloadCancelledRef.current = false;
+    setDownloadMode('zip');
     setDownloadingBulk(true);
     setDownloadProgress({ current: 0, total: totalBatches });
     let savedBatches = 0;
-    const allSkippedIds: string[] = [];
     try {
       for (let i = 0; i < totalBatches; i++) {
         if (downloadCancelledRef.current) break;
+        setDownloadProgress({ current: i + 1, total: totalBatches });
         const batchIds = ids.slice(i * BATCH_SIZE, (i + 1) * BATCH_SIZE);
         const filename = totalBatches > 1
           ? `${slug}-photos-part${i + 1}of${totalBatches}.zip`
           : `${slug}-photos.zip`;
-        const res = await downloadZipRaw(slug, batchIds);
-        if (!res.ok) {
-          const text = await res.text().catch(() => 'no body');
-          throw new Error(`HTTP ${res.status} — ${text.slice(0, 300)}`);
-        }
-        const buffer = await res.arrayBuffer();
-
-        // Parse trailer: [zip bytes][JSON utf8][4-byte LE uint32 = JSON length]
-        const view = new DataView(buffer);
-        const trailerLen = view.getUint32(buffer.byteLength - 4, true);
-        const jsonBytes = buffer.slice(buffer.byteLength - 4 - trailerLen, buffer.byteLength - 4);
-        try {
-          const trailer = JSON.parse(new TextDecoder().decode(jsonBytes)) as { skippedIds?: string[] };
-          if (trailer.skippedIds?.length) allSkippedIds.push(...trailer.skippedIds);
-        } catch { /* no trailer — older backend */ }
-        const zipBuffer = buffer.slice(0, buffer.byteLength - 4 - trailerLen);
-
-        const uint8 = new Uint8Array(zipBuffer);
-        let binary = '';
-        for (let j = 0; j < uint8.length; j++) binary += String.fromCharCode(uint8[j]);
-        const base64 = btoa(binary);
-        const cacheZipPath = `${FileSystem.cacheDirectory}${filename}`;
-        await FileSystem.writeAsStringAsync(cacheZipPath, base64, { encoding: FileSystem.EncodingType.Base64 });
-        await saveToDownloads(filename, cacheZipPath, 'application/zip');
+        const zipRes = await prepareZip(slug, batchIds);
+        if (zipRes.error) throw new Error(zipRes.error);
+        await saveZipToDownloads(filename, zipRes.zipUrl);
         savedBatches++;
-        setDownloadProgress({ current: savedBatches, total: totalBatches });
       }
       setDownloadingBulk(false);
       exitSelectMode();
+      const zipFolderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
       const msg = totalBatches > 1
-        ? `${savedBatches} of ${totalBatches} ZIP files saved to Downloads.`
-        : 'ZIP saved to Downloads.';
-      Alert.alert('Download complete', msg);
-      if (allSkippedIds.length > 0) {
-        setSkippedIds(allSkippedIds);
-        setSkippedViewerIndex(0);
-        setSkippedViewerVisible(true);
+        ? `${savedBatches} of ${totalBatches} ZIPs saved to Downloads/${zipFolderName}.`
+        : `ZIP saved to Downloads/${zipFolderName}.`;
+      if (AppState.currentState !== 'active') {
+        await showDownloadCompleteNotification(msg);
+      } else {
+        showAlert('Download complete', msg);
       }
     } catch (e: any) {
       setDownloadingBulk(false);
-      Alert.alert('Error', `ZIP failed: ${e?.message ?? 'unknown error'}`);
+      showAlert('Error', `ZIP failed: ${e?.message ?? 'unknown error'}`);
     }
   }
 
@@ -711,31 +1387,33 @@ export default function EventScreen() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
 
+    const mode = await ensureStorageMode();
+    if (!mode) return;
+    const folderPath = await getDownloadFolder();
+    if (!folderPath && mode === 'downloads') return;
+
     if (ids.length > JPG_LIMIT) {
-      Alert.alert(
+      showAlert(
         `Download ${ids.length} photos as ZIP`,
         `${Math.ceil(ids.length / 50)} ZIP file${Math.ceil(ids.length / 50) > 1 ? 's' : ''} will be saved to your Downloads folder.`,
         [
-          { text: 'Cancel', style: 'cancel' },
           { text: 'Download', onPress: () => downloadAsZip(ids) },
+          { text: 'Cancel', style: 'cancel' },
         ]
       );
       return;
     }
 
-    Alert.alert(
+    showAlert(
       `Download ${ids.length} photo${ids.length > 1 ? 's' : ''}`,
       'How would you like to download?',
       [
-        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Save as JPG',
-          onPress: async () => {
-            const urlMap = await resolveUrlsForIds(ids);
-            await saveAsJpgs(ids, urlMap);
-          },
+          onPress: async () => { await saveAsJpgs(ids, folderPath, mode); },
         },
         { text: 'Save as ZIP', onPress: () => downloadAsZip(ids) },
+        { text: 'Cancel', style: 'cancel' },
       ]
     );
   }
@@ -817,6 +1495,7 @@ export default function EventScreen() {
   function renderThumb(photo: Photo, index: number, section: 'main' | 'other') {
     const urls = photoUrls[photo.id];
     const isSelected = selected.has(photo.id);
+    const isNew = newlyUploadedIds.has(photo.id);
     return (
       <TouchableOpacity
         key={photo.id}
@@ -836,6 +1515,11 @@ export default function EventScreen() {
           ? <Image source={{ uri: urls.thumbUrl }} style={styles.thumbImage} />
           : <View style={styles.thumbSkeleton} />
         }
+        {isNew && !selectMode && (
+          <View style={styles.newBadge}>
+            <Text style={styles.newBadgeText}>New</Text>
+          </View>
+        )}
         {selectMode && (
           <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
             {isSelected && <Text style={styles.checkboxTick}>✓</Text>}
@@ -862,9 +1546,53 @@ export default function EventScreen() {
         const total = totalPhotos;
         return (
           <View style={styles.eventHeader}>
-            <TouchableOpacity style={styles.backBtn} onPress={() => router.replace('/(auth)/home')}>
-              <Text style={styles.backText}>←</Text>
-            </TouchableOpacity>
+            <View style={styles.eventHeaderTopRow}>
+              <TouchableOpacity style={styles.backBtn} onPress={() => {
+                if (uploading) {
+                  showAlert('Cancel upload?', 'Photos uploaded so far will be saved.', [
+                    { text: 'Stop Upload', style: 'destructive', onPress: () => { uploadCancelledRef.current = true; setUploadCancelRequested(true); } },
+                    { text: 'Keep Uploading', style: 'cancel' },
+                  ]);
+                  return;
+                }
+                if (bgUploading) {
+                  showAlert('Cancel upload?', 'Photos uploaded so far will be saved.', [
+                    { text: 'Stop Upload', style: 'destructive', onPress: () => { bgUploadCancelledRef.current = true; _bgCancelled = true; setBgCancelRequested(true); } },
+                    { text: 'Keep Uploading', style: 'cancel' },
+                  ]);
+                  return;
+                }
+                clearLastEvent();
+                router.replace('/(auth)/home');
+              }}>
+                <Text style={styles.backText}>←</Text>
+              </TouchableOpacity>
+              <View style={styles.adminRow}>
+                {isAdmin && (
+                  <>
+                    <Text style={styles.adminBadge}>Admin</Text>
+                    <TouchableOpacity ref={adminGearRef} style={styles.adminGearBtn} onPress={() => {
+                      adminGearRef.current?.measure((_x: number, _y: number, width: number, height: number, pageX: number, pageY: number) => {
+                        setAdminDropPos({ top: pageY + height + 4, right: Dimensions.get('window').width - pageX - width });
+                        setAdminSettingsVisible(true);
+                      });
+                    }}>
+                      <Text style={styles.adminGearIcon}>⚙️</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+                <TouchableOpacity style={styles.notifGearBtn} onPress={async () => {
+                  const notifs = await getUploadNotifications(slug);
+                  setNotifications(notifs);
+                  await markNotificationsRead(slug);
+                  setHasUnread(false);
+                  setNotificationsVisible(true);
+                }}>
+                  <Text style={styles.adminGearIcon}>🔔</Text>
+                  {hasUnread && <View style={styles.notifDot} />}
+                </TouchableOpacity>
+              </View>
+            </View>
             <View style={styles.eventHeaderBody}>
               <Text style={styles.eventName}>{params.name || 'Event'}</Text>
               {params.expiresAt && (
@@ -888,28 +1616,62 @@ export default function EventScreen() {
           <View style={styles.expiryBanner}>
             <Text style={styles.expiryText}>
               {daysLeft < 0
-                ? 'This event has closed. Download your photos before they are removed.'
-                : daysLeft === 0 ? 'This event closes today. Download your photos before then.'
-                : daysLeft === 1 ? 'This event closes tomorrow. Download your photos before then.'
-                : `This event closes in ${daysLeft} days. Download your photos before then.`}
+                ? `This event closed on ${formatDate(params.expiresAt)}.\nDownload your photos before they are removed.`
+                : daysLeft === 0
+                ? `This event closes today (${formatDate(params.expiresAt)}).\nDownload your photos before then.`
+                : `This event closes on ${formatDate(params.expiresAt)}.\nDownload your photos before then.`}
             </Text>
           </View>
         );
 
       case 'upload_card':
+        if (bgUploading) {
+          return (
+            <View style={[styles.uploadOverlayCard, { marginHorizontal: 16, marginBottom: 12, width: undefined }]}>
+              <View style={styles.uploadOverlayHeader}>
+                <Text style={styles.uploadOverlayTitle}>
+                  {bgUploadProgress.total === 0 ? 'Scanning gallery…' : 'Uploading photos'}
+                </Text>
+                {!bgCancelRequested ? (
+                  <TouchableOpacity onPress={() => { bgUploadCancelledRef.current = true; _bgCancelled = true; setBgCancelRequested(true); }}>
+                    <Text style={styles.uploadOverlayCancel}>Cancel</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={styles.uploadOverlaySub}>Cancelling…</Text>
+                )}
+              </View>
+              <Text style={styles.uploadOverlaySub}>
+                {bgUploadProgress.total > 0
+                  ? `${bgUploadProgress.current} of ${bgUploadProgress.total} uploaded`
+                  : 'You can use the app while photos upload'}
+              </Text>
+              <View style={styles.progressBg}>
+                <View style={[styles.progressFill, {
+                  width: `${bgUploadProgress.total > 0 ? Math.round((bgUploadProgress.current / bgUploadProgress.total) * 100) : 0}%` as any,
+                }]} />
+              </View>
+              <Text style={styles.uploadOverlayPct}>
+                {bgUploadProgress.total > 0 ? Math.round((bgUploadProgress.current / bgUploadProgress.total) * 100) : 0}% complete — you can close the app
+              </Text>
+            </View>
+          );
+        }
         return (
           <View style={styles.uploadCard}>
-            <TouchableOpacity style={[styles.uploadBtn, uploading && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={uploading}>
+            <TouchableOpacity style={[styles.uploadBtn, selectMode && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode}>
               <Text style={styles.uploadBtnText}>Upload Photos</Text>
             </TouchableOpacity>
-            <Text style={styles.uploadHint}>Don't close the app while uploading.</Text>
+            <Text style={styles.uploadHint}>Max 40 photos per batch.{'\n'}You can close the app while uploading.</Text>
+            {uploadSummary && (
+              <Text style={styles.uploadSummary}>{uploadSummary}</Text>
+            )}
           </View>
         );
 
       case 'select_photos_btn':
         return (
           <View style={styles.selectPhotosRow}>
-            <TouchableOpacity style={styles.selectPhotosBtn} onPress={() => setSelectMode(true)}>
+            <TouchableOpacity style={[styles.selectPhotosBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) setSelectMode(true); }}>
               <Text style={styles.selectPhotosBtnText}>Select photos</Text>
             </TouchableOpacity>
           </View>
@@ -979,53 +1741,45 @@ export default function EventScreen() {
   return (
     <SafeAreaView style={styles.container}>
 
-      {/* Upload progress overlay */}
-      {uploading && (
-        <View style={styles.uploadOverlay}>
-          <View style={styles.uploadOverlayCard}>
-            <View style={styles.uploadOverlayHeader}>
-              <Text style={styles.uploadOverlayTitle}>Uploading photos</Text>
-              <TouchableOpacity onPress={() => { uploadCancelledRef.current = true; }}>
-                <Text style={styles.uploadOverlayCancel}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.uploadOverlaySub}>
-              {uploadProgress.current} of {uploadProgress.total} uploaded
-              {uploadProgress.duplicates > 0 ? ` · ${uploadProgress.duplicates} duplicate${uploadProgress.duplicates > 1 ? 's' : ''} skipped` : ''}
-            </Text>
-            <View style={styles.progressBg}>
-              <View style={[styles.progressFill, {
-                width: `${uploadProgress.total > 0 ? Math.round((uploadProgress.current / uploadProgress.total) * 100) : 0}%` as any,
-              }]} />
-            </View>
-            <Text style={styles.uploadOverlayPct}>
-              {uploadProgress.total > 0 ? Math.round((uploadProgress.current / uploadProgress.total) * 100) : 0}% complete — keep this screen open
-            </Text>
-          </View>
-        </View>
-      )}
+
 
       {/* Download progress overlay */}
       {downloadingBulk && (
         <View style={styles.uploadOverlay}>
           <View style={styles.uploadOverlayCard}>
             <View style={styles.uploadOverlayHeader}>
-              <Text style={styles.uploadOverlayTitle}>Downloading</Text>
+              <Text style={styles.uploadOverlayTitle}>
+                {downloadMode === 'zip' ? 'Downloading ZIP' : 'Downloading'}
+              </Text>
               <TouchableOpacity onPress={() => { downloadCancelledRef.current = true; }}>
                 <Text style={styles.uploadOverlayCancel}>Cancel</Text>
               </TouchableOpacity>
             </View>
-            <Text style={styles.uploadOverlaySub}>
-              Downloading photo {downloadProgress.current} of {downloadProgress.total}…
-            </Text>
-            <View style={styles.progressBg}>
-              <View style={[styles.progressFill, {
-                width: `${downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}%` as any,
-              }]} />
-            </View>
-            <Text style={styles.uploadOverlayPct}>
-              {downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}% complete — keep this screen open
-            </Text>
+            {downloadMode === 'zip' ? (
+              <>
+                <Text style={styles.uploadOverlaySub}>
+                  {downloadProgress.total > 1
+                    ? `Preparing ZIP ${downloadProgress.current} of ${downloadProgress.total}…`
+                    : 'Preparing ZIP… this may take a minute'}
+                </Text>
+                <ActivityIndicator color={Colors.accent} style={{ marginVertical: 8 }} />
+                <Text style={styles.uploadOverlayPct}>Keep this screen open</Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.uploadOverlaySub}>
+                  Downloading photo {downloadProgress.current} of {downloadProgress.total}…
+                </Text>
+                <View style={styles.progressBg}>
+                  <View style={[styles.progressFill, {
+                    width: `${downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}%` as any,
+                  }]} />
+                </View>
+                <Text style={styles.uploadOverlayPct}>
+                  {downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}% complete — keep this screen open
+                </Text>
+              </>
+            )}
           </View>
         </View>
       )}
@@ -1072,8 +1826,7 @@ export default function EventScreen() {
             <View style={styles.skippedActions}>
               <TouchableOpacity style={styles.skippedActionBtn} onPress={() => {
                 setSkippedViewerVisible(false);
-                const ids = skippedPhotoList.map(p => p.id);
-                resolveUrlsForIds(ids).then(urlMap => saveAsJpgs(ids, urlMap));
+                saveAsJpgs(skippedPhotoList.map(p => p.id));
               }}>
                 <Text style={styles.skippedActionText}>Download as JPGs</Text>
               </TouchableOpacity>
@@ -1091,8 +1844,111 @@ export default function EventScreen() {
         </SafeAreaView>
       </Modal>
 
+      {/* Duplicate Viewer */}
+      <Modal visible={duplicateViewerVisible} animationType="slide" onRequestClose={() => setDuplicateViewerVisible(false)}>
+        <SafeAreaView style={styles.container}>
+          {(() => {
+            const cur = duplicateResults[duplicateViewerIndex];
+            const isUpgrade = cur?.status === 'upgraded';
+            const existingThumbUrl = cur?.existingPhotoId
+              ? photoUrls[cur.existingPhotoId]?.thumbUrl ?? photoUrls[cur.existingPhotoId]?.displayUrl
+              : null;
+            return (
+              <>
+                <View style={styles.skippedHeader}>
+                  <Text style={styles.skippedTitle}>
+                    {isUpgrade ? 'Upgraded' : 'Duplicate'} — {duplicateViewerIndex + 1} of {duplicateResults.length}
+                  </Text>
+                  <TouchableOpacity onPress={() => setDuplicateViewerVisible(false)}>
+                    <Text style={styles.skippedClose}>×</Text>
+                  </TouchableOpacity>
+                </View>
+                {cur && (
+                  isUpgrade ? (
+                    <View style={styles.dupBodyUpgrade}>
+                      <Text style={styles.dupUpgradeLabel}>Higher quality version saved</Text>
+                      <Image source={{ uri: cur.uri }} style={styles.dupUpgradePhoto} resizeMode="contain" />
+                      <Text style={styles.dupUpgradeMsg}>Replaced a lower quality WhatsApp copy already in Other Photos Gallery</Text>
+                    </View>
+                  ) : (
+                    <View style={styles.dupBody}>
+                      <Text style={styles.dupSectionLabel}>Already in gallery</Text>
+                      <View style={styles.dupThumbCard}>
+                        {existingThumbUrl
+                          ? <Image source={{ uri: existingThumbUrl }} style={styles.dupThumb} resizeMode="contain" />
+                          : <View style={styles.dupThumbPlaceholder} />
+                        }
+                      </View>
+                      <Text style={styles.dupSectionLabel}>You uploaded</Text>
+                      <View style={styles.dupThumbCard}>
+                        <Image source={{ uri: cur.uri }} style={styles.dupThumb} resizeMode="contain" />
+                      </View>
+                    </View>
+                  )
+                )}
+                <View style={styles.skippedNav}>
+                  <TouchableOpacity
+                    style={[styles.skippedNavBtn, duplicateViewerIndex === 0 && { opacity: 0.3 }]}
+                    onPress={() => setDuplicateViewerIndex(i => Math.max(0, i - 1))}
+                    disabled={duplicateViewerIndex === 0}
+                  >
+                    <Text style={styles.skippedNavBtnText}>‹ Previous</Text>
+                  </TouchableOpacity>
+                  {duplicateViewerIndex < duplicateResults.length - 1 ? (
+                    <TouchableOpacity style={styles.skippedNavBtn} onPress={() => setDuplicateViewerIndex(i => i + 1)}>
+                      <Text style={styles.skippedNavBtnText}>Next ›</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity style={styles.skippedNavBtn} onPress={() => setDuplicateViewerVisible(false)}>
+                      <Text style={styles.skippedNavBtnText}>Done</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </>
+            );
+          })()}
+        </SafeAreaView>
+      </Modal>
+
+      {/* Failed Uploads Viewer */}
+      {failedViewerVisible && (
+        <View style={styles.uploadOverlay}>
+          <View style={[styles.uploadOverlayCard, styles.failedViewerCard]}>
+            <View style={styles.uploadOverlayHeader}>
+              <Text style={styles.uploadOverlayTitle}>{failedResults.length} photo{failedResults.length > 1 ? 's' : ''} failed to upload</Text>
+              <TouchableOpacity onPress={() => { retryNotifIdRef.current = null; setFailedViewerVisible(false); }}>
+                <Text style={styles.skippedClose}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.failedGrid}>
+              {failedResults.map((r, idx) => (
+                <Image key={idx} source={{ uri: r.uri }} style={styles.failedThumb} resizeMode="cover" />
+              ))}
+            </View>
+            <View style={styles.failedActions}>
+              <TouchableOpacity
+                style={styles.failedRetryBtn}
+                onPress={() => {
+                  setFailedViewerVisible(false);
+                  handleUpload('gallery', failedAssetsRef.current);
+                }}
+              >
+                <Text style={styles.failedRetryText}>Retry</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.failedDismissBtn}
+                onPress={() => { retryNotifIdRef.current = null; setFailedViewerVisible(false); }}
+              >
+                <Text style={styles.failedDismissText}>Dismiss</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
       {/* Lightbox */}
       <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={styles.lightbox}>
           <SafeAreaView style={styles.lightboxInner}>
             <View style={styles.lbHeader}>
@@ -1101,14 +1957,14 @@ export default function EventScreen() {
               </TouchableOpacity>
               <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
               <View style={styles.lbActions}>
-                <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && handleDownloadPhoto(currentPhoto.id)}>
-                  <Text style={styles.lbBtnText}>Download</Text>
-                </TouchableOpacity>
                 {(isAdmin || (currentPhoto?.uploaded_by_mobile && currentPhoto.uploaded_by_mobile === userMobile)) && (
                   <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>
                     <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
                   </TouchableOpacity>
                 )}
+                <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && handleDownloadPhoto(currentPhoto.id)}>
+                  <Text style={styles.lbBtnText}>Download</Text>
+                </TouchableOpacity>
               </View>
             </View>
             <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
@@ -1127,6 +1983,12 @@ export default function EventScreen() {
               </GestureDetector>
               {(!lightboxImageUrl || imageLoading) && (
                 <ActivityIndicator color={Colors.accent} style={StyleSheet.absoluteFill} />
+              )}
+              {deletingPhoto && (
+                <View style={styles.lbDeletingOverlay}>
+                  <ActivityIndicator size="large" color={Colors.accent} />
+                  <Text style={styles.lbDeletingText}>Deleting...</Text>
+                </View>
               )}
               {lightboxIndex > 0 && !imageLoading && (
                 <TouchableOpacity style={[styles.lbArrow, { left: 0 }]} onPress={() => navigateLightbox(-1)}>
@@ -1153,6 +2015,14 @@ export default function EventScreen() {
             <Text style={styles.lbSwipeHint}>Swipe left / right to navigate</Text>
           </SafeAreaView>
         </View>
+        {downloadingPhoto && (
+          <View style={styles.lbDownloadOverlay}>
+            <ActivityIndicator color={Colors.white} size="large" />
+            <Text style={styles.lbDownloadText}>Downloading…</Text>
+          </View>
+        )}
+        {alertOverlay}
+        </GestureHandlerRootView>
       </Modal>
 
       <View style={{ flex: 1 }}>
@@ -1167,6 +2037,19 @@ export default function EventScreen() {
           scrollEventThrottle={16}
           contentContainerStyle={{ paddingBottom: 48 }}
           removeClippedSubviews={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={async () => {
+                setRefreshing(true);
+                setNewlyUploadedIds(new Set());
+                setUploadSummary(null);
+                await loadPhotos();
+                setRefreshing(false);
+              }}
+              tintColor={Colors.accent}
+            />
+          }
         />
         {selectMode && selectBarSticky && (
           <View style={styles.stickySelectBar}>
@@ -1188,6 +2071,262 @@ export default function EventScreen() {
         )}
       </View>
 
+      {alertOverlay}
+
+      {/* Folder name setup — first download only */}
+      <Modal visible={folderSetupVisible} transparent animationType="fade" onRequestClose={() => {
+        setFolderSetupVisible(false);
+        folderSetupResolveRef.current?.(null);
+      }}>
+        <View style={alertStyles.overlay}>
+          <View style={alertStyles.card}>
+            <Text style={alertStyles.title}>Name your downloads folder</Text>
+            <Text style={alertStyles.message}>Your files will be saved to Downloads / [name]. This only happens once.</Text>
+            <TextInput
+              value={folderNameDraft}
+              onChangeText={setFolderNameDraft}
+              style={styles.folderNameInput}
+              autoFocus
+              selectTextOnFocus
+              placeholderTextColor={Colors.textMuted}
+            />
+            <View style={alertStyles.buttons}>
+              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnCancel]} onPress={() => {
+                setFolderSetupVisible(false);
+                folderSetupResolveRef.current?.(null);
+              }}>
+                <Text style={[alertStyles.btnText, alertStyles.btnCancelText]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnPrimary]} onPress={() => {
+                const name = folderNameDraft.trim() || 'MomentsInFrame';
+                setFolderSetupVisible(false);
+                folderSetupResolveRef.current?.(name);
+              }}>
+                <Text style={[alertStyles.btnText, alertStyles.btnPrimaryText]}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* iOS date picker modal for Upload by date */}
+      {showDatePickerModal && (
+        <Modal transparent animationType="fade" onRequestClose={() => setShowDatePickerModal(false)}>
+          <View style={styles.datePickerOverlay}>
+            <View style={styles.datePickerCard}>
+              <Text style={styles.datePickerTitle}>Select date</Text>
+              <DateTimePicker
+                value={datePickerDate}
+                mode="date"
+                display="spinner"
+                maximumDate={new Date()}
+                onChange={(_: any, date?: Date) => { if (date) setDatePickerDate(date); }}
+                textColor={Colors.white}
+                style={{ width: '100%' }}
+              />
+              <View style={styles.datePickerBtns}>
+                <TouchableOpacity style={styles.datePickerCancelBtn} onPress={() => setShowDatePickerModal(false)}>
+                  <Text style={styles.datePickerCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.datePickerConfirmBtn} onPress={() => {
+                  setShowDatePickerModal(false);
+                  const dateStr = datePickerDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+                  showAlert(
+                    'Upload photos from this date',
+                    `Upload all photos from your Camera folder taken on ${dateStr}?`,
+                    [
+                      { text: 'Upload', onPress: () => startDateUpload(datePickerDate) },
+                      { text: 'Cancel', style: 'cancel' },
+                    ]
+                  );
+                }}>
+                  <Text style={styles.datePickerConfirmText}>Next</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {/* Notifications panel */}
+      <Modal visible={notificationsVisible} animationType="slide" onRequestClose={() => setNotificationsVisible(false)}>
+        <SafeAreaView style={styles.container}>
+          <View style={styles.skippedHeader}>
+            <Text style={styles.notifPanelTitle}>Upload History</Text>
+            <TouchableOpacity onPress={() => setNotificationsVisible(false)}>
+              <Text style={styles.skippedClose}>×</Text>
+            </TouchableOpacity>
+          </View>
+          {notifications.length === 0 ? (
+            <View style={styles.notifEmpty}>
+              <Text style={styles.notifEmptyTitle}>No upload history yet.</Text>
+              <Text style={styles.notifEmptySub}>Your upload results will appear here after each upload, whether you were on the screen or not.</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={notifications}
+              keyExtractor={n => n.id}
+              contentContainerStyle={{ padding: 16, gap: 12 }}
+              renderItem={({ item }) => {
+                const d = new Date(item.timestamp);
+                const dateStr = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+                const timeStr = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+                const parts: string[] = [];
+                if (item.photosAdded > 0) parts.push(`${item.photosAdded} added`);
+                if (item.duplicatesSkipped > 0) parts.push(`${item.duplicatesSkipped} duplicate${item.duplicatesSkipped > 1 ? 's' : ''} skipped`);
+                if (item.upgradesFound > 0) parts.push(`${item.upgradesFound} upgraded`);
+                if (item.failedCount > 0) parts.push(`${item.failedCount} failed`);
+                let summary: string;
+                if (parts.length > 0) {
+                  summary = parts.join(' · ');
+                } else if (item.source === 'by_date' && (item.preSkipped ?? 0) > 0) {
+                  summary = `${item.preSkipped} already uploaded, nothing new`;
+                } else if (item.source === 'by_date') {
+                  summary = 'No photos found for this date';
+                } else {
+                  summary = 'Nothing uploaded';
+                }
+                const hasDups = item.duplicateData.length > 0;
+                const hasFailed = (item.failedCount ?? 0) > 0 && (item.failedData?.length ?? 0) > 0;
+                return (
+                  <View style={styles.notifCard}>
+                    <View style={styles.notifCardHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.notifCardDate}>{dateStr} · {timeStr}</Text>
+                        {(() => {
+                          const total = (item.photosAdded ?? 0) + (item.duplicatesSkipped ?? 0) + (item.upgradesFound ?? 0) + (item.failedCount ?? 0) + (item.preSkipped ?? 0);
+                          const label = item.source === 'by_date' ? 'Upload by date' : 'Manual upload';
+                          return <Text style={styles.notifCardSource}>{label}{total > 0 ? ` · Total ${total} photo${total !== 1 ? 's' : ''}` : ''}</Text>;
+                        })()}
+                      </View>
+                      <TouchableOpacity
+                        style={styles.notifDeleteBtn}
+                        onPress={async () => {
+                          await deleteUploadNotification(slug, item.id);
+                          const updated = await getUploadNotifications(slug);
+                          setNotifications(updated);
+                        }}
+                      >
+                        <Text style={styles.notifDeleteText}>×</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.notifCardSummary}>{summary}</Text>
+                    <View style={styles.notifBtnRow}>
+                      {hasDups && (
+                        <TouchableOpacity
+                          style={styles.notifViewDupsBtn}
+                          onPress={() => {
+                            setNotificationsVisible(false);
+                            setDuplicateResults(item.duplicateData as any);
+                            setDuplicateViewerIndex(0);
+                            setDuplicateViewerVisible(true);
+                          }}
+                        >
+                          <Text style={styles.notifViewDupsText}>View duplicates</Text>
+                        </TouchableOpacity>
+                      )}
+                      {hasFailed && item.source === 'individual' && (
+                        <TouchableOpacity
+                          style={styles.notifViewDupsBtn}
+                          onPress={() => {
+                            setNotificationsVisible(false);
+                            retryNotifIdRef.current = item.id;
+                            setFailedResults(item.failedData as any);
+                            failedAssetsRef.current = item.failedData.map(r => ({ uri: r.uri, fileName: r.filename, assetId: undefined } as any));
+                            setFailedViewerVisible(true);
+                          }}
+                        >
+                          <Text style={styles.notifViewDupsText}>View failed / Retry</Text>
+                        </TouchableOpacity>
+                      )}
+                      {hasFailed && item.source === 'by_date' && item.uploadDate && (
+                        <TouchableOpacity
+                          style={styles.notifViewDupsBtn}
+                          onPress={() => {
+                            setNotificationsVisible(false);
+                            retryNotifIdRef.current = item.id;
+                            startDateUpload(new Date(item.uploadDate!));
+                          }}
+                        >
+                          <Text style={styles.notifViewDupsText}>Retry</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                );
+              }}
+            />
+          )}
+        </SafeAreaView>
+      </Modal>
+
+      {/* Admin settings dropdown */}
+      {adminSettingsVisible && (
+        <Modal transparent animationType="fade" onRequestClose={() => setAdminSettingsVisible(false)}>
+          <TouchableOpacity style={styles.adminDropdownBackdrop} activeOpacity={1} onPress={() => setAdminSettingsVisible(false)}>
+            <View style={[styles.adminDropdown, { position: 'absolute', top: adminDropPos.top, right: adminDropPos.right }]}>
+              <TouchableOpacity style={styles.adminDropdownRow} onPress={() => {
+                setAdminSettingsVisible(false);
+                setCpNew('');
+                setCpConfirm('');
+                setChangePasswordVisible(true);
+              }}>
+                <Text style={styles.adminDropdownText}>Change Password</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+
+      {/* Change password modal */}
+      {changePasswordVisible && (
+        <Modal transparent animationType="fade" onRequestClose={() => setChangePasswordVisible(false)}>
+          <View style={styles.cpOverlay}>
+            <View style={styles.cpBox}>
+              <Text style={styles.cpTitle}>Change Admin Password</Text>
+              <View style={styles.cpRow}>
+                <TextInput
+                  style={styles.cpInput}
+                  value={cpNew}
+                  onChangeText={setCpNew}
+                  placeholder="New password"
+                  placeholderTextColor="#555"
+                  secureTextEntry={!cpShowNew}
+                  autoFocus
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity style={styles.cpEye} onPress={() => setCpShowNew(!cpShowNew)}>
+                  <Text>{cpShowNew ? '🙈' : '👁️'}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.cpRow}>
+                <TextInput
+                  style={styles.cpInput}
+                  value={cpConfirm}
+                  onChangeText={setCpConfirm}
+                  placeholder="Confirm new password"
+                  placeholderTextColor="#555"
+                  secureTextEntry={!cpShowConfirm}
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity style={styles.cpEye} onPress={() => setCpShowConfirm(!cpShowConfirm)}>
+                  <Text>{cpShowConfirm ? '🙈' : '👁️'}</Text>
+                </TouchableOpacity>
+              </View>
+              {cpError ? <Text style={styles.cpError}>{cpError}</Text> : null}
+              <View style={styles.cpBtns}>
+                <TouchableOpacity style={styles.cpBtnPrimary} onPress={submitChangePassword}>
+                  <Text style={styles.cpBtnPrimaryText}>Save</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.cpBtnCancel} onPress={() => { setChangePasswordVisible(false); setCpError(''); }}>
+                  <Text style={styles.cpBtnCancelText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
+
     </SafeAreaView>
   );
 }
@@ -1196,11 +2335,32 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
 
   // Event header
-  eventHeader: { paddingTop: 12, paddingBottom: 16, paddingHorizontal: 16 },
-  backBtn: { marginBottom: 8 },
+  eventHeader: { paddingTop: 16, paddingBottom: 16, paddingHorizontal: 16 },
+  eventHeaderTopRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  backBtn: {},
+  adminRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  adminBadge: { fontSize: 15, fontWeight: '700', color: Colors.accent, letterSpacing: 0.5 },
+  adminGearBtn: { padding: 4 },
+  adminGearIcon: { fontSize: 20 },
+  adminDropdownBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
+  adminDropdown: { backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 0.5, borderColor: '#333', overflow: 'hidden' },
+  adminDropdownRow: { paddingHorizontal: 16, paddingVertical: 14 },
+  adminDropdownText: { fontSize: 14, fontWeight: '600', color: Colors.white },
+  cpOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 32 },
+  cpBox: { backgroundColor: '#1C1C1C', borderRadius: 16, padding: 24, width: '100%', borderWidth: 0.5, borderColor: '#333' },
+  cpTitle: { fontSize: 15, fontWeight: '700', color: Colors.white, marginBottom: 16 },
+  cpRow: { flexDirection: 'row', backgroundColor: '#111', borderWidth: 1, borderColor: '#333', borderRadius: 10, marginBottom: 12, alignItems: 'center' },
+  cpInput: { flex: 1, padding: 12, fontSize: 15, color: Colors.white },
+  cpEye: { padding: 12 },
+  cpError: { fontSize: 13, color: '#E53935', marginBottom: 8 },
+  cpBtns: { gap: 8, marginTop: 4 },
+  cpBtnPrimary: { backgroundColor: Colors.accent, borderRadius: 10, padding: 14, alignItems: 'center' },
+  cpBtnPrimaryText: { fontSize: 15, fontWeight: '700', color: Colors.background },
+  cpBtnCancel: { borderRadius: 10, padding: 14, alignItems: 'center' },
+  cpBtnCancelText: { fontSize: 15, fontWeight: '700', color: Colors.textMuted },
   backText: { fontSize: 24, color: Colors.textMuted },
   eventHeaderBody: { alignItems: 'center' },
-  eventName: { fontSize: 22, fontWeight: '600', color: Colors.white, textAlign: 'center', marginBottom: 4 },
+  eventName: { ...Typography.eventName, color: Colors.white, textAlign: 'center', marginBottom: 4 },
   eventMeta: { fontSize: 12, color: '#888', textAlign: 'center', marginBottom: 2 },
   eventMetaSub: { fontSize: 12, color: '#666', textAlign: 'center' },
 
@@ -1210,14 +2370,15 @@ const styles = StyleSheet.create({
 
   // Upload card
   uploadCard: { marginHorizontal: 16, marginBottom: 12, borderRadius: 12, borderWidth: 0.5, borderColor: Colors.cardBorder, backgroundColor: Colors.card, padding: 16, alignItems: 'center' },
-  uploadBtn: { backgroundColor: Colors.background, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 32, marginBottom: 10 },
-  uploadBtnText: { fontSize: 15, fontWeight: '600', color: Colors.white },
-  uploadHint: { fontSize: 12, color: '#666', textAlign: 'center' },
+  uploadSummary: { ...Typography.caption, color: '#22C55E', marginTop: 8, textAlign: 'center' },
+  uploadBtn: { backgroundColor: Colors.accent, borderRadius: 10, paddingVertical: 12, paddingHorizontal: 32, marginBottom: 10 },
+  uploadBtnText: { ...Typography.buttonText, color: Colors.background },
+  uploadHint: { ...Typography.caption, color: '#888', textAlign: 'center', fontWeight: '700' },
 
   // Select photos button
   selectPhotosRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, paddingBottom: 8 },
-  selectPhotosBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
-  selectPhotosBtnText: { fontSize: 14, fontWeight: '500', color: Colors.textMuted },
+  selectPhotosBtn: { backgroundColor: Colors.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  selectPhotosBtnText: { ...Typography.buttonText, color: Colors.background },
 
   // Select mode bar (sticky)
   selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: Colors.card, borderBottomWidth: 0.5, borderBottomColor: Colors.cardBorder, gap: 8 },
@@ -1236,7 +2397,7 @@ const styles = StyleSheet.create({
   sectionBlock: { backgroundColor: Colors.background },
   sectionHeader: { backgroundColor: Colors.background, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   sectionTitleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 2 },
-  sectionTitle: { fontSize: 18, fontWeight: '500', color: Colors.white },
+  sectionTitle: { ...Typography.sectionHeading, color: Colors.white },
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },
   sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
@@ -1252,6 +2413,8 @@ const styles = StyleSheet.create({
   // Photo grid
   photoRow: { flexDirection: 'row', gap: GAP, marginTop: GAP },
   thumb: { width: THUMB_SIZE, height: THUMB_SIZE, backgroundColor: '#1a1a1a' },
+  newBadge: { position: 'absolute', top: 5, left: 5, backgroundColor: '#22C55E', borderRadius: 99, paddingHorizontal: 6, paddingVertical: 2 },
+  newBadgeText: { fontSize: 9, fontWeight: '800', color: '#fff', letterSpacing: 0.3 },
   thumbImage: { width: '100%', height: '100%' },
   thumbSkeleton: { flex: 1, backgroundColor: '#252525' },
   checkbox: { position: 'absolute', top: 5, right: 5, width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.8)', backgroundColor: 'rgba(255,255,255,0.5)', alignItems: 'center', justifyContent: 'center' },
@@ -1279,6 +2442,8 @@ const styles = StyleSheet.create({
   lightboxInner: { flex: 1 },
   lbHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   lbBack: { fontSize: 22, color: Colors.textMuted, marginRight: 12 },
+  lbDeletingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', gap: 12 },
+  lbDeletingText: { fontSize: 14, fontWeight: '700', color: Colors.white },
   lbCounter: { fontSize: 13, color: '#666', flex: 1 },
   lbActions: { flexDirection: 'row', gap: 8 },
   lbBtn: { borderWidth: 0.5, borderColor: '#2a2a2a', borderRadius: 7, paddingHorizontal: 12, paddingVertical: 6 },
@@ -1289,7 +2454,7 @@ const styles = StyleSheet.create({
   lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },
   lbArrowText: { fontSize: 36, color: 'rgba(255,255,255,0.35)' },
   // Skipped Photos Viewer
-  skippedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
+  skippedHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 8, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   skippedTitle: { fontSize: 14, fontWeight: '600', color: Colors.white, flex: 1 },
   skippedClose: { fontSize: 26, color: Colors.textMuted, paddingLeft: 16 },
   skippedBody: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
@@ -1303,7 +2468,68 @@ const styles = StyleSheet.create({
   skippedActionBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 12, padding: 14, alignItems: 'center' },
   skippedActionText: { fontSize: 14, fontWeight: '600', color: Colors.white },
 
+  // Duplicate viewer (both photos)
+  dupBody: { flex: 1, padding: 8, gap: 4 },
+  dupSectionLabel: { fontSize: 12, fontWeight: '600', color: Colors.accent, textAlign: 'center' },
+  dupThumbCard: { width: '100%', flex: 1, backgroundColor: '#111', borderRadius: 12, overflow: 'hidden' },
+  dupThumb: { width: '100%', height: '100%' },
+  dupThumbPlaceholder: { width: '100%', height: '100%', backgroundColor: '#1a1a1a' },
+  dupLabel: { fontSize: 13, color: Colors.textMuted, textAlign: 'center', marginBottom: 16, paddingHorizontal: 16 },
+  // Upgrade viewer (single photo)
+  dupBodyUpgrade: { flex: 1, padding: 12, gap: 10 },
+  dupUpgradeLabel: { fontSize: 13, fontWeight: '700', color: Colors.accent, textAlign: 'center' },
+  dupUpgradePhoto: { flex: 1, width: '100%', borderRadius: 12, backgroundColor: '#111' },
+  dupUpgradeMsg: { fontSize: 13, color: Colors.textMuted, textAlign: 'center', paddingHorizontal: 8 },
+
+  folderNameInput: { backgroundColor: '#2c2c2e', color: Colors.white, fontSize: 15, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 16, borderWidth: 1, borderColor: '#444' },
+
+  // Failed viewer
+  failedViewerCard: { maxHeight: '85%' },
+  failedGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginVertical: 12 },
+  failedThumb: { width: (SCREEN_WIDTH - 48 - 8) / 3, height: (SCREEN_WIDTH - 48 - 8) / 3, borderRadius: 6 },
+  failedActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  failedRetryBtn: { flex: 1, backgroundColor: Colors.white, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  failedRetryText: { fontSize: 14, fontWeight: '600', color: Colors.background },
+  failedDismissBtn: { flex: 1, borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  failedDismissText: { fontSize: 14, fontWeight: '500', color: Colors.textMuted },
+
+  lbDownloadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 10, justifyContent: 'center', alignItems: 'center', gap: 12 },
+  lbDownloadText: { color: Colors.white, fontSize: 14, fontWeight: '500' },
   lbMeta: { fontSize: 12, color: '#555', textAlign: 'center', paddingHorizontal: 16, paddingVertical: 8 },
   lbUploadedBy: { fontSize: 12, color: '#444', textAlign: 'center', paddingHorizontal: 16, paddingBottom: 4 },
   lbSwipeHint: { fontSize: 10, color: '#333', textAlign: 'center', paddingBottom: 10 },
+
+  // Notifications
+  notifPanelTitle: { fontSize: 18, fontWeight: '700', color: Colors.white, flex: 1 },
+  notifEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36, gap: 12 },
+  notifEmptyTitle: { fontSize: 17, fontWeight: '600', color: Colors.textMuted, textAlign: 'center' },
+  notifEmptySub: { fontSize: 14, color: '#666', textAlign: 'center', lineHeight: 22 },
+  notifGearBtn: { padding: 4, position: 'relative' },
+  notifDot: { position: 'absolute', top: 2, right: 2, width: 8, height: 8, borderRadius: 4, backgroundColor: '#E53935' },
+  notifCard: { backgroundColor: Colors.card, borderRadius: 12, borderWidth: 0.5, borderColor: Colors.cardBorder, padding: 14, gap: 8 },
+  notifCardHeader: { flexDirection: 'row', alignItems: 'flex-start' },
+  notifCardDate: { fontSize: 13, fontWeight: '600', color: Colors.white },
+  notifCardSource: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
+  notifCardSummary: { fontSize: 13, color: '#22C55E' },
+  notifDeleteBtn: { paddingLeft: 12, paddingBottom: 4 },
+  notifDeleteText: { fontSize: 22, color: Colors.textMuted, lineHeight: 22 },
+  notifBtnRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  notifViewDupsBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, alignSelf: 'flex-start' },
+  notifViewDupsText: { fontSize: 13, fontWeight: '600', color: Colors.accent },
+
+  // Background upload by date banner
+  bgUploadBanner: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 90, paddingHorizontal: 16, paddingTop: 12 },
+  bgUploadBannerInner: { backgroundColor: Colors.card, borderRadius: 14, borderWidth: 0.5, borderColor: Colors.cardBorder, padding: 16, gap: 8 },
+  bgUploadBannerTitle: { fontSize: 14, fontWeight: '600', color: Colors.white },
+  bgUploadBannerSub: { fontSize: 12, color: Colors.textMuted },
+
+  // Date picker modal (iOS)
+  datePickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
+  datePickerCard: { backgroundColor: Colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 20, paddingBottom: 40, paddingHorizontal: 20 },
+  datePickerTitle: { fontSize: 16, fontWeight: '600', color: Colors.white, textAlign: 'center', marginBottom: 8 },
+  datePickerBtns: { flexDirection: 'row', gap: 12, marginTop: 12 },
+  datePickerCancelBtn: { flex: 1, borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  datePickerCancelText: { fontSize: 15, fontWeight: '600', color: Colors.textMuted },
+  datePickerConfirmBtn: { flex: 1, backgroundColor: Colors.accent, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  datePickerConfirmText: { fontSize: 15, fontWeight: '700', color: Colors.background },
 });

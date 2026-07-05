@@ -1,6 +1,6 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView, Alert,
+  KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -9,6 +9,8 @@ import { useState } from 'react';
 import { getMasterPassword } from '../../lib/auth';
 import { createEvent } from '../../lib/api';
 import { Colors } from '../../constants/colors';
+import { Typography } from '../../constants/typography';
+import { useAlert } from '../../lib/useAlert';
 
 function formatDisplay(date: Date): string {
   const dd = String(date.getDate()).padStart(2, '0');
@@ -26,21 +28,22 @@ function toAPIFormat(date: Date): string {
 
 export default function CreateEventScreen() {
   const router = useRouter();
+  const { showAlert, alertOverlay } = useAlert();
   const [name, setName] = useState('');
   const [expiryDate, setExpiryDate] = useState<Date | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  const today = new Date();
 
   async function handleCreate() {
     if (!name.trim()) {
-      Alert.alert('Missing name', 'Please enter an event name.');
+      showAlert('Missing name', 'Please enter an event name.');
       return;
     }
     if (!expiryDate) {
-      Alert.alert('Missing date', 'Please select an expiry date.');
+      showAlert('Missing date', 'Please select an expiry date.');
       return;
     }
 
@@ -48,20 +51,20 @@ export default function CreateEventScreen() {
     try {
       const masterPassword = await getMasterPassword();
       if (!masterPassword) {
-        Alert.alert('Session expired', 'Please log in again.');
+        showAlert('Session expired', 'Please log in again.');
         router.replace('/(auth)/home');
         return;
       }
 
       const result = await createEvent(masterPassword, name.trim(), toAPIFormat(expiryDate));
       if (result.error) {
-        Alert.alert('Error', result.error);
+        showAlert('Error', result.error);
         return;
       }
 
       router.replace('/(master)/dashboard');
     } catch {
-      Alert.alert('Error', 'Something went wrong. Please try again.');
+      showAlert('Error', 'Something went wrong. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -104,7 +107,7 @@ export default function CreateEventScreen() {
                 value={expiryDate ?? tomorrow}
                 mode="date"
                 display="default"
-                minimumDate={tomorrow}
+                minimumDate={today}
                 onChange={(_, selected) => {
                   setShowPicker(false);
                   if (selected) setExpiryDate(selected);
@@ -125,6 +128,7 @@ export default function CreateEventScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      {alertOverlay}
     </SafeAreaView>
   );
 }
@@ -136,9 +140,9 @@ const styles = StyleSheet.create({
   back: { padding: 20, paddingBottom: 0 },
   backText: { fontSize: 24, color: Colors.textMuted },
   body: { padding: 24, paddingTop: 16 },
-  title: { fontSize: 26, fontWeight: '800', color: Colors.white, marginBottom: 8 },
-  subtitle: { fontSize: 14, color: Colors.textMuted, lineHeight: 20, marginBottom: 28 },
-  label: { fontSize: 10, fontWeight: '700', color: Colors.accent, letterSpacing: 1, marginBottom: 8 },
+  title: { ...Typography.heading, color: Colors.white, marginBottom: 8 },
+  subtitle: { ...Typography.body, color: Colors.textMuted, marginBottom: 28 },
+  label: { ...Typography.inputLabel, color: Colors.accent, marginBottom: 8 },
   input: {
     backgroundColor: Colors.card,
     borderWidth: 1.5,
@@ -164,7 +168,7 @@ const styles = StyleSheet.create({
   dateBtnText: { fontSize: 15, color: Colors.white, fontWeight: '600' },
   dateBtnPlaceholder: { fontSize: 15, color: '#444' },
   dateIcon: { fontSize: 18 },
-  hint: { fontSize: 12, color: '#444', marginBottom: 20 },
+  hint: { ...Typography.caption, color: '#444', marginBottom: 20 },
   noteCard: {
     backgroundColor: Colors.card,
     borderWidth: 0.5,
@@ -177,7 +181,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   noteIcon: { fontSize: 16 },
-  noteText: { flex: 1, fontSize: 12, color: Colors.textMuted, lineHeight: 18 },
+  noteText: { ...Typography.caption, flex: 1, color: Colors.textMuted },
   divider: { height: 0.5, backgroundColor: '#222', marginBottom: 20 },
   createBtn: {
     backgroundColor: Colors.accent,
@@ -185,5 +189,5 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
   },
-  createBtnText: { fontSize: 16, fontWeight: '800', color: Colors.background },
+  createBtnText: { ...Typography.buttonText, color: Colors.background },
 });

@@ -1,35 +1,53 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { joinEvent } from '../../lib/api';
+import { useState, useEffect } from 'react';
+import { joinEvent, joinEventUser } from '../../lib/api';
+import { saveLastEventCode, getLastEventCode, getDeviceId, saveEventUserId, getUserProfile } from '../../lib/storage';
 import { Colors } from '../../constants/colors';
+import { Typography } from '../../constants/typography';
+import { useAlert } from '../../lib/useAlert';
 
 export default function JoinEventScreen() {
   const router = useRouter();
+  const { showAlert, alertOverlay } = useAlert();
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    getLastEventCode().then(saved => { if (saved) setCode(saved); });
+  }, []);
 
   async function handleCodeChange(value: string) {
     const cleaned = value.replace(/[^0-9]/g, '').slice(0, 6);
     setCode(cleaned);
-    if (cleaned.length === 6) {
-      await attemptJoin(cleaned);
-    }
   }
 
   async function attemptJoin(joinCode: string) {
+    if (joinCode.length !== 6) {
+      showAlert('Invalid code', 'Please enter a 6-digit event code.');
+      return;
+    }
     setLoading(true);
     try {
       const result = await joinEvent(joinCode);
       if (result.error) {
-        Alert.alert('Could not join', result.error, [
+        showAlert('Could not join', result.error, [
           { text: 'Try again', onPress: () => setCode('') },
         ]);
       } else {
+        await saveLastEventCode(joinCode);
+        // Register user identity in background — don't block navigation
+        getUserProfile().then(async profile => {
+          if (profile) {
+            const deviceId = await getDeviceId();
+            const userResult = await joinEventUser(result.event.slug, `${profile.firstName} ${profile.lastName}`, profile.mobile, deviceId);
+            if (userResult.eventUserId) await saveEventUserId(userResult.eventUserId);
+          }
+        });
         router.replace({
           pathname: '/event',
           params: {
@@ -43,7 +61,7 @@ export default function JoinEventScreen() {
         });
       }
     } catch {
-      Alert.alert('Error', 'Something went wrong. Please check your connection and try again.');
+      showAlert('Error', 'Something went wrong. Please check your connection and try again.');
       setCode('');
     } finally {
       setLoading(false);
@@ -73,32 +91,37 @@ export default function JoinEventScreen() {
           autoFocus
         />
 
-        {loading && (
-          <View style={styles.loadingRow}>
-            <ActivityIndicator color={Colors.accent} />
-            <Text style={styles.loadingText}>Looking up event...</Text>
-          </View>
-        )}
+        <TouchableOpacity
+          style={[styles.joinBtn, (code.length !== 6 || loading) && { opacity: 0.4 }]}
+          onPress={() => attemptJoin(code)}
+          disabled={code.length !== 6 || loading}
+        >
+          {loading
+            ? <ActivityIndicator color={Colors.background} />
+            : <Text style={styles.joinBtnText}>Join Event</Text>
+          }
+        </TouchableOpacity>
 
         <View style={styles.divider} />
 
-        <TouchableOpacity style={styles.qrButton} onPress={() => Alert.alert('Coming soon', 'QR scanner will be added shortly.')}>
+        <TouchableOpacity style={styles.qrButton} onPress={() => showAlert('Coming soon', 'QR scanner will be added shortly.')}>
           <Text style={styles.qrIcon}>📷</Text>
           <Text style={styles.qrText}>Scan QR code instead</Text>
         </TouchableOpacity>
       </View>
+      {alertOverlay}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  back: { padding: 20, paddingBottom: 0 },
+  back: { paddingTop: 16, paddingHorizontal: 16, paddingBottom: 0 },
   backText: { fontSize: 24, color: Colors.textMuted },
   body: { flex: 1, padding: 24, paddingTop: 16 },
-  title: { fontSize: 26, fontWeight: '800', color: Colors.white, marginBottom: 8 },
-  subtitle: { fontSize: 14, color: Colors.textMuted, lineHeight: 20, marginBottom: 32 },
-  label: { fontSize: 10, fontWeight: '700', color: Colors.accent, letterSpacing: 1, marginBottom: 12 },
+  title: { ...Typography.heading, color: Colors.white, marginBottom: 8 },
+  subtitle: { ...Typography.body, color: Colors.textMuted, marginBottom: 32 },
+  label: { ...Typography.inputLabel, color: Colors.accent, marginBottom: 12 },
   codeInput: {
     backgroundColor: Colors.card,
     borderWidth: 1.5,
@@ -111,8 +134,14 @@ const styles = StyleSheet.create({
     letterSpacing: 12,
     marginBottom: 20,
   },
-  loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 20 },
-  loadingText: { fontSize: 13, color: Colors.textMuted },
+  joinBtn: {
+    backgroundColor: Colors.accent,
+    borderRadius: 14,
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  joinBtnText: { ...Typography.buttonText, color: Colors.background },
   divider: { height: 0.5, backgroundColor: '#222', marginVertical: 24 },
   qrButton: {
     flexDirection: 'row',

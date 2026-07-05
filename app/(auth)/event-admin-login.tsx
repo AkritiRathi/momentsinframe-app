@@ -1,27 +1,35 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView, Alert,
+  KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { joinEvent, eventAdminLogin } from '../../lib/api';
+import { getLastAdminEventCode, saveLastAdminEventCode } from '../../lib/storage';
 import { Colors } from '../../constants/colors';
+import { Typography } from '../../constants/typography';
+import { useAlert } from '../../lib/useAlert';
 
 export default function EventAdminLoginScreen() {
   const router = useRouter();
+  const { showAlert, alertOverlay } = useAlert();
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    getLastAdminEventCode().then(saved => { if (saved) setCode(saved); });
+  }, []);
+
   async function handleLogin() {
     if (code.trim().length !== 6) {
-      Alert.alert('Invalid code', 'Please enter the 6-digit event code.');
+      showAlert('Invalid code', 'Please enter the 6-digit event code.');
       return;
     }
     if (!password.trim()) {
-      Alert.alert('Missing password', 'Please enter the event admin password.');
+      showAlert('Missing password', 'Please enter the event admin password.');
       return;
     }
 
@@ -30,7 +38,7 @@ export default function EventAdminLoginScreen() {
       // First resolve the event code to a slug
       const joinResult = await joinEvent(code.trim());
       if (joinResult.error) {
-        Alert.alert('Event not found', joinResult.error);
+        showAlert('Event not found', joinResult.error);
         return;
       }
 
@@ -38,10 +46,11 @@ export default function EventAdminLoginScreen() {
       const loginResult = await eventAdminLogin(slug, password.trim());
 
       if (loginResult.error) {
-        Alert.alert('Login failed', loginResult.error);
+        showAlert('Login failed', loginResult.error);
         return;
       }
 
+      await saveLastAdminEventCode(code.trim());
       router.replace({
         pathname: '/event',
         params: {
@@ -54,7 +63,7 @@ export default function EventAdminLoginScreen() {
         },
       });
     } catch {
-      Alert.alert('Error', 'Something went wrong. Please check your connection.');
+      showAlert('Error', 'Something went wrong. Please check your connection.');
     } finally {
       setLoading(false);
     }
@@ -110,6 +119,7 @@ export default function EventAdminLoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      {alertOverlay}
     </SafeAreaView>
   );
 }
@@ -121,9 +131,9 @@ const styles = StyleSheet.create({
   back: { padding: 20, paddingBottom: 0 },
   backText: { fontSize: 24, color: Colors.textMuted },
   body: { padding: 24, paddingTop: 16 },
-  title: { fontSize: 26, fontWeight: '800', color: Colors.white, marginBottom: 8 },
-  subtitle: { fontSize: 14, color: Colors.textMuted, lineHeight: 20, marginBottom: 28 },
-  label: { fontSize: 10, fontWeight: '700', color: Colors.accent, letterSpacing: 1, marginBottom: 8 },
+  title: { ...Typography.heading, color: Colors.white, marginBottom: 8 },
+  subtitle: { ...Typography.body, color: Colors.textMuted, marginBottom: 28 },
+  label: { ...Typography.inputLabel, color: Colors.accent, marginBottom: 8 },
   codeInput: {
     backgroundColor: Colors.card,
     borderWidth: 1.5,
@@ -153,7 +163,7 @@ const styles = StyleSheet.create({
   },
   eyeBtn: { padding: 14 },
   eyeText: { fontSize: 18 },
-  hint: { fontSize: 12, color: '#444', marginBottom: 24, lineHeight: 18 },
+  hint: { ...Typography.caption, color: '#444', marginBottom: 24 },
   divider: { height: 0.5, backgroundColor: '#222', marginBottom: 20 },
   loginButton: {
     backgroundColor: Colors.accent,
@@ -161,5 +171,5 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
   },
-  loginButtonText: { fontSize: 16, fontWeight: '800', color: Colors.background },
+  loginButtonText: { ...Typography.buttonText, color: Colors.background },
 });

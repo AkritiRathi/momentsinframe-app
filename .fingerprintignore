@@ -1,0 +1,8 @@
+modules/
+modules/**
+dist/
+dist/**
+.expo/
+.expo/**
+plugins/
+plugins/**

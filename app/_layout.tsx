@@ -5,7 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
 import { getUserProfile } from '../lib/storage';
-import { isMasterAdmin } from '../lib/auth';
+import { isMasterAdmin, clearMasterSession } from '../lib/auth';
 import * as Updates from 'expo-updates';
 
 // Keep native splash visible until we finish the update check
@@ -24,6 +24,7 @@ export default function RootLayout() {
   // On launch, check for update. Block the app until we know.
   useEffect(() => {
     (async () => {
+      await clearMasterSession();
       if (__DEV__) {
         setUpdateStage('ready');
         SplashScreen.hideAsync();
@@ -44,15 +45,17 @@ export default function RootLayout() {
     })();
   }, []);
 
+  const [updateError, setUpdateError] = useState(false);
+
   async function handleUpdate() {
     setUpdating(true);
+    setUpdateError(false);
     try {
       await Updates.fetchUpdateAsync();
       await Updates.reloadAsync();
     } catch {
       setUpdating(false);
-      // If download fails, let the app proceed
-      setUpdateStage('ready');
+      setUpdateError(true);
     }
   }
 
@@ -126,13 +129,16 @@ export default function RootLayout() {
             <View style={styles.updateBox}>
               <Text style={styles.updateTitle}>Update Available</Text>
               <Text style={styles.updateMsg}>A new version of MomentsInFrame is ready.</Text>
+              {updateError && (
+                <Text style={styles.updateErrorMsg}>Download failed. Please check your connection and try again.</Text>
+              )}
               <TouchableOpacity
                 style={[styles.updateBtn, updating && styles.updateBtnDisabled]}
                 onPress={handleUpdate}
                 disabled={updating}
               >
                 <Text style={styles.updateBtnText}>
-                  {updating ? 'Updating…' : 'Update Now'}
+                  {updating ? 'Updating…' : updateError ? 'Retry' : 'Update Now'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -187,6 +193,11 @@ const styles = StyleSheet.create({
   updateMsg: {
     fontSize: 14,
     color: '#ccc',
+    textAlign: 'center',
+  },
+  updateErrorMsg: {
+    fontSize: 13,
+    color: '#f87171',
     textAlign: 'center',
   },
   updateBtn: {

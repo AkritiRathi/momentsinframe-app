@@ -1,6 +1,6 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, Alert,
+  KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -8,16 +8,19 @@ import { useState } from 'react';
 import { masterLogin } from '../../lib/api';
 import { saveMasterSession } from '../../lib/auth';
 import { Colors } from '../../constants/colors';
+import { Typography } from '../../constants/typography';
+import { useAlert } from '../../lib/useAlert';
 
 export default function MasterAdminLoginScreen() {
   const router = useRouter();
+  const { showAlert, alertOverlay } = useAlert();
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function handleLogin() {
     if (!password.trim()) {
-      Alert.alert('Missing password', 'Please enter the master password.');
+      showAlert('Missing password', 'Please enter the master password.');
       return;
     }
 
@@ -25,13 +28,13 @@ export default function MasterAdminLoginScreen() {
     try {
       const result = await masterLogin(password.trim());
       if (result.error) {
-        Alert.alert('Login failed', result.error);
+        showAlert('Login failed', result.error);
         return;
       }
       await saveMasterSession(password.trim());
       router.replace('/(master)/dashboard');
     } catch {
-      Alert.alert('Error', 'Something went wrong. Please check your connection.');
+      showAlert('Error', 'Something went wrong. Please check your connection.');
     } finally {
       setLoading(false);
     }
@@ -78,6 +81,7 @@ export default function MasterAdminLoginScreen() {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+      {alertOverlay}
     </SafeAreaView>
   );
 }
@@ -100,9 +104,9 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   icon: { fontSize: 28 },
-  title: { fontSize: 26, fontWeight: '800', color: Colors.white, marginBottom: 8 },
-  subtitle: { fontSize: 14, color: Colors.textMuted, lineHeight: 20, marginBottom: 28 },
-  label: { fontSize: 10, fontWeight: '700', color: Colors.accent, letterSpacing: 1, marginBottom: 8 },
+  title: { ...Typography.heading, color: Colors.white, marginBottom: 8 },
+  subtitle: { ...Typography.body, color: Colors.textMuted, marginBottom: 28 },
+  label: { ...Typography.inputLabel, color: Colors.accent, marginBottom: 8 },
   passwordRow: {
     flexDirection: 'row',
     backgroundColor: Colors.card,
@@ -115,7 +119,7 @@ const styles = StyleSheet.create({
   passwordInput: { flex: 1, padding: 14, fontSize: 15, color: Colors.white },
   eyeBtn: { padding: 14 },
   eyeText: { fontSize: 18 },
-  hint: { fontSize: 12, color: '#444', marginBottom: 24 },
+  hint: { ...Typography.caption, color: '#444', marginBottom: 24 },
   divider: { height: 0.5, backgroundColor: '#222', marginBottom: 20 },
   loginButton: {
     backgroundColor: Colors.accent,
@@ -123,5 +127,5 @@ const styles = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
   },
-  loginButtonText: { fontSize: 16, fontWeight: '800', color: Colors.background },
+  loginButtonText: { ...Typography.buttonText, color: Colors.background },
 });

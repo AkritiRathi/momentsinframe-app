@@ -43,6 +43,10 @@ export async function masterLogin(password: string) {
   return post('/api/native/master/login', { password });
 }
 
+export async function verifyMasterPassword(password: string) {
+  return post('/api/native/master/verify-password', { password });
+}
+
 export async function changeMasterPassword(currentPassword: string, newPassword: string) {
   return post('/api/native/master/change-password', { currentPassword, newPassword });
 }
@@ -63,6 +67,14 @@ export async function changeEventAdminPassword(slug: string, currentPassword: st
   return post(`/api/native/events/${slug}/change-admin-password`, { currentPassword, newPassword });
 }
 
+export async function deleteEvent(slug: string, masterPassword: string) {
+  return del(`/api/native/events/${slug}`, { masterPassword });
+}
+
+export async function joinEventUser(slug: string, name: string, mobile: string, deviceId: string) {
+  return post(`/api/native/events/${slug}/join-user`, { name, mobile, deviceId });
+}
+
 // Photo endpoints
 export async function getEventPhotos(slug: string) {
   return get(`/api/events/${slug}/photos`);
@@ -76,14 +88,14 @@ export async function getUploadUrl(eventSlug: string, filename: string, contentT
   return post('/api/upload-url', { eventSlug, filename, contentType });
 }
 
-export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, uploaderMobile?: string, uploaderName?: string) {
-  return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName });
+export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, uploaderMobile?: string, uploaderName?: string, eventUserId?: string) {
+  return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId });
 }
 
-export async function deletePhotos(slug: string, photoIds: string[], adminPassword: string, uploaderMobile?: string) {
+export async function deletePhotos(slug: string, photoIds: string[], adminPassword: string, uploaderMobile?: string, eventUserId?: string, deviceId?: string) {
   const body = adminPassword
     ? { photoIds, adminPassword }
-    : { photoIds, uploaderMobile };
+    : { photoIds, uploaderMobile, eventUserId, deviceId };
   return del(`/api/native/events/${slug}/photos`, body);
 }
 
@@ -93,4 +105,12 @@ export async function downloadZipRaw(slug: string, photoIds: string[]): Promise<
 
 export async function downloadPhotoRaw(photoId: string, adminPassword?: string): Promise<Response> {
   return postRaw('/api/download-photo', { photoId, adminPassword: adminPassword ?? '' });
+}
+
+export async function getPhotoDownloadUrl(photoId: string, adminPassword?: string): Promise<{ url: string; filename: string; error?: string }> {
+  return post(`/api/native/photos/${photoId}/download-url`, { adminPassword: adminPassword ?? '' });
+}
+
+export async function prepareZip(slug: string, photoIds: string[]): Promise<{ zipUrl: string; filename: string; error?: string }> {
+  return post(`/api/native/events/${slug}/prepare-zip`, { photoIds });
 }

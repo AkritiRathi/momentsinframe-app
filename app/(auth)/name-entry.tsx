@@ -53,8 +53,9 @@ export default function NameEntryScreen() {
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.appName}>MomentsInFrame</Text>
-          <Text style={styles.title}>Let's get{'\n'}started</Text>
+          <Text style={styles.title}>Let's get started</Text>
           <Text style={styles.subtitle}>Tell us a little about yourself so we can personalise your experience.</Text>
+          <Text style={styles.warning}>Details once entered cannot be changed.</Text>
 
           <View style={styles.form}>
             <Text style={styles.label}>FIRST NAME</Text>
@@ -84,7 +85,7 @@ export default function NameEntryScreen() {
               </View>
               <TextInput
                 style={styles.phoneInput}
-                placeholder="10-digit mobile number"
+                placeholder="10-digit WhatsApp number"
                 placeholderTextColor="#777"
                 value={mobile}
                 onChangeText={setMobile}
@@ -93,8 +94,7 @@ export default function NameEntryScreen() {
               />
             </View>
 
-            <Text style={styles.warning}>Details once entered cannot be changed.</Text>
-            <Text style={styles.hint}>Your details are saved to personalise your experience.</Text>
+            <Text style={styles.mobileHint}>Your mobile number identifies your uploads so only you can delete photos you've added.</Text>
 
             <TouchableOpacity style={styles.button} onPress={handleGetStarted} disabled={loading}>
               <Text style={styles.buttonText}>{loading ? 'Saving...' : 'Get started →'}</Text>
@@ -112,7 +112,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   container: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 64, paddingBottom: 40 },
   appName: { fontSize: 13, fontWeight: '700', color: Colors.accent, letterSpacing: 1.5, marginBottom: 16, textTransform: 'uppercase' },
-  title: { fontSize: 36, fontWeight: '800', color: Colors.white, lineHeight: 42, marginBottom: 10 },
+  title: { fontSize: 30, fontWeight: '800', color: Colors.white, lineHeight: 36, marginBottom: 10 },
   subtitle: { ...Typography.body, color: Colors.textMuted, marginBottom: 36 },
   form: {},
   label: { ...Typography.inputLabel, color: Colors.accent, marginBottom: 8 },
@@ -146,8 +146,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: Colors.white,
   },
-  warning: { fontSize: 13, fontWeight: '700', color: Colors.accent, marginBottom: 6 },
-  hint: { ...Typography.caption, color: Colors.textMuted, marginBottom: 28 },
+  mobileHint: { fontSize: 13, fontWeight: '700', color: Colors.accent, marginBottom: 16 },
+  warning: { fontSize: 13, fontWeight: '700', color: Colors.accent, marginBottom: 24 },
   button: {
     backgroundColor: Colors.accent,
     borderRadius: 14,

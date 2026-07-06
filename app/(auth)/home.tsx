@@ -90,7 +90,6 @@ export default function HomeScreen() {
             }}>
               <View style={styles.settingsRowBody}>
                 <Text style={styles.settingsRowLabel}>See user details</Text>
-                <Text style={styles.settingsRowSub}>{profile?.firstName ?? ''} · +91 {profile?.mobile ?? ''}</Text>
               </View>
             </TouchableOpacity>
           </View>

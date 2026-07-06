@@ -111,10 +111,11 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, selected, onGroupToggle }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
+  deleteMode: boolean;
   selected: Set<string>;
   onGroupToggle: (photos: Photo[], on: boolean) => void;
 }) {
@@ -167,41 +168,43 @@ function SectionHeader({ section, items, selectMode, selected, onGroupToggle }: 
         <Text style={styles.sectionSub}>
           {isMain ? '(sorted by date taken · oldest first)' : '(no date info — sorted by upload time)'}
         </Text>
-        {selectMode && (
+        {(selectMode || deleteMode) && (
           <View style={styles.sectionSelectRow}>
             <TouchableOpacity onPress={() => onGroupToggle(items, !allSelected)}>
               <Text style={styles.sectionSelectLink}>
                 {allSelected ? `Deselect all ${label}` : `Select all ${label}`}
               </Text>
             </TouchableOpacity>
-            <View style={styles.rangeRow}>
-              <Text style={styles.rangeLabel}>Range:</Text>
-              <TextInput
-                style={styles.rangeInput}
-                keyboardType="number-pad"
-                placeholder="From"
-                placeholderTextColor="#555"
-                value={rangeFrom}
-                onChangeText={setRangeFrom}
-                onEndEditing={() => clampFrom(rangeFrom)}
-              />
-              <Text style={styles.rangeLabel}>–</Text>
-              <TextInput
-                style={styles.rangeInput}
-                keyboardType="number-pad"
-                placeholder="To"
-                placeholderTextColor="#555"
-                value={rangeTo}
-                onChangeText={setRangeTo}
-                onEndEditing={() => clampTo(rangeTo)}
-              />
-              <Pressable style={styles.rangeBtn} onPress={applyRange}>
-                <Text style={styles.rangeBtnText}>Apply</Text>
-              </Pressable>
-              <Pressable style={styles.rangeBtnOutline} onPress={clearRange}>
-                <Text style={styles.rangeBtnOutlineText}>Clear</Text>
-              </Pressable>
-            </View>
+            {!deleteMode && (
+              <View style={styles.rangeRow}>
+                <Text style={styles.rangeLabel}>Range:</Text>
+                <TextInput
+                  style={styles.rangeInput}
+                  keyboardType="number-pad"
+                  placeholder="From"
+                  placeholderTextColor="#555"
+                  value={rangeFrom}
+                  onChangeText={setRangeFrom}
+                  onEndEditing={() => clampFrom(rangeFrom)}
+                />
+                <Text style={styles.rangeLabel}>–</Text>
+                <TextInput
+                  style={styles.rangeInput}
+                  keyboardType="number-pad"
+                  placeholder="To"
+                  placeholderTextColor="#555"
+                  value={rangeTo}
+                  onChangeText={setRangeTo}
+                  onEndEditing={() => clampTo(rangeTo)}
+                />
+                <Pressable style={styles.rangeBtn} onPress={applyRange}>
+                  <Text style={styles.rangeBtnText}>Apply</Text>
+                </Pressable>
+                <Pressable style={styles.rangeBtnOutline} onPress={clearRange}>
+                  <Text style={styles.rangeBtnOutlineText}>Clear</Text>
+                </Pressable>
+              </View>
+            )}
           </View>
         )}
       </View>
@@ -425,6 +428,7 @@ export default function EventScreen() {
 
   // Select mode
   const [selectMode, setSelectMode] = useState(false);
+  const [deleteMode, setDeleteMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
   const [selectBarSticky, setSelectBarSticky] = useState(false);
@@ -569,7 +573,7 @@ export default function EventScreen() {
         );
         return true;
       }
-      if (selectMode) {
+      if (selectMode || deleteMode) {
         exitSelectMode();
         return true;
       }
@@ -577,7 +581,7 @@ export default function EventScreen() {
       return true;
     });
     return () => sub.remove();
-  }, [selectMode, uploading, bgUploading]);
+  }, [selectMode, deleteMode, uploading, bgUploading]);
 
   useEffect(() => {
     const JPG_LIMIT = 25;
@@ -734,6 +738,7 @@ export default function EventScreen() {
 
   function exitSelectMode() {
     setSelectMode(false);
+    setDeleteMode(false);
     setSelected(new Set());
     setStickySection(null);
     setSelectBarSticky(false);
@@ -1450,6 +1455,15 @@ export default function EventScreen() {
   const totalPhotos = photos.length + otherPhotos.length;
   const allSelected = totalPhotos > 0 && [...photos, ...otherPhotos].every(p => selected.has(p.id));
 
+  const userPhotoIds = useMemo(() => {
+    if (!userMobile) return new Set<string>();
+    return new Set(
+      [...photos, ...otherPhotos]
+        .filter(p => p.uploaded_by_mobile === userMobile)
+        .map(p => p.id)
+    );
+  }, [photos, otherPhotos, userMobile]);
+
   // Build flat list data + compute sticky indices
   const { listData, stickyIndices } = useMemo(() => {
     const items: ListItem[] = [];
@@ -1459,25 +1473,36 @@ export default function EventScreen() {
     if (daysLeft <= 3) items.push({ type: 'expiry_banner', key: 'expiry_banner' });
     items.push({ type: 'upload_card', key: 'upload_card' });
 
-    if (totalPhotos > 0 && !selectMode) {
+    if (totalPhotos > 0 && !selectMode && !deleteMode) {
       items.push({ type: 'select_photos_btn', key: 'select_photos_btn' });
     }
 
-    if (selectMode) {
+    if (selectMode || deleteMode) {
       items.push({ type: 'select_bar', key: 'select_bar' });
     }
 
-    if (photos.length > 0) {
+    // In delete mode, only show photos uploaded by the current user (admin sees all)
+    const deleteFilteredPhotos = deleteMode && !isAdmin && userMobile
+      ? photos.filter(p => p.uploaded_by_mobile === userMobile)
+      : photos;
+    const deleteFilteredOther = deleteMode && !isAdmin && userMobile
+      ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile)
+      : otherPhotos;
+
+    const mainPhotos = deleteMode ? deleteFilteredPhotos : photos;
+    const otherList = deleteMode ? deleteFilteredOther : otherPhotos;
+
+    if (mainPhotos.length > 0) {
       items.push({ type: 'section_header', section: 'main', key: 'header_main' });
-      for (let i = 0; i < photos.length; i += 3) {
-        items.push({ type: 'photo_row', photos: photos.slice(i, i + 3), section: 'main', startIndex: i, key: `row_main_${i}` });
+      for (let i = 0; i < mainPhotos.length; i += 3) {
+        items.push({ type: 'photo_row', photos: mainPhotos.slice(i, i + 3), section: 'main', startIndex: i, key: `row_main_${i}` });
       }
     }
 
-    if (otherPhotos.length > 0) {
+    if (otherList.length > 0) {
       items.push({ type: 'section_header', section: 'other', key: 'header_other' });
-      for (let i = 0; i < otherPhotos.length; i += 3) {
-        items.push({ type: 'photo_row', photos: otherPhotos.slice(i, i + 3), section: 'other', startIndex: i, key: `row_other_${i}` });
+      for (let i = 0; i < otherList.length; i += 3) {
+        items.push({ type: 'photo_row', photos: otherList.slice(i, i + 3), section: 'other', startIndex: i, key: `row_other_${i}` });
       }
     }
 
@@ -1486,7 +1511,7 @@ export default function EventScreen() {
     }
 
     return { listData: items, stickyIndices: sticky };
-  }, [photos, otherPhotos, selectMode, daysLeft, totalPhotos, loading]);
+  }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin]);
 
   useEffect(() => {
     listDataRef.current = listData;
@@ -1494,6 +1519,28 @@ export default function EventScreen() {
   }, [listData]);
 
   function renderSelectBar() {
+    if (deleteMode) {
+      return (
+        <View style={styles.selectBar}>
+          <View>
+            <Text style={styles.selectCount}>{selected.size}</Text>
+            <Text style={styles.selectCountLabel}>selected</Text>
+          </View>
+          <View style={styles.selectBarBtns}>
+            <Pressable style={styles.selBtn} onPress={() => selectGroup([...photos, ...otherPhotos], !allSelected)}>
+              <Text style={styles.selBtnText}>Select all</Text>
+            </Pressable>
+            <Pressable style={styles.selBtn} onPress={exitSelectMode}>
+              <Text style={styles.selBtnText}>Cancel</Text>
+            </Pressable>
+            <Pressable style={[styles.selBtn, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={handleBulkDelete}>
+              <Text style={[styles.selBtnText, { color: Colors.danger }]}>Delete</Text>
+            </Pressable>
+          </View>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.selectBar}>
         <View>
@@ -1507,11 +1554,6 @@ export default function EventScreen() {
           <Pressable style={styles.selBtn} onPress={exitSelectMode}>
             <Text style={styles.selBtnText}>Cancel</Text>
           </Pressable>
-          {isAdmin && (
-            <Pressable style={[styles.selBtn, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={handleBulkDelete}>
-              <Text style={[styles.selBtnText, { color: Colors.danger }]}>Delete</Text>
-            </Pressable>
-          )}
           <Pressable style={[styles.selBtnPrimary, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={handleBulkDownload}>
             <Text style={styles.selBtnPrimaryText}>↓ Download</Text>
           </Pressable>
@@ -1529,7 +1571,7 @@ export default function EventScreen() {
         key={photo.id}
         style={styles.thumb}
         onPress={() => {
-          if (selectMode) {
+          if (selectMode || deleteMode) {
             toggleSelect(photo.id);
           } else {
             setLightboxIndex(index);
@@ -1543,12 +1585,12 @@ export default function EventScreen() {
           ? <Image source={{ uri: urls.thumbUrl }} style={styles.thumbImage} />
           : <View style={styles.thumbSkeleton} />
         }
-        {isNew && !selectMode && (
+        {isNew && !selectMode && !deleteMode && (
           <View style={styles.newBadge}>
             <Text style={styles.newBadgeText}>New</Text>
           </View>
         )}
-        {selectMode && (
+        {(selectMode || deleteMode) && (
           <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
             {isSelected && <Text style={styles.checkboxTick}>✓</Text>}
           </View>
@@ -1686,7 +1728,7 @@ export default function EventScreen() {
         }
         return (
           <View style={styles.uploadCard}>
-            <TouchableOpacity style={[styles.uploadBtn, selectMode && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode}>
+            <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode) && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode || deleteMode}>
               <Text style={styles.uploadBtnText}>Upload Photos</Text>
             </TouchableOpacity>
             <Text style={styles.uploadHint}>Max 40 photos per batch.{'\n'}You can close the app while uploading.</Text>
@@ -1699,8 +1741,11 @@ export default function EventScreen() {
       case 'select_photos_btn':
         return (
           <View style={styles.selectPhotosRow}>
-            <TouchableOpacity style={[styles.selectPhotosBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) setSelectMode(true); }}>
-              <Text style={styles.selectPhotosBtnText}>Select photos</Text>
+            <TouchableOpacity style={[styles.deleteModeBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setDeleteMode(true); setSelectMode(false); } }}>
+              <Text style={styles.deleteModeBtnText}>Delete Photos</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.selectPhotosBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setSelectMode(true); setDeleteMode(false); } }}>
+              <Text style={styles.selectPhotosBtnText}>Download Photos</Text>
             </TouchableOpacity>
           </View>
         );
@@ -1717,8 +1762,11 @@ export default function EventScreen() {
           <View style={{ opacity: stickySection === item.section ? 0 : 1 }}>
             <SectionHeader
               section={item.section}
-              items={item.section === 'main' ? photos : otherPhotos}
+              items={item.section === 'main'
+                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos)
+                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
               selectMode={selectMode}
+              deleteMode={deleteMode}
               selected={selected}
               onGroupToggle={selectGroup}
             />
@@ -1985,7 +2033,7 @@ export default function EventScreen() {
               </TouchableOpacity>
               <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
               <View style={styles.lbActions}>
-                {(isAdmin || (currentPhoto?.uploaded_by_mobile && currentPhoto.uploaded_by_mobile === userMobile)) && (
+                {(isAdmin || (currentPhoto != null && userPhotoIds.has(currentPhoto.id))) && (
                   <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>
                     <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
                   </TouchableOpacity>
@@ -2060,7 +2108,7 @@ export default function EventScreen() {
           data={listData}
           keyExtractor={item => item.key}
           renderItem={renderItem}
-          extraData={[selected, stickySection, selectBarSticky]}
+          extraData={[selected, stickySection, selectBarSticky, deleteMode]}
           onScroll={handleScroll}
           scrollEventThrottle={16}
           contentContainerStyle={{ paddingBottom: 48 }}
@@ -2084,7 +2132,7 @@ export default function EventScreen() {
             {renderSelectBar()}
           </View>
         )}
-        {selectMode && stickySection && (
+        {(selectMode || deleteMode) && stickySection && (
           <View style={[styles.stickySectionHeader, {
             top: selectBarSticky ? (accumulatedHeights.current['select_bar'] ?? 0) : 0,
           }]}>
@@ -2092,6 +2140,7 @@ export default function EventScreen() {
               section={stickySection}
               items={stickySection === 'main' ? photos : otherPhotos}
               selectMode={selectMode}
+              deleteMode={deleteMode}
               selected={selected}
               onGroupToggle={selectGroup}
             />
@@ -2404,9 +2453,11 @@ const styles = StyleSheet.create({
   uploadHint: { ...Typography.caption, color: '#888', textAlign: 'center', fontWeight: '700' },
 
   // Select photos button
-  selectPhotosRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, paddingBottom: 8 },
+  selectPhotosRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8 },
   selectPhotosBtn: { backgroundColor: Colors.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
   selectPhotosBtnText: { ...Typography.buttonText, color: Colors.background },
+  deleteModeBtn: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: Colors.danger, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  deleteModeBtnText: { ...Typography.buttonText, color: Colors.danger },
 
   // Select mode bar (sticky)
   selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: Colors.card, borderBottomWidth: 0.5, borderBottomColor: Colors.cardBorder, gap: 8 },

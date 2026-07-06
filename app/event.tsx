@@ -235,14 +235,18 @@ async function backgroundUploadTask(): Promise<void> {
   const userName = _bgUserName;
   const eventUserId = _bgEventUserId;
 
-  // Pre-check: collect already-uploaded filenames so exact matches are skipped
+  // Pre-check: collect already-uploaded filenames so exact matches are skipped.
+  // Only include photos uploaded by the current user — same filename from a
+  // different user is a different photo and must go through backend pHash detection.
   const existingFilenames = new Set<string>();
   try {
     const existingRes = await getEventPhotos(slug);
     if (!existingRes.error) {
       const allPhotos = [...(existingRes.photos ?? []), ...(existingRes.otherPhotos ?? [])];
       for (const p of allPhotos) {
-        if (p.original_filename) existingFilenames.add(p.original_filename);
+        if (p.original_filename && userMobile && p.uploaded_by_mobile === userMobile) {
+          existingFilenames.add(p.original_filename);
+        }
       }
     }
   } catch {}
@@ -837,9 +841,34 @@ export default function EventScreen() {
       return;
     }
 
+    // Resolve filenames via MediaLibrary so individual uploads use the same
+    // filename as Upload by Date — enabling accurate pre-check deduplication.
+    // getAssetInfoAsync does not work reliably on Samsung S25 Ultra, so instead
+    // fetch recent assets via getAssetsAsync (same API used by Upload by Date)
+    // and build a URI→filename map. Single call regardless of selection size.
+    let resolvedFilenames: string[];
+    try {
+      const recentAssets = await MediaLibrary.getAssetsAsync({
+        first: 200,
+        mediaType: MediaLibrary.MediaType.photo,
+        sortBy: MediaLibrary.SortBy.modificationTime,
+      });
+      const idToFilename = new Map(
+        recentAssets.assets
+          .map(a => [a.uri.split('/').pop(), a.filename] as [string, string])
+          .filter(([id]) => !!id)
+      );
+      resolvedFilenames = assets.map(a => {
+        const numericId = a.uri?.split('/').pop();
+        return (numericId ? idToFilename.get(numericId) : undefined) ?? a.fileName ?? `photo_${Date.now()}.jpg`;
+      });
+    } catch {
+      resolvedFilenames = assets.map(a => a.fileName ?? `photo_${Date.now()}.jpg`);
+    }
+
     // Pre-fetch all presigned URLs in parallel
     const presignedUrls = await Promise.all(assets.map(async (asset, i) => {
-      const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
+      const filename = resolvedFilenames[i];
       try { return await getUploadUrl(slug, filename, getMimeType(localUris[i])); }
       catch { return { error: true as const }; }
     }));
@@ -856,7 +885,7 @@ export default function EventScreen() {
     let completedCount = 0;
 
     async function uploadOne(asset: ImagePicker.ImagePickerAsset, index: number) {
-      const filename = asset.fileName ?? `photo_${Date.now()}.jpg`;
+      const filename = resolvedFilenames[index];
       const uploadUri = localUris[index];
       const contentType = getMimeType(uploadUri);
       const urlResult = presignedUrls[index];

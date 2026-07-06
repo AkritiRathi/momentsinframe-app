@@ -78,6 +78,21 @@ export default function HomeScreen() {
               </View>
               {checkingUpdate && <ActivityIndicator size="small" color={Colors.accent} />}
             </TouchableOpacity>
+            <View style={styles.settingsDivider} />
+            <TouchableOpacity style={styles.settingsRow} onPress={() => {
+              setSettingsVisible(false);
+              setTimeout(() => {
+                showAlert(
+                  'Your Details',
+                  `Name: ${profile?.firstName ?? ''} ${profile?.lastName ?? ''}\nMobile: +91 ${profile?.mobile ?? ''}`,
+                );
+              }, 300);
+            }}>
+              <View style={styles.settingsRowBody}>
+                <Text style={styles.settingsRowLabel}>See user details</Text>
+                <Text style={styles.settingsRowSub}>{profile?.firstName ?? ''} · +91 {profile?.mobile ?? ''}</Text>
+              </View>
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -224,6 +239,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     gap: 12,
   },
+  settingsDivider: { height: 0.5, backgroundColor: '#333' },
   settingsRowBody: {},
   settingsRowLabel: { fontSize: 14, fontWeight: '600', color: Colors.white },
   settingsRowSub: { fontSize: 11, color: '#555', marginTop: 1 },

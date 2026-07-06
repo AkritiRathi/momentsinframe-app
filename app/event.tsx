@@ -997,12 +997,6 @@ export default function EventScreen() {
   }
 
   async function startDateUpload(date: Date) {
-    const perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
-    if (!perm.granted) {
-      showAlert('Permission required', 'Please allow access to your photos and videos to use this feature.');
-      return;
-    }
-
     _bgCancelled = false;
     bgUploadCancelledRef.current = false;
     setBgCancelRequested(false);
@@ -1079,9 +1073,14 @@ export default function EventScreen() {
     }
   }
 
-  function handleDateUpload() {
+  async function handleDateUpload() {
     if (bgUploading) {
       showAlert('Upload in progress', 'A background upload is already running. Please wait for it to complete.');
+      return;
+    }
+    const perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
+    if (!perm.granted) {
+      showAlert('Permission required', 'Please allow access to your photos and videos to use this feature.');
       return;
     }
     showAlert(

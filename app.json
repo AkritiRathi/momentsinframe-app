@@ -25,7 +25,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.momentsinframe.app",
       "infoPlist": {
-        "UIBackgroundModes": ["fetch", "processing"]
+        "UIBackgroundModes": ["fetch", "processing"],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {

@@ -15,6 +15,7 @@ import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-g
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import BackgroundUpload from 'background-upload';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
@@ -805,7 +806,7 @@ export default function EventScreen() {
       const shouldUpload = await new Promise<boolean>(resolve =>
         showAlert(
           'Start upload?',
-          `Uploading ${assets.length} photo${assets.length !== 1 ? 's' : ''}. You can close the app while uploading.`,
+          `Uploading ${assets.length} photo${assets.length !== 1 ? 's' : ''}. ${Platform.OS === 'ios' ? 'Keep the app open while uploading.' : 'You can close the app while uploading.'}`,
           [
             { text: 'Start Upload', onPress: () => resolve(true) },
             { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
@@ -1019,6 +1020,7 @@ export default function EventScreen() {
     _bgCompleteCb = async (results: UploadFileResult[], preSkipped: number) => {
       _bgCompleteCb = null;
       try { await BackgroundUpload.stopService(); } catch {}
+      deactivateKeepAwake();
       setBgUploading(false);
       setBgUploadProgress({ current: 0, total: 0 });
       setBgCancelRequested(false);
@@ -1067,6 +1069,7 @@ export default function EventScreen() {
 
     setBgUploading(true);
     setBgUploadProgress({ current: 0, total: 0 });
+    activateKeepAwakeAsync();
 
     const dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     try {
@@ -1074,6 +1077,7 @@ export default function EventScreen() {
       backgroundUploadTask();
     } catch {
       setBgUploading(false);
+      deactivateKeepAwake();
       showAlert('Upload failed', 'Could not start background upload. Please try again.');
     }
   }
@@ -1721,7 +1725,7 @@ export default function EventScreen() {
                 }]} />
               </View>
               <Text style={styles.uploadOverlayPct}>
-                {bgUploadProgress.total > 0 ? Math.round((bgUploadProgress.current / bgUploadProgress.total) * 100) : 0}% complete — you can close the app
+                {bgUploadProgress.total > 0 ? Math.round((bgUploadProgress.current / bgUploadProgress.total) * 100) : 0}% complete — {Platform.OS === 'ios' ? 'keep the app open' : 'you can close the app'}
               </Text>
             </View>
           );
@@ -1731,7 +1735,7 @@ export default function EventScreen() {
             <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode) && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode || deleteMode}>
               <Text style={styles.uploadBtnText}>Upload Photos</Text>
             </TouchableOpacity>
-            <Text style={styles.uploadHint}>Max 40 photos per batch.{'\n'}You can close the app while uploading.</Text>
+            <Text style={styles.uploadHint}>Max 40 photos per batch.{'\n'}{Platform.OS === 'ios' ? 'Keep the app open while uploading.' : 'You can close the app while uploading.'}</Text>
             {uploadSummary && (
               <Text style={styles.uploadSummary}>{uploadSummary}</Text>
             )}

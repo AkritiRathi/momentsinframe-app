@@ -38,8 +38,9 @@ export default function NameEntryScreen() {
             router.replace('/(auth)/home');
           },
         },
-        { text: 'Cancel', style: 'cancel' },
-      ]
+        { text: 'Go back', style: 'cancel' },
+      ],
+      `${firstName.trim()} ${lastName.trim()}\n+91 ${mobile.trim()}`
     );
   }
 

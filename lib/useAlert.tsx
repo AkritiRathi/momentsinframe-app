@@ -11,14 +11,15 @@ type AlertButton = {
 type AlertConfig = {
   title: string;
   message?: string;
+  detail?: string;
   buttons: AlertButton[];
 };
 
 export function useAlert() {
   const [config, setConfig] = useState<AlertConfig | null>(null);
 
-  function showAlert(title: string, message?: string, buttons: AlertButton[] = [{ text: 'OK' }]) {
-    setConfig({ title, message, buttons });
+  function showAlert(title: string, message?: string, buttons: AlertButton[] = [{ text: 'OK' }], detail?: string) {
+    setConfig({ title, message, detail, buttons });
   }
 
   const alertOverlay = config ? (() => {
@@ -28,6 +29,11 @@ export function useAlert() {
         <View style={alertStyles.card}>
           <Text style={alertStyles.title}>{config.title}</Text>
           {config.message ? <Text style={alertStyles.message}>{config.message}</Text> : null}
+          {config.detail ? (
+            <View style={alertStyles.detailCard}>
+              <Text style={alertStyles.detailText}>{config.detail}</Text>
+            </View>
+          ) : null}
           <View style={alertStyles.buttons}>
             {config.buttons.map((btn, i) => (
               <TouchableOpacity
@@ -73,4 +79,6 @@ export const alertStyles = StyleSheet.create({
   btnPrimaryText: { color: Colors.background },
   btnCancelText: { color: Colors.textMuted, fontWeight: '400' },
   btnDestructiveText: { color: Colors.danger, fontWeight: '700' },
+  detailCard: { backgroundColor: '#111', borderRadius: 12, padding: 14, marginBottom: 16 },
+  detailText: { fontSize: 15, fontWeight: '600', color: Colors.white, textAlign: 'center', lineHeight: 22 },
 });

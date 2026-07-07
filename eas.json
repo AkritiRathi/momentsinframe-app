@@ -16,6 +16,16 @@
     },
     "production": {
       "autoIncrement": true
+    },
+    "testflight": {
+      "distribution": "store",
+      "channel": "preview",
+      "ios": {
+        "simulator": false
+      },
+      "env": {
+        "NPM_CONFIG_LEGACY_PEER_DEPS": "true"
+      }
     }
   },
   "submit": {

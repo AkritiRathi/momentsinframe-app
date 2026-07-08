@@ -5,7 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
-import { joinEvent, joinEventUser } from '../../lib/api';
+import { joinEvent, joinEventUser, checkAdminStatus } from '../../lib/api';
 import { saveLastEventCode, getLastEventCode, getDeviceId, saveEventUserId, getUserProfile } from '../../lib/storage';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -40,14 +40,22 @@ export default function JoinEventScreen() {
         ]);
       } else {
         await saveLastEventCode(joinCode);
+        const profile = await getUserProfile();
+        // Check if this user is organiser or co-admin for this event
+        let isAdmin = false;
+        let adminPhone = '';
+        if (profile?.mobile) {
+          const adminCheck = await checkAdminStatus(result.event.slug, profile.mobile);
+          isAdmin = adminCheck.isAdmin ?? false;
+          if (isAdmin) adminPhone = profile.mobile;
+        }
         // Register user identity in background — don't block navigation
-        getUserProfile().then(async profile => {
-          if (profile) {
-            const deviceId = await getDeviceId();
+        if (profile) {
+          getDeviceId().then(async deviceId => {
             const userResult = await joinEventUser(result.event.slug, `${profile.firstName} ${profile.lastName}`, profile.mobile, deviceId);
             if (userResult.eventUserId) await saveEventUserId(userResult.eventUserId);
-          }
-        });
+          });
+        }
         router.replace({
           pathname: '/event',
           params: {
@@ -55,8 +63,9 @@ export default function JoinEventScreen() {
             name: result.event.name,
             expiresAt: result.event.expires_at,
             createdAt: result.event.created_at ?? new Date().toISOString(),
-            isAdmin: 'false',
+            isAdmin: isAdmin ? 'true' : 'false',
             adminPassword: '',
+            adminPhone,
           },
         });
       }

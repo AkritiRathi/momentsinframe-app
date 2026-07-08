@@ -92,8 +92,14 @@ export async function processUpload(eventSlug: string, stagingKey: string, origi
   return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId });
 }
 
-export async function deletePhotos(slug: string, photoIds: string[], adminPassword: string, uploaderMobile?: string, eventUserId?: string, deviceId?: string) {
-  const body = adminPassword
+export async function checkAdminStatus(slug: string, phone: string): Promise<{ isAdmin: boolean; role?: string }> {
+  return post(`/api/native/events/${slug}/check-admin`, { phone });
+}
+
+export async function deletePhotos(slug: string, photoIds: string[], adminPassword: string, uploaderMobile?: string, eventUserId?: string, deviceId?: string, adminPhone?: string) {
+  const body = adminPhone
+    ? { photoIds, adminPhone }
+    : adminPassword
     ? { photoIds, adminPassword }
     : { photoIds, uploaderMobile, eventUserId, deviceId };
   return del(`/api/native/events/${slug}/photos`, body);

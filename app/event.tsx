@@ -774,7 +774,7 @@ export default function EventScreen() {
     if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
     else if (mainHeaderY.current !== null && y >= mainHeaderY.current) next = 'main';
     setStickySection(prev => prev === next ? prev : next);
-  }, [selectMode]);
+  }, [selectMode, deleteMode]);
 
   async function handleUpload(source: 'camera' | 'gallery', retryAssets?: ImagePicker.ImagePickerAsset[]) {
     let assets: ImagePicker.ImagePickerAsset[];

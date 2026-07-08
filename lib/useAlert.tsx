@@ -62,7 +62,7 @@ export function useAlert() {
     );
   })() : null;
 
-  return { showAlert, alertOverlay };
+  return { showAlert, alertOverlay, isAlertVisible: config !== null };
 }
 
 export const alertStyles = StyleSheet.create({

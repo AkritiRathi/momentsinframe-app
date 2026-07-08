@@ -478,7 +478,7 @@ export default function EventScreen() {
   const [failedResults, setFailedResults] = useState<UploadFileResult[]>([]);
   const [failedViewerVisible, setFailedViewerVisible] = useState(false);
   const failedAssetsRef = useRef<ImagePicker.ImagePickerAsset[]>([]);
-  const { showAlert, alertOverlay } = useAlert();
+  const { showAlert, alertOverlay, isAlertVisible } = useAlert();
 
   // Notifications panel
   const [notificationsVisible, setNotificationsVisible] = useState(false);
@@ -555,6 +555,7 @@ export default function EventScreen() {
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (isAlertVisible) return true;
       if (uploading) {
         showAlert(
           'Cancel upload?',
@@ -585,7 +586,7 @@ export default function EventScreen() {
       return true;
     });
     return () => sub.remove();
-  }, [selectMode, deleteMode, uploading, bgUploading]);
+  }, [selectMode, deleteMode, uploading, bgUploading, isAlertVisible]);
 
   useEffect(() => {
     const JPG_LIMIT = 25;

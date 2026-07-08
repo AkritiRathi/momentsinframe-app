@@ -459,10 +459,6 @@ export default function EventScreen() {
   const [showDatePickerModal, setShowDatePickerModal] = useState(false);
   const [datePickerDate, setDatePickerDate] = useState(new Date());
 
-  // Admin settings
-  const [adminSettingsVisible, setAdminSettingsVisible] = useState(false);
-  const [adminDropPos, setAdminDropPos] = useState({ top: 0, right: 0 });
-  const adminGearRef = useRef<any>(null);
   const [folderSetupVisible, setFolderSetupVisible] = useState(false);
   const [folderNameDraft, setFolderNameDraft] = useState('MomentsInFrame');
   const folderSetupResolveRef = useRef<((name: string | null) => void) | null>(null);
@@ -1622,17 +1618,7 @@ export default function EventScreen() {
               </TouchableOpacity>
               <View style={styles.adminRow}>
                 {isAdmin && (
-                  <>
-                    <Text style={styles.adminBadge}>Admin</Text>
-                    <TouchableOpacity ref={adminGearRef} style={styles.adminGearBtn} onPress={() => {
-                      adminGearRef.current?.measure((_x: number, _y: number, width: number, height: number, pageX: number, pageY: number) => {
-                        setAdminDropPos({ top: pageY + height + 4, right: Dimensions.get('window').width - pageX - width });
-                        setAdminSettingsVisible(true);
-                      });
-                    }}>
-                      <Text style={styles.adminGearIcon}>⚙️</Text>
-                    </TouchableOpacity>
-                  </>
+                  <Text style={styles.adminBadge}>Admin</Text>
                 )}
                 <TouchableOpacity style={styles.notifGearBtn} onPress={async () => {
                   const notifs = await getUploadNotifications(slug);
@@ -2335,12 +2321,6 @@ const styles = StyleSheet.create({
   backBtn: {},
   adminRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   adminBadge: { fontSize: 15, fontWeight: '700', color: Colors.accent, letterSpacing: 0.5 },
-  adminGearBtn: { padding: 4 },
-  adminGearIcon: { fontSize: 20 },
-  adminDropdownBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
-  adminDropdown: { backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 0.5, borderColor: '#333', overflow: 'hidden' },
-  adminDropdownRow: { paddingHorizontal: 16, paddingVertical: 14 },
-  adminDropdownText: { fontSize: 14, fontWeight: '600', color: Colors.white },
   cpOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', padding: 32 },
   cpBox: { backgroundColor: '#1C1C1C', borderRadius: 16, padding: 24, width: '100%', borderWidth: 0.5, borderColor: '#333' },
   cpTitle: { fontSize: 15, fontWeight: '700', color: Colors.white, marginBottom: 16 },

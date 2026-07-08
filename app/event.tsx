@@ -206,6 +206,9 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
                 </Pressable>
               </View>
             )}
+            {deleteMode && (
+              <Text style={styles.deleteNote}>You can only delete photos that you have uploaded</Text>
+            )}
           </View>
         )}
       </View>
@@ -761,7 +764,7 @@ export default function EventScreen() {
   }
 
   const handleScroll = useCallback((e: any) => {
-    if (!selectMode) return;
+    if (!selectMode && !deleteMode) return;
     const y = e.nativeEvent.contentOffset.y;
 
     const newSelectBarSticky = selectBarYRef.current !== null && y >= selectBarYRef.current;
@@ -2131,7 +2134,7 @@ export default function EventScreen() {
             />
           }
         />
-        {selectMode && selectBarSticky && (
+        {(selectMode || deleteMode) && selectBarSticky && (
           <View style={styles.stickySelectBar}>
             {renderSelectBar()}
           </View>
@@ -2485,6 +2488,7 @@ const styles = StyleSheet.create({
   sectionSub: { fontSize: 13, color: '#666' },
   sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
   sectionSelectRow: { marginTop: 6, gap: 6 },
+  deleteNote: { fontSize: 12, color: '#888', fontStyle: 'italic', marginTop: 2 },
   rangeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   rangeLabel: { fontSize: 12, color: '#666' },
   rangeInput: { width: 52, borderWidth: 1, borderColor: '#333', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4, fontSize: 12, color: Colors.white, backgroundColor: '#1a1a1a', textAlign: 'center' },

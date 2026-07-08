@@ -2125,6 +2125,7 @@ export default function EventScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={async () => {
+                exitSelectMode();
                 setRefreshing(true);
                 setNewlyUploadedIds(new Set());
                 setUploadSummary(null);

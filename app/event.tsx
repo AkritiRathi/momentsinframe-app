@@ -20,7 +20,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
-  getPhotoDownloadUrl, prepareZip, changeEventAdminPassword,
+  getPhotoDownloadUrl, prepareZip,
 } from '../lib/api';
 import {
   getUserProfile, getEventUserId, getDeviceId,
@@ -463,12 +463,6 @@ export default function EventScreen() {
   const [adminSettingsVisible, setAdminSettingsVisible] = useState(false);
   const [adminDropPos, setAdminDropPos] = useState({ top: 0, right: 0 });
   const adminGearRef = useRef<any>(null);
-  const [changePasswordVisible, setChangePasswordVisible] = useState(false);
-  const [cpNew, setCpNew] = useState('');
-  const [cpConfirm, setCpConfirm] = useState('');
-  const [cpShowNew, setCpShowNew] = useState(false);
-  const [cpShowConfirm, setCpShowConfirm] = useState(false);
-  const [cpError, setCpError] = useState('');
   const [folderSetupVisible, setFolderSetupVisible] = useState(false);
   const [folderNameDraft, setFolderNameDraft] = useState('MomentsInFrame');
   const folderSetupResolveRef = useRef<((name: string | null) => void) | null>(null);
@@ -485,25 +479,6 @@ export default function EventScreen() {
   const [notifications, setNotifications] = useState<UploadNotification[]>([]);
   const [hasUnread, setHasUnread] = useState(false);
 
-  async function submitChangePassword() {
-    setCpError('');
-    if (!cpNew.trim() || !cpConfirm.trim()) {
-      setCpError('Please fill in both fields.');
-      return;
-    }
-    if (cpNew.trim() !== cpConfirm.trim()) {
-      setCpError('Passwords do not match.');
-      return;
-    }
-    const result = await changeEventAdminPassword(slug, params.adminPassword, cpNew.trim());
-    if (result.error) {
-      setCpError(result.error);
-    } else {
-      setChangePasswordVisible(false);
-      setCpNew(''); setCpConfirm(''); setCpError('');
-      showAlert('Done', 'Password updated successfully.');
-    }
-  }
   const [downloadingBulk, setDownloadingBulk] = useState(false);
   const [downloadMode, setDownloadMode] = useState<'jpg' | 'zip'>('jpg');
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
@@ -2346,72 +2321,6 @@ export default function EventScreen() {
         </SafeAreaView>
       </Modal>
 
-      {/* Admin settings dropdown */}
-      {adminSettingsVisible && (
-        <Modal transparent animationType="fade" onRequestClose={() => setAdminSettingsVisible(false)}>
-          <TouchableOpacity style={styles.adminDropdownBackdrop} activeOpacity={1} onPress={() => setAdminSettingsVisible(false)}>
-            <View style={[styles.adminDropdown, { position: 'absolute', top: adminDropPos.top, right: adminDropPos.right }]}>
-              <TouchableOpacity style={styles.adminDropdownRow} onPress={() => {
-                setAdminSettingsVisible(false);
-                setCpNew('');
-                setCpConfirm('');
-                setChangePasswordVisible(true);
-              }}>
-                <Text style={styles.adminDropdownText}>Change Password</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </Modal>
-      )}
-
-      {/* Change password modal */}
-      {changePasswordVisible && (
-        <Modal transparent animationType="fade" onRequestClose={() => setChangePasswordVisible(false)}>
-          <View style={styles.cpOverlay}>
-            <View style={styles.cpBox}>
-              <Text style={styles.cpTitle}>Change Admin Password</Text>
-              <View style={styles.cpRow}>
-                <TextInput
-                  style={styles.cpInput}
-                  value={cpNew}
-                  onChangeText={setCpNew}
-                  placeholder="New password"
-                  placeholderTextColor="#555"
-                  secureTextEntry={!cpShowNew}
-                  autoFocus
-                  autoCapitalize="none"
-                />
-                <TouchableOpacity style={styles.cpEye} onPress={() => setCpShowNew(!cpShowNew)}>
-                  <Text>{cpShowNew ? '🙈' : '👁️'}</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={styles.cpRow}>
-                <TextInput
-                  style={styles.cpInput}
-                  value={cpConfirm}
-                  onChangeText={setCpConfirm}
-                  placeholder="Confirm new password"
-                  placeholderTextColor="#555"
-                  secureTextEntry={!cpShowConfirm}
-                  autoCapitalize="none"
-                />
-                <TouchableOpacity style={styles.cpEye} onPress={() => setCpShowConfirm(!cpShowConfirm)}>
-                  <Text>{cpShowConfirm ? '🙈' : '👁️'}</Text>
-                </TouchableOpacity>
-              </View>
-              {cpError ? <Text style={styles.cpError}>{cpError}</Text> : null}
-              <View style={styles.cpBtns}>
-                <TouchableOpacity style={styles.cpBtnPrimary} onPress={submitChangePassword}>
-                  <Text style={styles.cpBtnPrimaryText}>Save</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.cpBtnCancel} onPress={() => { setChangePasswordVisible(false); setCpError(''); }}>
-                  <Text style={styles.cpBtnCancelText}>Cancel</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </Modal>
-      )}
 
     </SafeAreaView>
   );

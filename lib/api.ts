@@ -48,6 +48,14 @@ export async function organiserChangePassword(phone: string, currentPassword: st
   return post('/api/native/organiser/change-password', { phone, currentPassword, newPassword });
 }
 
+export async function organiserExists(phone: string): Promise<{ exists: boolean; error?: string }> {
+  return post('/api/native/organiser/exists', { phone });
+}
+
+export async function organiserResetPassword(phone: string, newPassword: string) {
+  return post('/api/native/organiser/reset-password', { phone, newPassword });
+}
+
 export async function listEvents(organiserPhone: string, organiserPassword: string) {
   return get('/api/native/events', {
     'x-organiser-phone': organiserPhone,

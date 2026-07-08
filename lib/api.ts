@@ -35,44 +35,44 @@ export async function joinEvent(joinCode: string) {
   return post('/api/native/events/join', { joinCode });
 }
 
-export async function eventAdminLogin(slug: string, password: string) {
-  return post(`/api/native/events/${slug}/admin-login`, { password });
+// Organiser API
+export async function organiserSetup(phone: string, name: string, password: string) {
+  return post('/api/native/organiser/setup', { phone, name, password });
 }
 
-export async function masterLogin(password: string) {
-  return post('/api/native/master/login', { password });
+export async function organiserLogin(phone: string, password: string): Promise<{ success?: boolean; name?: string; error?: string }> {
+  return post('/api/native/organiser/login', { phone, password });
 }
 
-export async function verifyMasterPassword(password: string) {
-  return post('/api/native/master/verify-password', { password });
+export async function organiserChangePassword(phone: string, currentPassword: string, newPassword: string) {
+  return post('/api/native/organiser/change-password', { phone, currentPassword, newPassword });
 }
 
-export async function changeMasterPassword(currentPassword: string, newPassword: string) {
-  return post('/api/native/master/change-password', { currentPassword, newPassword });
+export async function listEvents(organiserPhone: string, organiserPassword: string) {
+  return get('/api/native/events', {
+    'x-organiser-phone': organiserPhone,
+    'x-organiser-password': organiserPassword,
+  });
 }
 
-export async function listEvents(masterPassword: string) {
-  return get('/api/native/events', { 'x-master-password': masterPassword });
+export async function createEvent(organiserPhone: string, organiserPassword: string, name: string, expiresAt: string, isClosed?: boolean) {
+  return post('/api/native/events', { organiserPhone, organiserPassword, name, expiresAt, isClosed });
 }
 
-export async function createEvent(masterPassword: string, name: string, expiresAt: string) {
-  return post('/api/native/events', { masterPassword, name, expiresAt });
+export async function extendEvent(slug: string, organiserPhone: string, organiserPassword: string, newExpiresAt: string) {
+  return post(`/api/native/events/${slug}/extend`, { organiserPhone, organiserPassword, newExpiresAt });
 }
 
-export async function extendEvent(slug: string, masterPassword: string, newExpiresAt: string) {
-  return post(`/api/native/events/${slug}/extend`, { masterPassword, newExpiresAt });
-}
-
-export async function changeEventAdminPassword(slug: string, currentPassword: string, newPassword: string) {
-  return post(`/api/native/events/${slug}/change-admin-password`, { currentPassword, newPassword });
-}
-
-export async function deleteEvent(slug: string, masterPassword: string) {
-  return del(`/api/native/events/${slug}`, { masterPassword });
+export async function deleteEvent(slug: string, organiserPhone: string, organiserPassword: string) {
+  return del(`/api/native/events/${slug}`, { organiserPhone, organiserPassword });
 }
 
 export async function joinEventUser(slug: string, name: string, mobile: string, deviceId: string) {
   return post(`/api/native/events/${slug}/join-user`, { name, mobile, deviceId });
+}
+
+export async function checkAdminStatus(slug: string, phone: string): Promise<{ isAdmin: boolean; role?: string }> {
+  return post(`/api/native/events/${slug}/check-admin`, { phone });
 }
 
 // Photo endpoints
@@ -90,10 +90,6 @@ export async function getUploadUrl(eventSlug: string, filename: string, contentT
 
 export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, uploaderMobile?: string, uploaderName?: string, eventUserId?: string) {
   return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId });
-}
-
-export async function checkAdminStatus(slug: string, phone: string): Promise<{ isAdmin: boolean; role?: string }> {
-  return post(`/api/native/events/${slug}/check-admin`, { phone });
 }
 
 export async function deletePhotos(slug: string, photoIds: string[], adminPassword: string, uploaderMobile?: string, eventUserId?: string, deviceId?: string, adminPhone?: string) {

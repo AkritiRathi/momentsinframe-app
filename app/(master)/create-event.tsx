@@ -6,7 +6,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { getMasterPassword } from '../../lib/auth';
+import { getOrganiserPassword } from '../../lib/auth';
+import { getUserProfile } from '../../lib/storage';
 import { createEvent } from '../../lib/api';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -49,14 +50,15 @@ export default function CreateEventScreen() {
 
     setLoading(true);
     try {
-      const masterPassword = await getMasterPassword();
-      if (!masterPassword) {
+      const profile = await getUserProfile();
+      const organiserPassword = await getOrganiserPassword();
+      if (!profile || !organiserPassword) {
         showAlert('Session expired', 'Please log in again.');
         router.replace('/(auth)/home');
         return;
       }
 
-      const result = await createEvent(masterPassword, name.trim(), toAPIFormat(expiryDate));
+      const result = await createEvent(profile.mobile, organiserPassword, name.trim(), toAPIFormat(expiryDate));
       if (result.error) {
         showAlert('Error', result.error);
         return;
@@ -117,7 +119,7 @@ export default function CreateEventScreen() {
 
             <View style={styles.noteCard}>
               <Text style={styles.noteIcon}>ℹ️</Text>
-              <Text style={styles.noteText}>Event code and admin password will be auto-generated after creation.</Text>
+              <Text style={styles.noteText}>An event code will be auto-generated. Share it with guests so they can join.</Text>
             </View>
 
             <View style={styles.divider} />

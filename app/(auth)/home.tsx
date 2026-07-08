@@ -122,27 +122,23 @@ export default function HomeScreen() {
             <Text style={styles.iconText}>📷</Text>
           </View>
           <View style={styles.cardBody}>
-            <Text style={styles.cardTitleDark}>Join An Event</Text>
-            <Text style={styles.cardDescDark}>Scan a QR code or enter an event code to view and share photos.</Text>
+            <Text style={styles.cardTitleDark}>Join As Guest</Text>
+            <Text style={styles.cardDescDark}>Enter an event code to view and share photos.</Text>
           </View>
           <Text style={styles.arrowDark}>›</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.cardSecondary} onPress={() => router.push('/(auth)/event-admin-login')}>
+        <TouchableOpacity style={styles.cardSecondary} onPress={() => router.push('/(auth)/organiser-login')}>
           <View style={[styles.iconWrap, styles.iconSecondary]}>
-            <Text style={styles.iconText}>🔐</Text>
+            <Text style={styles.iconText}>🎬</Text>
           </View>
           <View style={styles.cardBody}>
-            <Text style={styles.cardTitleLight}>Event Admin Login</Text>
-            <Text style={styles.cardDescLight}>Manage an existing event with your event admin password.</Text>
+            <Text style={styles.cardTitleLight}>I'm an Organiser</Text>
+            <Text style={styles.cardDescLight}>Create and manage your own events.</Text>
           </View>
           <Text style={styles.arrowLight}>›</Text>
         </TouchableOpacity>
       </View>
-
-      <TouchableOpacity style={styles.masterLink} onPress={() => router.push('/(auth)/master-admin-login')}>
-        <Text style={styles.masterLinkText}>Master admin →</Text>
-      </TouchableOpacity>
 
       {alertOverlay}
     </SafeAreaView>
@@ -152,7 +148,6 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
 
-  // Header
   header: {
     paddingHorizontal: 24,
     paddingTop: 16,
@@ -169,15 +164,12 @@ const styles = StyleSheet.create({
   appName: { fontSize: 18, fontWeight: '800', color: Colors.white, letterSpacing: 0.3 },
   settingsBtn: { padding: 4 },
   settingsIcon: { fontSize: 20 },
-  greeting: { fontSize: 12, color: Colors.textMuted, marginBottom: 2 },
   heading: { ...Typography.heading, color: Colors.white },
   accent: { color: Colors.accent },
 
-  // Body
   body: { flex: 1, padding: 24 },
   sectionLabel: { ...Typography.inputLabel, color: Colors.accent, marginBottom: 16 },
 
-  // Cards
   cardPrimary: {
     backgroundColor: Colors.accent,
     borderRadius: 16,
@@ -210,20 +202,7 @@ const styles = StyleSheet.create({
   arrowDark: { fontSize: 24, color: 'rgba(0,0,0,0.4)' },
   arrowLight: { fontSize: 24, color: '#333' },
 
-  // Master admin link
-  masterLink: {
-    alignItems: 'center',
-    paddingVertical: 20,
-    borderTopWidth: 0.5,
-    borderTopColor: '#1A1A1A',
-  },
-  masterLinkText: { ...Typography.buttonText, color: '#666' },
-
-  // Settings modal
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
   settingsSheet: {
     backgroundColor: '#1C1C1C',
     borderRadius: 12,

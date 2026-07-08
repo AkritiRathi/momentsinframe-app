@@ -1,23 +1,23 @@
 import * as SecureStore from 'expo-secure-store';
 
-const MASTER_SESSION_KEY = 'master_admin_session';
-const MASTER_PASSWORD_KEY = 'master_admin_password';
+const ORGANISER_SESSION_KEY = 'organiser_session';
+const ORGANISER_PASSWORD_KEY = 'organiser_password';
 
-export async function saveMasterSession(password: string): Promise<void> {
-  await SecureStore.setItemAsync(MASTER_SESSION_KEY, 'true');
-  await SecureStore.setItemAsync(MASTER_PASSWORD_KEY, password);
+export async function saveOrganiserSession(password: string): Promise<void> {
+  await SecureStore.setItemAsync(ORGANISER_SESSION_KEY, 'true');
+  await SecureStore.setItemAsync(ORGANISER_PASSWORD_KEY, password);
 }
 
-export async function isMasterAdmin(): Promise<boolean> {
-  const val = await SecureStore.getItemAsync(MASTER_SESSION_KEY);
+export async function isOrganiser(): Promise<boolean> {
+  const val = await SecureStore.getItemAsync(ORGANISER_SESSION_KEY);
   return val === 'true';
 }
 
-export async function getMasterPassword(): Promise<string | null> {
-  return SecureStore.getItemAsync(MASTER_PASSWORD_KEY);
+export async function getOrganiserPassword(): Promise<string | null> {
+  return SecureStore.getItemAsync(ORGANISER_PASSWORD_KEY);
 }
 
-export async function clearMasterSession(): Promise<void> {
-  await SecureStore.deleteItemAsync(MASTER_SESSION_KEY);
-  await SecureStore.deleteItemAsync(MASTER_PASSWORD_KEY);
+export async function clearOrganiserSession(): Promise<void> {
+  await SecureStore.deleteItemAsync(ORGANISER_SESSION_KEY);
+  await SecureStore.deleteItemAsync(ORGANISER_PASSWORD_KEY);
 }

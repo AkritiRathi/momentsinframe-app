@@ -1,12 +1,13 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  FlatList, RefreshControl, ActivityIndicator, Alert, BackHandler, TextInput, Dimensions,
+  FlatList, RefreshControl, ActivityIndicator, BackHandler, TextInput, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { getMasterPassword, clearMasterSession, saveMasterSession } from '../../lib/auth';
-import { listEvents, changeMasterPassword } from '../../lib/api';
+import { getOrganiserPassword, saveOrganiserSession, clearOrganiserSession } from '../../lib/auth';
+import { getUserProfile } from '../../lib/storage';
+import { listEvents, organiserChangePassword } from '../../lib/api';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
@@ -18,7 +19,8 @@ type Event = {
   created_at: string;
   expires_at: string;
   join_code: string;
-  event_admin_password: string;
+  is_closed: boolean;
+  allow_guest_delete: boolean;
   photo_count: number;
 };
 
@@ -43,29 +45,35 @@ export default function DashboardScreen() {
   const [cpShowConfirm, setCpShowConfirm] = useState(false);
   const [cpError, setCpError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
-  const [masterPassword, setMasterPassword] = useState<string | null>(null);
+  const [organiserPhone, setOrganiserPhone] = useState<string | null>(null);
+  const [organiserPassword, setOrganiserPassword] = useState<string | null>(null);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
     return () => sub.remove();
   }, []);
 
-  const load = useCallback(async (mp?: string) => {
-    const pw = mp ?? masterPassword;
-    if (!pw) return;
+  const load = useCallback(async (phone?: string, pw?: string) => {
+    const p = phone ?? organiserPhone;
+    const pass = pw ?? organiserPassword;
+    if (!p || !pass) return;
     try {
-      const result = await listEvents(pw);
+      const result = await listEvents(p, pass);
       if (result.events) setEvents(result.events);
     } catch {
       // silently fail on refresh
     }
-  }, [masterPassword]);
+  }, [organiserPhone, organiserPassword]);
 
   useEffect(() => {
     (async () => {
-      const pw = await getMasterPassword();
-      setMasterPassword(pw);
-      if (pw) await load(pw);
+      const profile = await getUserProfile();
+      const pw = await getOrganiserPassword();
+      if (profile && pw) {
+        setOrganiserPhone(profile.mobile);
+        setOrganiserPassword(pw);
+        await load(profile.mobile, pw);
+      }
       setLoading(false);
     })();
   }, []);
@@ -77,7 +85,7 @@ export default function DashboardScreen() {
   };
 
   async function handleLogout() {
-    await clearMasterSession();
+    await clearOrganiserSession();
     router.replace('/(auth)/home');
   }
 
@@ -95,14 +103,16 @@ export default function DashboardScreen() {
       setCpError('Passwords do not match.');
       return;
     }
-    const result = await changeMasterPassword(cpCurrent.trim(), cpNew.trim());
+    if (!organiserPhone) return;
+    const result = await organiserChangePassword(organiserPhone, cpCurrent.trim(), cpNew.trim());
     if (result.error) {
       setCpError(result.error);
     } else {
-      await saveMasterSession(cpNew.trim());
+      await saveOrganiserSession(cpNew.trim());
+      setOrganiserPassword(cpNew.trim());
       setCpVisible(false);
       setCpCurrent(''); setCpNew(''); setCpConfirm(''); setCpError('');
-      showAlert('Done', 'Master password updated successfully.');
+      showAlert('Done', 'Organiser password updated successfully.');
     }
   }
 
@@ -114,10 +124,12 @@ export default function DashboardScreen() {
         name: item.name,
         slug: item.slug,
         join_code: item.join_code,
-        event_admin_password: item.event_admin_password,
         created_at: item.created_at,
         expires_at: item.expires_at,
         photo_count: String(item.photo_count),
+        is_closed: item.is_closed ? 'true' : 'false',
+        allow_guest_delete: item.allow_guest_delete ? 'true' : 'false',
+        organiserPhone: organiserPhone ?? '',
       },
     });
   }
@@ -125,7 +137,10 @@ export default function DashboardScreen() {
   function renderEvent({ item }: { item: Event }) {
     return (
       <TouchableOpacity style={styles.card} onPress={() => openEvent(item)} activeOpacity={0.75}>
-        <Text style={styles.eventName}>{item.name}</Text>
+        <View style={styles.cardHeader}>
+          <Text style={styles.eventName}>{item.name}</Text>
+          {item.is_closed && <Text style={styles.closedBadge}>CLOSED</Text>}
+        </View>
         <View style={styles.metaRow}>
           <View style={styles.metaItem}>
             <Text style={styles.metaLabel}>EXPIRES</Text>
@@ -133,7 +148,11 @@ export default function DashboardScreen() {
           </View>
           <View style={styles.metaItem}>
             <Text style={styles.metaLabel}>PHOTOS</Text>
-            <Text style={styles.metaValue}>{item.photo_count} photos</Text>
+            <Text style={styles.metaValue}>{item.photo_count}</Text>
+          </View>
+          <View style={styles.metaItem}>
+            <Text style={styles.metaLabel}>CODE</Text>
+            <Text style={styles.metaValue}>{item.join_code}</Text>
           </View>
         </View>
         <View style={styles.cardFooter}>
@@ -146,7 +165,8 @@ export default function DashboardScreen() {
               expiresAt: item.expires_at,
               createdAt: item.created_at,
               isAdmin: 'true',
-              adminPassword: item.event_admin_password,
+              adminPassword: '',
+              adminPhone: organiserPhone ?? '',
             },
           })}>
             <Text style={styles.openEventText}>Open Event →</Text>
@@ -168,8 +188,8 @@ export default function DashboardScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.headerTitle}>All Events</Text>
-          <Text style={styles.headerSub}>Master Admin · {events.length} event{events.length !== 1 ? 's' : ''}</Text>
+          <Text style={styles.headerTitle}>My Events</Text>
+          <Text style={styles.headerSub}>{events.length} event{events.length !== 1 ? 's' : ''}</Text>
         </View>
         <View style={styles.headerRight}>
           <TouchableOpacity style={styles.newBtn} onPress={() => router.push('/(master)/create-event')}>
@@ -200,7 +220,7 @@ export default function DashboardScreen() {
       />
 
       <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-        <Text style={styles.logoutText}>Logout Master Admin</Text>
+        <Text style={styles.logoutText}>Switch to Guest →</Text>
       </TouchableOpacity>
 
       {/* Settings dropdown */}
@@ -225,7 +245,7 @@ export default function DashboardScreen() {
         <Modal transparent animationType="fade" onRequestClose={() => setCpVisible(false)}>
           <View style={styles.cpOverlay}>
             <View style={styles.cpBox}>
-              <Text style={styles.cpTitle}>Change Master Password</Text>
+              <Text style={styles.cpTitle}>Change Organiser Password</Text>
               <View style={styles.cpRow}>
                 <TextInput style={styles.cpInput} value={cpCurrent} onChangeText={setCpCurrent}
                   placeholder="Current password" placeholderTextColor="#555"
@@ -288,7 +308,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.card, borderWidth: 0.5, borderColor: Colors.cardBorder,
     borderRadius: 16, padding: 14,
   },
-  eventName: { fontSize: 16, fontWeight: '800', color: Colors.white, marginBottom: 12 },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  eventName: { fontSize: 16, fontWeight: '800', color: Colors.white, flex: 1 },
+  closedBadge: { fontSize: 10, fontWeight: '800', color: '#E53935', borderWidth: 1, borderColor: '#E53935', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
   metaRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   metaItem: { flex: 1, backgroundColor: '#141414', borderRadius: 8, padding: 10 },
   metaLabel: { ...Typography.inputLabel, color: '#555', marginBottom: 3 },

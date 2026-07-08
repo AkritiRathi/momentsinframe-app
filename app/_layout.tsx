@@ -5,7 +5,6 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as SplashScreen from 'expo-splash-screen';
 import { getUserProfile } from '../lib/storage';
-import { isMasterAdmin, clearMasterSession } from '../lib/auth';
 import * as Updates from 'expo-updates';
 
 // Keep native splash visible until we finish the update check
@@ -24,7 +23,6 @@ export default function RootLayout() {
   // On launch, check for update. Block the app until we know.
   useEffect(() => {
     (async () => {
-      await clearMasterSession();
       if (__DEV__) {
         setUpdateStage('ready');
         SplashScreen.hideAsync();
@@ -82,10 +80,9 @@ export default function RootLayout() {
       setHasProfile(profileExists);
 
       const currentScreen = segments[1] as string | undefined;
-      const inMaster = segments[0] === '(master)';
       const inAuth = segments[0] === '(auth)';
+      const inMaster = segments[0] === '(master)';
       const inEvent = segments[0] === 'event';
-      const master = await isMasterAdmin();
 
       if (!profileExists) {
         if (currentScreen !== 'name-entry') {
@@ -94,20 +91,10 @@ export default function RootLayout() {
         return;
       }
 
-      // Event screen is accessible to all authenticated users (guests, event admins, master admins)
-      if (inEvent) return;
+      // Event screen and organiser screens are accessible to authenticated users
+      if (inEvent || inMaster) return;
 
-      if (master && !inMaster) {
-        router.replace('/(master)/dashboard');
-        return;
-      }
-
-      if (!master && inMaster) {
-        router.replace('/(auth)/home');
-        return;
-      }
-
-      if (!master && !inAuth) {
+      if (!inAuth) {
         router.replace('/(auth)/home');
       }
     })();

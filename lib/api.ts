@@ -31,10 +31,6 @@ async function postRaw(path: string, body: object): Promise<Response> {
   });
 }
 
-export async function joinEvent(joinCode: string) {
-  return post('/api/native/events/join', { joinCode });
-}
-
 // Organiser API
 export async function organiserSetup(phone: string, name: string, password: string) {
   return post('/api/native/organiser/setup', { phone, name, password });
@@ -143,4 +139,40 @@ export async function removeCoadmin(slug: string, organiserPhone: string, organi
 
 export async function lookupUsers(phones: string[]): Promise<{ registered: string[] }> {
   return post('/api/native/users/lookup', { phones });
+}
+
+// Allowed guests API
+export async function listAllowedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { phone: string; name: string | null; added_at: string }[]; error?: string }> {
+  return get(`/api/native/events/${slug}/allowed-guests`, {
+    'x-organiser-phone': organiserPhone,
+    'x-organiser-password': organiserPassword,
+  });
+}
+
+export async function addAllowedGuests(slug: string, organiserPhone: string, organiserPassword: string, guests: { phone: string; name?: string }[]) {
+  return post(`/api/native/events/${slug}/allowed-guests`, { organiserPhone, organiserPassword, guests });
+}
+
+export async function removeAllowedGuest(slug: string, organiserPhone: string, organiserPassword: string, phone: string) {
+  return del(`/api/native/events/${slug}/allowed-guests`, { organiserPhone, organiserPassword, phone });
+}
+
+export async function listJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { name: string; mobile: string }[]; error?: string }> {
+  return get(`/api/native/events/${slug}/joined-guests`, {
+    'x-organiser-phone': organiserPhone,
+    'x-organiser-password': organiserPassword,
+  });
+}
+
+export async function joinEvent(joinCode: string, phone?: string) {
+  return post('/api/native/events/join', { joinCode, phone });
+}
+
+export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean }) {
+  const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/settings`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ organiserPhone, organiserPassword, ...settings }),
+  });
+  return res.json();
 }

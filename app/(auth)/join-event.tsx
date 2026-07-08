@@ -33,14 +33,14 @@ export default function JoinEventScreen() {
     }
     setLoading(true);
     try {
-      const result = await joinEvent(joinCode);
+      const profile = await getUserProfile();
+      const result = await joinEvent(joinCode, profile?.mobile);
       if (result.error) {
         showAlert('Could not join', result.error, [
           { text: 'Try again', onPress: () => setCode('') },
         ]);
       } else {
         await saveLastEventCode(joinCode);
-        const profile = await getUserProfile();
         // Check if this user is organiser or co-admin for this event
         let isAdmin = false;
         let adminPhone = '';
@@ -49,7 +49,6 @@ export default function JoinEventScreen() {
           isAdmin = adminCheck.isAdmin ?? false;
           if (isAdmin) adminPhone = profile.mobile;
         }
-        // Register user identity in background — don't block navigation
         if (profile) {
           getDeviceId().then(async deviceId => {
             const userResult = await joinEventUser(result.event.slug, `${profile.firstName} ${profile.lastName}`, profile.mobile, deviceId);
@@ -66,6 +65,7 @@ export default function JoinEventScreen() {
             isAdmin: isAdmin ? 'true' : 'false',
             adminPassword: '',
             adminPhone,
+            allowGuestDelete: result.event.allow_guest_delete ? 'true' : 'false',
           },
         });
       }

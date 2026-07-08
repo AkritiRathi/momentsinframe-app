@@ -401,10 +401,11 @@ export default function EventScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     slug: string; name: string; expiresAt: string; createdAt: string;
-    isAdmin: string; adminPassword: string; adminPhone: string;
+    isAdmin: string; adminPassword: string; adminPhone: string; allowGuestDelete: string;
   }>();
 
   const isAdmin = params.isAdmin === 'true';
+  const allowGuestDelete = params.allowGuestDelete === 'true';
   const slug = params.slug;
 
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -1710,9 +1711,11 @@ export default function EventScreen() {
       case 'select_photos_btn':
         return (
           <View style={styles.selectPhotosRow}>
-            <TouchableOpacity style={[styles.deleteModeBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setDeleteMode(true); setSelectMode(false); } }}>
-              <Text style={styles.deleteModeBtnText}>Delete Photos</Text>
-            </TouchableOpacity>
+            {(isAdmin || allowGuestDelete) && (
+              <TouchableOpacity style={[styles.deleteModeBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setDeleteMode(true); setSelectMode(false); } }}>
+                <Text style={styles.deleteModeBtnText}>Delete Photos</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={[styles.selectPhotosBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setSelectMode(true); setDeleteMode(false); } }}>
               <Text style={styles.selectPhotosBtnText}>Download Photos</Text>
             </TouchableOpacity>

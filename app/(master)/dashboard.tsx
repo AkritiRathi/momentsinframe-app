@@ -170,6 +170,7 @@ export default function DashboardScreen() {
               isAdmin: 'true',
               adminPassword: '',
               adminPhone: organiserPhone ?? '',
+              allowGuestDelete: item.allow_guest_delete ? 'true' : 'false',
             },
           })}>
             <Text style={styles.openEventText}>Open Event →</Text>

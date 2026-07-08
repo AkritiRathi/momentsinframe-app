@@ -124,3 +124,23 @@ export async function getPhotoDownloadUrl(photoId: string, adminPassword?: strin
 export async function prepareZip(slug: string, photoIds: string[]): Promise<{ zipUrl: string; filename: string; error?: string }> {
   return post(`/api/native/events/${slug}/prepare-zip`, { photoIds });
 }
+
+// Co-admin API
+export async function listCoadmins(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ coadmins?: { phone: string; name: string | null; added_at: string }[]; error?: string }> {
+  return get(`/api/native/events/${slug}/coadmins`, {
+    'x-organiser-phone': organiserPhone,
+    'x-organiser-password': organiserPassword,
+  });
+}
+
+export async function addCoadmin(slug: string, organiserPhone: string, organiserPassword: string, phone: string, name?: string) {
+  return post(`/api/native/events/${slug}/coadmins`, { organiserPhone, organiserPassword, phone, name });
+}
+
+export async function removeCoadmin(slug: string, organiserPhone: string, organiserPassword: string, phone: string) {
+  return del(`/api/native/events/${slug}/coadmins`, { organiserPhone, organiserPassword, phone });
+}
+
+export async function lookupUsers(phones: string[]): Promise<{ registered: string[] }> {
+  return post('/api/native/users/lookup', { phones });
+}

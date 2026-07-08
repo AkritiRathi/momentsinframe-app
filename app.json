@@ -45,7 +45,8 @@
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
-        "android.permission.RECEIVE_BOOT_COMPLETED"
+        "android.permission.RECEIVE_BOOT_COMPLETED",
+        "android.permission.READ_CONTACTS"
       ]
     },
     "web": {
@@ -62,6 +63,12 @@
           "photosPermission": "Allow MomentsInFrame to save photos to your gallery.",
           "savePhotosPermission": "Allow MomentsInFrame to save photos to your gallery.",
           "isAccessMediaLocationEnabled": true
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow MomentsInFrame to access your contacts to add co-admins."
         }
       ],
       [

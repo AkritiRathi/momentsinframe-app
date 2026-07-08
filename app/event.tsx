@@ -972,7 +972,7 @@ export default function EventScreen() {
     const alertButtons: { text: string; onPress?: () => void }[] = [];
     if (dupsAndUpgrades.length > 0) {
       alertButtons.push({
-        text: 'View duplicates',
+        text: 'View Photos',
         onPress: () => { setDuplicateResults(dupsAndUpgrades); setDuplicateViewerIndex(0); setDuplicateViewerVisible(true); },
       });
     }

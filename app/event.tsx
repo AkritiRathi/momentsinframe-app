@@ -589,7 +589,7 @@ export default function EventScreen() {
 
   useEffect(() => {
     const JPG_LIMIT = 25;
-    if (prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
+    if (selectMode && !deleteMode && prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
       showAlert(
         'Downloading as ZIP',
         `You've selected more than ${JPG_LIMIT} photos. When you tap Download, all selected photos will be bundled into a ZIP file — not downloaded as individual JPGs.\n\nTo download as individual JPGs instead, select ${JPG_LIMIT} or fewer photos.`,
@@ -597,7 +597,7 @@ export default function EventScreen() {
       );
     }
     prevSelectedSize.current = selected.size;
-  }, [selected.size]);
+  }, [selected.size, selectMode, deleteMode]);
 
   async function loadPhotos() {
     setLoading(true);

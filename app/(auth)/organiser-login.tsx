@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { organiserExists, organiserSetup, organiserLogin, organiserResetPassword } from '../../lib/api';
-import { saveOrganiserSession } from '../../lib/auth';
+import { saveOrganiserSession, getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -28,6 +28,12 @@ export default function OrganiserLoginScreen() {
       const profile = await getUserProfile();
       if (!profile) {
         showAlert('Error', 'Could not load your profile. Please restart the app.');
+        return;
+      }
+      // If a session is already saved on this device, skip password and go straight to My Events
+      const savedPassword = await getOrganiserPassword();
+      if (savedPassword) {
+        router.replace('/(master)/dashboard');
         return;
       }
       try {

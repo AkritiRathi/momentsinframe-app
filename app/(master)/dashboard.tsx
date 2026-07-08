@@ -49,7 +49,10 @@ export default function DashboardScreen() {
   const [organiserPassword, setOrganiserPassword] = useState<string | null>(null);
 
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      BackHandler.exitApp();
+      return true;
+    });
     return () => sub.remove();
   }, []);
 
@@ -84,7 +87,7 @@ export default function DashboardScreen() {
     setRefreshing(false);
   };
 
-  async function handleLogout() {
+  async function handleSwitchToGuest() {
     await clearOrganiserSession();
     router.replace('/(auth)/home');
   }
@@ -219,7 +222,7 @@ export default function DashboardScreen() {
         }
       />
 
-      <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+      <TouchableOpacity style={styles.logoutBtn} onPress={handleSwitchToGuest}>
         <Text style={styles.logoutText}>Switch to Guest →</Text>
       </TouchableOpacity>
 

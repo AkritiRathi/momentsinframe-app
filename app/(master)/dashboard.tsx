@@ -5,7 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { getOrganiserPassword, saveOrganiserSession, clearOrganiserSession } from '../../lib/auth';
+import { getOrganiserPassword, saveOrganiserSession } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
 import { listEvents, organiserChangePassword } from '../../lib/api';
 import { Colors } from '../../constants/colors';
@@ -87,8 +87,7 @@ export default function DashboardScreen() {
     setRefreshing(false);
   };
 
-  async function handleSwitchToGuest() {
-    await clearOrganiserSession();
+  function handleSwitchToGuest() {
     router.replace('/(auth)/home');
   }
 

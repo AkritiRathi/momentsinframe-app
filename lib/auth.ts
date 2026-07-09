@@ -1,32 +1,30 @@
 import * as SecureStore from 'expo-secure-store';
 
 const ORGANISER_PASSWORD_KEY = 'organiser_password';
-const ORGANISER_LOGIN_COUNT_KEY = 'organiser_login_count';
+const ORGANISER_SAVED_AT_KEY = 'organiser_saved_at';
 
-const MAX_SILENT_LOGINS = 9999;
+const SESSION_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 export async function saveOrganiserSession(password: string): Promise<void> {
   await SecureStore.setItemAsync(ORGANISER_PASSWORD_KEY, password);
-  await SecureStore.setItemAsync(ORGANISER_LOGIN_COUNT_KEY, '0');
+  await SecureStore.setItemAsync(ORGANISER_SAVED_AT_KEY, Date.now().toString());
 }
 
-// Returns password if session is still valid, null if expired or not set.
-// Increments the silent login counter each call — after MAX_SILENT_LOGINS, clears session.
+// Returns password if session is within 24 hours, null if expired or not set.
 export async function getOrganiserPassword(): Promise<string | null> {
   const password = await SecureStore.getItemAsync(ORGANISER_PASSWORD_KEY);
   if (!password) return null;
 
-  const count = parseInt((await SecureStore.getItemAsync(ORGANISER_LOGIN_COUNT_KEY)) ?? '0', 10);
-  if (count >= MAX_SILENT_LOGINS) {
+  const savedAt = parseInt((await SecureStore.getItemAsync(ORGANISER_SAVED_AT_KEY)) ?? '0', 10);
+  if (Date.now() - savedAt > SESSION_DURATION_MS) {
     await clearOrganiserSession();
     return null;
   }
 
-  await SecureStore.setItemAsync(ORGANISER_LOGIN_COUNT_KEY, (count + 1).toString());
   return password;
 }
 
 export async function clearOrganiserSession(): Promise<void> {
   await SecureStore.deleteItemAsync(ORGANISER_PASSWORD_KEY);
-  await SecureStore.deleteItemAsync(ORGANISER_LOGIN_COUNT_KEY);
+  await SecureStore.deleteItemAsync(ORGANISER_SAVED_AT_KEY);
 }

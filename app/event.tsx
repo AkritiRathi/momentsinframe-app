@@ -1127,7 +1127,7 @@ export default function EventScreen() {
         onPress: async () => {
           setDeletingPhoto(true);
           const result = isAdmin
-            ? await deletePhotos(slug, [id], params.adminPassword ?? '', undefined, undefined, undefined, params.adminPhone || undefined)
+            ? await deletePhotos(slug, [id], '', undefined, undefined, undefined, userMobile ?? undefined)
             : await deletePhotos(slug, [id], '', userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
           setDeletingPhoto(false);
           if (result.error) { showAlert('Error', result.error); return; }
@@ -1160,7 +1160,7 @@ export default function EventScreen() {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
           const result = isAdmin
-            ? await deletePhotos(slug, ids, params.adminPassword ?? '', undefined, undefined, undefined, params.adminPhone || undefined)
+            ? await deletePhotos(slug, ids, '', undefined, undefined, undefined, userMobile ?? undefined)
             : await deletePhotos(slug, ids, '', userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
           if (result.error) { showAlert('Error', result.error); return; }
           exitSelectMode();

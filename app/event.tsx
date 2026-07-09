@@ -1613,7 +1613,7 @@ export default function EventScreen() {
                   return;
                 }
                 clearLastEvent();
-                router.replace('/(auth)/home');
+                router.replace(adminPhone ? '/(master)/dashboard' : '/(auth)/home');
               }}>
                 <Text style={styles.backText}>←</Text>
               </TouchableOpacity>

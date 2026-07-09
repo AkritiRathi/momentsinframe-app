@@ -1,5 +1,5 @@
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Alert, Switch,
+  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -9,7 +9,7 @@ import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import * as Contacts from 'expo-contacts';
 import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
-import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, lookupUsers, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, listJoinedGuests } from '../../lib/api';
+import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, listJoinedGuests } from '../../lib/api';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
@@ -38,9 +38,20 @@ export default function EventDetailScreen() {
   const [coadmins, setCoadmins] = useState<Coadmin[]>([]);
   const [coadminsLoading, setCoadminsLoading] = useState(true);
   const [addingCoadmin, setAddingCoadmin] = useState(false);
+  const [showCoadminPanel, setShowCoadminPanel] = useState(false);
   const [allowedGuests, setAllowedGuests] = useState<AllowedGuest[]>([]);
   const [allowedGuestsLoading, setAllowedGuestsLoading] = useState(false);
   const [addingGuest, setAddingGuest] = useState(false);
+
+  type PickerContact = { name: string; phones: string[] };
+  const [showContactPicker, setShowContactPicker] = useState(false);
+  const [contactPickerMode, setContactPickerMode] = useState<'coadmin' | 'guest'>('coadmin');
+  const [contactsList, setContactsList] = useState<PickerContact[]>([]);
+  const [contactSearch, setContactSearch] = useState('');
+  const [expandedContact, setExpandedContact] = useState<number | null>(null);
+  const [showManualInput, setShowManualInput] = useState(false);
+  const [manualInputMode, setManualInputMode] = useState<'coadmin' | 'guest'>('coadmin');
+  const [manualPhone, setManualPhone] = useState('');
 
   const loadCoadmins = useCallback(async () => {
     const pw = await getOrganiserPassword();
@@ -55,6 +66,14 @@ export default function EventDetailScreen() {
   }, [params.slug, params.organiserPhone]);
 
   useEffect(() => { loadCoadmins(); }, [loadCoadmins]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      router.replace('/(master)/dashboard');
+      return true;
+    });
+    return () => sub.remove();
+  }, [router]);
 
   const loadAllowedGuests = useCallback(async () => {
     const pw = await getOrganiserPassword();
@@ -199,77 +218,66 @@ export default function EventDetailScreen() {
     );
   }
 
-  async function handleAddCoadmin() {
+  function normalizeIndianPhone(raw: string): string {
+    let n = raw.replace(/\D/g, '');
+    if (n.startsWith('0091')) n = n.slice(4);
+    else if (n.startsWith('91') && n.length === 12) n = n.slice(2);
+    else if (n.startsWith('0') && n.length === 11) n = n.slice(1);
+    return n;
+  }
+
+  function isIndianMobile(n: string): boolean {
+    return n.length === 10 && /^[6-9]/.test(n);
+  }
+
+  async function loadContactsForPicker(mode: 'coadmin' | 'guest') {
     const { status } = await Contacts.requestPermissionsAsync();
     if (status !== 'granted') {
-      showAlert('Permission needed', 'Please allow access to contacts to add a co-admin.');
+      showAlert('Permission needed', 'Please allow access to contacts.');
       return;
     }
-
     const { data: contacts } = await Contacts.getContactsAsync({
       fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
     });
+    const processed: PickerContact[] = contacts
+      .map(c => {
+        const seen = new Set<string>();
+        const phones = (c.phoneNumbers ?? [])
+          .map(pn => normalizeIndianPhone(pn.number ?? ''))
+          .filter(n => isIndianMobile(n) && !seen.has(n) && seen.add(n));
+        return { name: c.name ?? '', phones };
+      })
+      .filter(c => c.phones.length > 0)
+      .sort((a, b) => a.name.localeCompare(b.name));
 
-    const eligible = contacts.filter(c => c.phoneNumbers && c.phoneNumbers.length > 0);
-    if (eligible.length === 0) {
-      showAlert('No contacts', 'No contacts with phone numbers found.');
+    if (processed.length === 0) {
+      showAlert('No contacts', 'No contacts with mobile numbers found.');
       return;
     }
+    setContactsList(processed);
+    setContactSearch('');
+    setExpandedContact(null);
+    setContactPickerMode(mode);
+    setShowContactPicker(true);
+  }
 
-    // Collect all phone numbers and normalise to digits only
-    const allPhones: { raw: string; normalised: string; contactIndex: number; numberIndex: number }[] = [];
-    eligible.forEach((c, ci) => {
-      (c.phoneNumbers ?? []).forEach((pn, ni) => {
-        if (pn.number) {
-          allPhones.push({
-            raw: pn.number,
-            normalised: pn.number.replace(/\D/g, ''),
-            contactIndex: ci,
-            numberIndex: ni,
-          });
-        }
-      });
-    });
-
-    setAddingCoadmin(true);
-    let registered: string[] = [];
-    try {
-      const result = await lookupUsers(allPhones.map(p => p.normalised));
-      registered = result.registered ?? [];
-    } catch {
-      showAlert('Error', 'Could not check contacts. Please try again.');
-      setAddingCoadmin(false);
-      return;
+  function handlePickerSelect(phone: string, name: string) {
+    setShowContactPicker(false);
+    if (contactPickerMode === 'coadmin') {
+      confirmAddCoadmin(phone, name);
+    } else {
+      confirmAddGuest(phone, name);
     }
-    setAddingCoadmin(false);
+  }
 
-    // Build list of contacts that have a registered number
-    const registeredSet = new Set(registered);
-    const options: { label: string; phone: string; name: string }[] = [];
-    eligible.forEach((c) => {
-      const phones = (c.phoneNumbers ?? [])
-        .map(pn => pn.number?.replace(/\D/g, '') ?? '')
-        .filter(n => registeredSet.has(n));
-      if (phones.length > 0) {
-        options.push({ label: c.name ?? phones[0], phone: phones[0], name: c.name ?? '' });
-      }
-    });
-
-    if (options.length === 0) {
-      showAlert('No matches', 'None of your contacts have joined MomentsInFrame yet.');
-      return;
-    }
-
-    // Show native action sheet to pick
-    Alert.alert(
+  async function handleAddCoadmin() {
+    showAlert(
       'Add Co-Admin',
-      'Select a contact to add as co-admin:',
+      'How would you like to add a co-admin?',
       [
-        ...options.slice(0, 8).map(o => ({
-          text: o.label,
-          onPress: () => confirmAddCoadmin(o.phone, o.name),
-        })),
-        { text: 'Cancel', style: 'cancel' as const },
+        { text: 'From contacts', onPress: () => loadContactsForPicker('coadmin') },
+        { text: 'Enter number manually', onPress: () => { setManualInputMode('coadmin'); setManualPhone(''); setShowManualInput(true); } },
+        { text: 'Cancel', style: 'cancel' },
       ]
     );
   }
@@ -290,73 +298,10 @@ export default function EventDetailScreen() {
       'Add Guest',
       'How would you like to add a guest?',
       [
-        { text: 'From contacts', onPress: handleAddGuestFromContacts },
-        { text: 'Enter number manually', onPress: handleAddGuestManually },
+        { text: 'From contacts', onPress: () => loadContactsForPicker('guest') },
+        { text: 'Enter number manually', onPress: () => { setManualInputMode('guest'); setManualPhone(''); setShowManualInput(true); } },
         { text: 'Cancel', style: 'cancel' },
       ]
-    );
-  }
-
-  async function handleAddGuestFromContacts() {
-    const { status } = await Contacts.requestPermissionsAsync();
-    if (status !== 'granted') {
-      showAlert('Permission needed', 'Please allow access to contacts to add a guest.');
-      return;
-    }
-    const { data: contacts } = await Contacts.getContactsAsync({
-      fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
-    });
-    const eligible = contacts.filter(c => c.phoneNumbers && c.phoneNumbers.length > 0);
-    if (eligible.length === 0) {
-      showAlert('No contacts', 'No contacts with phone numbers found.');
-      return;
-    }
-    const allPhones = eligible.flatMap(c =>
-      (c.phoneNumbers ?? []).map(pn => ({
-        raw: pn.number ?? '',
-        normalised: (pn.number ?? '').replace(/\D/g, ''),
-        name: c.name ?? '',
-      }))
-    ).filter(p => p.normalised.length > 0);
-
-    const options = allPhones.slice(0, 8).map(p => ({
-      label: p.name || p.normalised,
-      phone: p.normalised,
-      name: p.name,
-    }));
-
-    Alert.alert(
-      'Add Guest',
-      'Select a contact:',
-      [
-        ...options.map(o => ({
-          text: o.label,
-          onPress: () => confirmAddGuest(o.phone, o.name),
-        })),
-        { text: 'Cancel', style: 'cancel' as const },
-      ]
-    );
-  }
-
-  async function handleAddGuestManually() {
-    // Use prompt-style alert — we'll use a simple approach with TextInput in showAlert
-    // Since useAlert doesn't support text input, we'll use a dedicated modal approach
-    // For now use JS prompt equivalent via Alert with custom message
-    Alert.prompt(
-      'Add Guest',
-      'Enter the guest\'s phone number:',
-      [
-        {
-          text: 'Add',
-          onPress: (phone?: string) => {
-            if (phone) confirmAddGuest(phone.replace(/\D/g, ''), undefined);
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-      'plain-text',
-      '',
-      'phone-pad'
     );
   }
 
@@ -464,6 +409,11 @@ export default function EventDetailScreen() {
           <TouchableOpacity style={styles.btn} onPress={handleExtend}>
             <Text style={styles.btnText}>Extend expiry</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={[styles.btn, { borderColor: Colors.accent }]} onPress={() => setShowCoadminPanel(true)}>
+            <Text style={[styles.btnText, { color: Colors.accent }]}>
+              + Co-Admins{coadmins.length > 0 ? ` (${coadmins.length})` : ''}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         <Text style={styles.sectionLabel}>SETTINGS</Text>
@@ -540,41 +490,6 @@ export default function EventDetailScreen() {
           </>
         )}
 
-        <Text style={styles.sectionLabel}>CO-ADMINS</Text>
-        {coadminsLoading ? (
-          <ActivityIndicator color={Colors.accent} style={{ marginVertical: 12 }} />
-        ) : (
-          <>
-            {coadmins.length === 0 ? (
-              <Text style={styles.emptyText}>No co-admins added yet.</Text>
-            ) : (
-              coadmins.map(ca => (
-                <View key={ca.phone} style={styles.coadminRow}>
-                  <View style={styles.coadminInfo}>
-                    <Text style={styles.coadminName}>{ca.name ?? ca.phone}</Text>
-                    {ca.name ? <Text style={styles.coadminPhone}>{ca.phone}</Text> : null}
-                  </View>
-                  <TouchableOpacity
-                    style={styles.removeBtn}
-                    onPress={() => handleRemoveCoadmin(ca.phone, ca.name)}
-                  >
-                    <Text style={styles.removeBtnText}>Remove</Text>
-                  </TouchableOpacity>
-                </View>
-              ))
-            )}
-            <TouchableOpacity
-              style={[styles.btn, styles.addCoadminBtn, addingCoadmin && { opacity: 0.5 }]}
-              onPress={handleAddCoadmin}
-              disabled={addingCoadmin}
-            >
-              {addingCoadmin
-                ? <ActivityIndicator color={Colors.accent} />
-                : <Text style={[styles.btnText, { color: Colors.accent }]}>+ Add Co-Admin</Text>
-              }
-            </TouchableOpacity>
-          </>
-        )}
 
         <View style={styles.divider} />
 
@@ -610,6 +525,126 @@ export default function EventDetailScreen() {
           </View>
         </Modal>
       )}
+
+      {/* Co-Admin Panel */}
+      <Modal visible={showCoadminPanel} animationType="slide" onRequestClose={() => setShowCoadminPanel(false)}>
+        <SafeAreaView style={styles.container}>
+          <View style={styles.panelHeader}>
+            <Text style={styles.panelTitle}>Co-Admins</Text>
+            <TouchableOpacity onPress={() => setShowCoadminPanel(false)}>
+              <Text style={styles.panelClose}>×</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={styles.panelScroll}>
+            {coadminsLoading ? (
+              <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
+            ) : coadmins.length === 0 ? (
+              <Text style={styles.emptyText}>No co-admins added yet.</Text>
+            ) : (
+              coadmins.map(ca => (
+                <View key={ca.phone} style={styles.coadminRow}>
+                  <View style={styles.coadminInfo}>
+                    <Text style={styles.coadminName}>{ca.name ?? ca.phone}</Text>
+                    {ca.name ? <Text style={styles.coadminPhone}>{ca.phone}</Text> : null}
+                  </View>
+                  <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveCoadmin(ca.phone, ca.name)}>
+                    <Text style={styles.removeBtnText}>Remove</Text>
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
+            <TouchableOpacity
+              style={[styles.btn, { marginTop: 12, borderColor: Colors.accent, opacity: addingCoadmin ? 0.5 : 1 }]}
+              onPress={handleAddCoadmin}
+              disabled={addingCoadmin}
+            >
+              {addingCoadmin
+                ? <ActivityIndicator color={Colors.accent} />
+                : <Text style={[styles.btnText, { color: Colors.accent }]}>Add Co-Admin</Text>
+              }
+            </TouchableOpacity>
+          </ScrollView>
+          {alertOverlay}
+        </SafeAreaView>
+      </Modal>
+
+      {/* Contact Picker Modal */}
+      <Modal visible={showContactPicker} animationType="slide" onRequestClose={() => setShowContactPicker(false)}>
+        <SafeAreaView style={styles.container}>
+          <View style={styles.panelHeader}>
+            <Text style={styles.panelTitle}>Select Contact</Text>
+            <TouchableOpacity onPress={() => setShowContactPicker(false)}>
+              <Text style={styles.panelClose}>×</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.pickerSearchWrap}>
+            <TextInput
+              style={styles.pickerSearch}
+              value={contactSearch}
+              onChangeText={t => { setContactSearch(t); setExpandedContact(null); }}
+              placeholder="Search by name…"
+              placeholderTextColor="#555"
+              autoCorrect={false}
+            />
+          </View>
+          <ScrollView contentContainerStyle={styles.panelScroll}>
+            {contactsList
+              .filter(c => c.name.toLowerCase().includes(contactSearch.toLowerCase()))
+              .map((contact, i) => (
+                <View key={i} style={styles.pickerContact}>
+                  <TouchableOpacity
+                    style={styles.pickerNameRow}
+                    onPress={() => setExpandedContact(expandedContact === i ? null : i)}
+                  >
+                    <Text style={styles.pickerName}>{contact.name || contact.phones[0]}</Text>
+                    <Text style={styles.pickerChevron}>{expandedContact === i ? '▲' : '▼'}</Text>
+                  </TouchableOpacity>
+                  {expandedContact === i && contact.phones.map((phone, j) => (
+                    <TouchableOpacity key={j} style={styles.pickerPhoneRow} onPress={() => handlePickerSelect(phone, contact.name)}>
+                      <Text style={styles.pickerPhone}>{phone}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              ))}
+          </ScrollView>
+          {alertOverlay}
+        </SafeAreaView>
+      </Modal>
+
+      {/* Manual Input Modal */}
+      <Modal visible={showManualInput} animationType="slide" transparent onRequestClose={() => setShowManualInput(false)}>
+        <View style={styles.manualOverlay}>
+          <View style={styles.manualCard}>
+            <Text style={styles.manualTitle}>Enter phone number</Text>
+            <TextInput
+              style={styles.manualInput}
+              value={manualPhone}
+              onChangeText={setManualPhone}
+              keyboardType="phone-pad"
+              placeholder="e.g. 9876543210"
+              placeholderTextColor="#555"
+              autoFocus
+            />
+            <View style={styles.manualBtns}>
+              <TouchableOpacity style={styles.manualCancel} onPress={() => setShowManualInput(false)}>
+                <Text style={styles.manualCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.manualAdd, !manualPhone.trim() && { opacity: 0.4 }]}
+                disabled={!manualPhone.trim()}
+                onPress={() => {
+                  const clean = manualPhone.replace(/\D/g, '');
+                  setShowManualInput(false);
+                  if (manualInputMode === 'coadmin') confirmAddCoadmin(clean, '');
+                  else confirmAddGuest(clean, undefined);
+                }}
+              >
+                <Text style={styles.manualAddText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {alertOverlay}
     </SafeAreaView>
@@ -657,4 +692,25 @@ const styles = StyleSheet.create({
   deleteBtnText: { ...Typography.buttonText, color: '#E53935' },
   deletingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', gap: 16 },
   deletingText: { fontSize: 15, fontWeight: '700', color: Colors.white },
+  panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 0.5, borderBottomColor: '#222' },
+  panelTitle: { fontSize: 18, fontWeight: '700', color: Colors.white },
+  panelClose: { fontSize: 28, color: Colors.textMuted, paddingHorizontal: 4 },
+  panelScroll: { padding: 16, gap: 8 },
+  pickerSearchWrap: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#222' },
+  pickerSearch: { backgroundColor: '#1E1E1E', borderRadius: 8, padding: 10, fontSize: 14, color: Colors.white, borderWidth: 0.5, borderColor: '#333' },
+  pickerContact: { borderBottomWidth: 0.5, borderBottomColor: '#1E1E1E' },
+  pickerNameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 4 },
+  pickerName: { fontSize: 15, fontWeight: '700', color: Colors.white, flex: 1 },
+  pickerChevron: { fontSize: 11, color: Colors.textMuted, marginLeft: 8 },
+  pickerPhoneRow: { paddingVertical: 10, paddingLeft: 16, paddingRight: 4, backgroundColor: '#141414' },
+  pickerPhone: { fontSize: 14, color: Colors.accent },
+  manualOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  manualCard: { backgroundColor: '#1A1A1A', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 24, gap: 16 },
+  manualTitle: { fontSize: 16, fontWeight: '700', color: Colors.white },
+  manualInput: { backgroundColor: '#252525', borderWidth: 0.5, borderColor: '#333', borderRadius: 8, padding: 12, fontSize: 15, color: Colors.white },
+  manualBtns: { flexDirection: 'row', gap: 10 },
+  manualCancel: { flex: 1, padding: 12, borderRadius: 8, backgroundColor: '#252525', alignItems: 'center' },
+  manualCancelText: { fontSize: 14, fontWeight: '700', color: Colors.textMuted },
+  manualAdd: { flex: 1, padding: 12, borderRadius: 8, backgroundColor: Colors.accent, alignItems: 'center' },
+  manualAddText: { fontSize: 14, fontWeight: '700', color: Colors.background },
 });

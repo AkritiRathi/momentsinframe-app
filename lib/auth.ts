@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 const ORGANISER_PASSWORD_KEY = 'organiser_password';
 const ORGANISER_LOGIN_COUNT_KEY = 'organiser_login_count';
 
-const MAX_SILENT_LOGINS = 10;
+const MAX_SILENT_LOGINS = 9999;
 
 export async function saveOrganiserSession(password: string): Promise<void> {
   await SecureStore.setItemAsync(ORGANISER_PASSWORD_KEY, password);

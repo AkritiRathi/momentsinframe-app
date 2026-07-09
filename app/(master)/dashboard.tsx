@@ -142,7 +142,7 @@ export default function DashboardScreen() {
       <TouchableOpacity style={styles.card} onPress={() => openEvent(item)} activeOpacity={0.75}>
         <View style={styles.cardHeader}>
           <Text style={styles.eventName}>{item.name}</Text>
-          {item.is_closed && <Text style={styles.closedBadge}>CLOSED</Text>}
+          {item.is_closed && <Text style={styles.closedBadge}>BY INVITE ONLY</Text>}
         </View>
         <View style={styles.metaRow}>
           <View style={styles.metaItem}>
@@ -314,7 +314,7 @@ const styles = StyleSheet.create({
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   eventName: { fontSize: 16, fontWeight: '800', color: Colors.white, flex: 1 },
-  closedBadge: { fontSize: 10, fontWeight: '800', color: '#E53935', borderWidth: 1, borderColor: '#E53935', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  closedBadge: { fontSize: 10, fontWeight: '800', color: '#F4B832', borderWidth: 1, borderColor: '#F4B832', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 },
   metaRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   metaItem: { flex: 1, backgroundColor: '#141414', borderRadius: 8, padding: 10 },
   metaLabel: { ...Typography.inputLabel, color: '#555', marginBottom: 3 },

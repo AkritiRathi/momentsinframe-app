@@ -43,11 +43,9 @@ export default function JoinEventScreen() {
         await saveLastEventCode(joinCode);
         // Check if this user is organiser or co-admin for this event
         let isAdmin = false;
-        let adminPhone = '';
         if (profile?.mobile) {
           const adminCheck = await checkAdminStatus(result.event.slug, profile.mobile);
           isAdmin = adminCheck.isAdmin ?? false;
-          if (isAdmin) adminPhone = profile.mobile;
         }
         if (profile) {
           getDeviceId().then(async deviceId => {
@@ -64,7 +62,7 @@ export default function JoinEventScreen() {
             createdAt: result.event.created_at ?? new Date().toISOString(),
             isAdmin: isAdmin ? 'true' : 'false',
             adminPassword: '',
-            adminPhone,
+            adminPhone: '',
             allowGuestDelete: result.event.allow_guest_delete ? 'true' : 'false',
           },
         });

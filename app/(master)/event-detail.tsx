@@ -282,7 +282,7 @@ export default function EventDetailScreen() {
     );
   }
 
-  async function confirmAddCoadmin(phone: string, name: string) {
+  async function confirmAddCoadmin(phone: string, name: string | null) {
     const pw = await getOrganiserPassword();
     if (!pw || !params.organiserPhone) return;
     const result = await addCoadmin(params.slug, params.organiserPhone, pw, phone, name);
@@ -410,9 +410,7 @@ export default function EventDetailScreen() {
             <Text style={styles.btnText}>Extend expiry</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.btn, { borderColor: Colors.accent }]} onPress={() => setShowCoadminPanel(true)}>
-            <Text style={[styles.btnText, { color: Colors.accent }]}>
-              + Co-Admins{coadmins.length > 0 ? ` (${coadmins.length})` : ''}
-            </Text>
+            <Text style={[styles.btnText, { color: Colors.accent }]}>+ Co-Admins</Text>
           </TouchableOpacity>
         </View>
 
@@ -530,7 +528,7 @@ export default function EventDetailScreen() {
       <Modal visible={showCoadminPanel} animationType="slide" onRequestClose={() => setShowCoadminPanel(false)}>
         <SafeAreaView style={styles.container}>
           <View style={styles.panelHeader}>
-            <Text style={styles.panelTitle}>Co-Admins</Text>
+            <Text style={styles.panelTitle}>Co-Admins{coadmins.length > 0 ? ` (${coadmins.length})` : ''}</Text>
             <TouchableOpacity onPress={() => setShowCoadminPanel(false)}>
               <Text style={styles.panelClose}>×</Text>
             </TouchableOpacity>
@@ -544,7 +542,7 @@ export default function EventDetailScreen() {
               coadmins.map(ca => (
                 <View key={ca.phone} style={styles.coadminRow}>
                   <View style={styles.coadminInfo}>
-                    <Text style={styles.coadminName}>{ca.name ?? ca.phone}</Text>
+                    <Text style={styles.coadminName}>{ca.name || ca.phone}</Text>
                     {ca.name ? <Text style={styles.coadminPhone}>{ca.phone}</Text> : null}
                   </View>
                   <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveCoadmin(ca.phone, ca.name)}>
@@ -564,6 +562,52 @@ export default function EventDetailScreen() {
               }
             </TouchableOpacity>
           </ScrollView>
+          {/* Manual Input — inside co-admin panel so it renders on top */}
+          <Modal visible={showManualInput && manualInputMode === 'coadmin'} animationType="fade" transparent onRequestClose={() => setShowManualInput(false)}>
+            <View style={styles.manualOverlay}>
+              <View style={styles.manualCard}>
+                <Text style={styles.manualTitle}>Enter phone number</Text>
+                <TextInput
+                  style={styles.manualInput}
+                  value={manualPhone}
+                  onChangeText={setManualPhone}
+                  keyboardType="phone-pad"
+                  placeholder="e.g. 9876543210"
+                  placeholderTextColor="#555"
+                  autoFocus
+                />
+                <View style={styles.manualBtns}>
+                  <TouchableOpacity style={styles.manualCancel} onPress={() => setShowManualInput(false)}>
+                    <Text style={styles.manualCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.manualAdd, !manualPhone.trim() && { opacity: 0.4 }]}
+                    disabled={!manualPhone.trim()}
+                    onPress={async () => {
+                      const clean = normalizeIndianPhone(manualPhone);
+                      if (!isIndianMobile(clean)) {
+                        showAlert('Invalid number', 'Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9).');
+                        return;
+                      }
+                      setShowManualInput(false);
+                      let name: string | null = contactsList.find(c => c.phones.includes(clean))?.name ?? null;
+                      if (!name) {
+                        try {
+                          const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
+                          const match = data.find(c => (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === clean));
+                          if (match?.name) name = match.name;
+                        } catch {}
+                      }
+                      confirmAddCoadmin(clean, name);
+                    }}
+                  >
+                    <Text style={styles.manualAddText}>Add</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              {alertOverlay}
+            </View>
+          </Modal>
           {alertOverlay}
         </SafeAreaView>
       </Modal>
@@ -607,43 +651,54 @@ export default function EventDetailScreen() {
                 </View>
               ))}
           </ScrollView>
+          {/* Manual Input — inside contact picker for guest flow */}
+          <Modal visible={showManualInput && manualInputMode === 'guest'} animationType="fade" transparent onRequestClose={() => setShowManualInput(false)}>
+            <View style={styles.manualOverlay}>
+              <View style={styles.manualCard}>
+                <Text style={styles.manualTitle}>Enter phone number</Text>
+                <TextInput
+                  style={styles.manualInput}
+                  value={manualPhone}
+                  onChangeText={setManualPhone}
+                  keyboardType="phone-pad"
+                  placeholder="e.g. 9876543210"
+                  placeholderTextColor="#555"
+                  autoFocus
+                />
+                <View style={styles.manualBtns}>
+                  <TouchableOpacity style={styles.manualCancel} onPress={() => setShowManualInput(false)}>
+                    <Text style={styles.manualCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.manualAdd, !manualPhone.trim() && { opacity: 0.4 }]}
+                    disabled={!manualPhone.trim()}
+                    onPress={async () => {
+                      const clean = normalizeIndianPhone(manualPhone);
+                      if (!isIndianMobile(clean)) {
+                        showAlert('Invalid number', 'Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9).');
+                        return;
+                      }
+                      setShowManualInput(false);
+                      let name: string | undefined = contactsList.find(c => c.phones.includes(clean))?.name;
+                      if (!name) {
+                        try {
+                          const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
+                          const match = data.find(c => (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === clean));
+                          if (match?.name) name = match.name;
+                        } catch {}
+                      }
+                      confirmAddGuest(clean, name);
+                    }}
+                  >
+                    <Text style={styles.manualAddText}>Add</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              {alertOverlay}
+            </View>
+          </Modal>
           {alertOverlay}
         </SafeAreaView>
-      </Modal>
-
-      {/* Manual Input Modal */}
-      <Modal visible={showManualInput} animationType="slide" transparent onRequestClose={() => setShowManualInput(false)}>
-        <View style={styles.manualOverlay}>
-          <View style={styles.manualCard}>
-            <Text style={styles.manualTitle}>Enter phone number</Text>
-            <TextInput
-              style={styles.manualInput}
-              value={manualPhone}
-              onChangeText={setManualPhone}
-              keyboardType="phone-pad"
-              placeholder="e.g. 9876543210"
-              placeholderTextColor="#555"
-              autoFocus
-            />
-            <View style={styles.manualBtns}>
-              <TouchableOpacity style={styles.manualCancel} onPress={() => setShowManualInput(false)}>
-                <Text style={styles.manualCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.manualAdd, !manualPhone.trim() && { opacity: 0.4 }]}
-                disabled={!manualPhone.trim()}
-                onPress={() => {
-                  const clean = manualPhone.replace(/\D/g, '');
-                  setShowManualInput(false);
-                  if (manualInputMode === 'coadmin') confirmAddCoadmin(clean, '');
-                  else confirmAddGuest(clean, undefined);
-                }}
-              >
-                <Text style={styles.manualAddText}>Add</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
       </Modal>
 
       {alertOverlay}
@@ -704,8 +759,8 @@ const styles = StyleSheet.create({
   pickerChevron: { fontSize: 11, color: Colors.textMuted, marginLeft: 8 },
   pickerPhoneRow: { paddingVertical: 10, paddingLeft: 16, paddingRight: 4, backgroundColor: '#141414' },
   pickerPhone: { fontSize: 14, color: Colors.accent },
-  manualOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
-  manualCard: { backgroundColor: '#1A1A1A', borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: 24, gap: 16 },
+  manualOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', paddingHorizontal: 24 },
+  manualCard: { backgroundColor: '#1A1A1A', borderRadius: 16, padding: 24, gap: 16 },
   manualTitle: { fontSize: 16, fontWeight: '700', color: Colors.white },
   manualInput: { backgroundColor: '#252525', borderWidth: 0.5, borderColor: '#333', borderRadius: 8, padding: 12, fontSize: 15, color: Colors.white },
   manualBtns: { flexDirection: 'row', gap: 10 },

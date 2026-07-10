@@ -10,6 +10,7 @@ import * as Contacts from 'expo-contacts';
 import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
 import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, listJoinedGuests } from '../../lib/api';
+import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
@@ -207,7 +208,7 @@ export default function EventDetailScreen() {
     setDeletePasswordLoading(true);
     setDeletePasswordError(null);
     try {
-      const res = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/api/native/organiser/login`, {
+      const res = await fetch(`${API_BASE_URL}/api/native/organiser/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone: profile.mobile, password: deletePassword.trim() }),

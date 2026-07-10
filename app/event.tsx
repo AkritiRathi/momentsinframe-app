@@ -64,7 +64,8 @@ type ListItem =
   | { type: 'select_bar'; key: string }
   | { type: 'section_header'; section: 'main' | 'other'; key: string }
   | { type: 'photo_row'; photos: Photo[]; section: 'main' | 'other'; startIndex: number; key: string }
-  | { type: 'empty'; key: string };
+  | { type: 'empty'; key: string }
+  | { type: 'delete_empty'; key: string };
 
 type UploadFileResult = {
   status: 'success' | 'duplicate' | 'upgraded' | 'failed' | 'cancelled';
@@ -1490,6 +1491,10 @@ export default function EventScreen() {
       items.push({ type: 'empty', key: 'empty' });
     }
 
+    if (deleteMode && !isAdmin && mainPhotos.length === 0 && otherList.length === 0 && totalPhotos > 0 && !loading) {
+      items.push({ type: 'delete_empty', key: 'delete_empty' });
+    }
+
     return { listData: items, stickyIndices: sticky };
   }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin]);
 
@@ -1716,7 +1721,7 @@ export default function EventScreen() {
                 <Text style={styles.deleteModeBtnText}>Delete Photos</Text>
               </TouchableOpacity>
             )}
-            <TouchableOpacity style={[styles.selectPhotosBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setSelectMode(true); setDeleteMode(false); } }}>
+            <TouchableOpacity style={[styles.selectPhotosBtn, styles.selectPhotosRowRight, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setSelectMode(true); setDeleteMode(false); } }}>
               <Text style={styles.selectPhotosBtnText}>Download Photos</Text>
             </TouchableOpacity>
           </View>
@@ -1760,6 +1765,14 @@ export default function EventScreen() {
           <View style={styles.empty}>
             <Text style={styles.emptyText}>No photos yet.</Text>
             <Text style={styles.emptySub}>Be the first to upload!</Text>
+          </View>
+        );
+
+      case 'delete_empty':
+        return (
+          <View style={styles.empty}>
+            <Text style={styles.emptyText}>No photos to delete.</Text>
+            <Text style={styles.emptySub}>You can only delete photos you uploaded. You haven't uploaded any photos to this event yet.</Text>
           </View>
         );
 
@@ -2354,7 +2367,8 @@ const styles = StyleSheet.create({
   uploadHint: { ...Typography.caption, color: '#888', textAlign: 'center', fontWeight: '700' },
 
   // Select photos button
-  selectPhotosRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 8 },
+  selectPhotosRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 8 },
+  selectPhotosRowRight: { marginLeft: 'auto' },
   selectPhotosBtn: { backgroundColor: Colors.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
   selectPhotosBtnText: { ...Typography.buttonText, color: Colors.background },
   deleteModeBtn: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: Colors.danger, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
@@ -2403,9 +2417,9 @@ const styles = StyleSheet.create({
   checkboxTick: { fontSize: 11, fontWeight: '800', color: Colors.white },
 
   // Empty state
-  empty: { alignItems: 'center', paddingTop: 60 },
-  emptyText: { fontSize: 16, fontWeight: '500', color: Colors.textMuted, marginBottom: 6 },
-  emptySub: { fontSize: 14, color: '#444' },
+  empty: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 32 },
+  emptyText: { fontSize: 16, fontWeight: '700', color: Colors.white, marginBottom: 8, textAlign: 'center' },
+  emptySub: { fontSize: 13, color: Colors.textMuted, textAlign: 'center', lineHeight: 20 },
 
   // Upload overlay
   uploadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 100, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },

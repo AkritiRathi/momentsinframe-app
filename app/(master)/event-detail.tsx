@@ -31,6 +31,10 @@ export default function EventDetailScreen() {
   }>();
 
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteStep, setDeleteStep] = useState<null | 'password' | 'confirm'>(null);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deletePasswordError, setDeletePasswordError] = useState<string | null>(null);
+  const [deletePasswordLoading, setDeletePasswordLoading] = useState(false);
   const [allowGuestDelete, setAllowGuestDelete] = useState(params.allow_guest_delete === 'true');
   const [isClosed, setIsClosed] = useState(params.is_closed === 'true');
   const [settingsUpdating, setSettingsUpdating] = useState(false);
@@ -192,30 +196,42 @@ export default function EventDetailScreen() {
   }
 
   function handleDelete() {
-    showAlert(
-      `Delete "${params.name}"?`,
-      'This action is permanent and cannot be undone. All photos will be deleted.',
-      [
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            const profile = await getUserProfile();
-            const pw = await getOrganiserPassword();
-            if (!profile || !pw) return;
-            setDeleteLoading(true);
-            const result = await deleteEvent(params.slug, profile.mobile, pw);
-            setDeleteLoading(false);
-            if (result.error) {
-              showAlert('Error', result.error);
-            } else {
-              router.replace('/(master)/dashboard');
-            }
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ],
-    );
+    setDeletePassword('');
+    setDeletePasswordError(null);
+    setDeleteStep('password');
+  }
+
+  async function handleDeletePasswordSubmit() {
+    const profile = await getUserProfile();
+    if (!profile) return;
+    setDeletePasswordLoading(true);
+    setDeletePasswordError(null);
+    try {
+      const res = await fetch(`${process.env.EXPO_PUBLIC_API_BASE_URL}/api/native/organiser/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: profile.mobile, password: deletePassword.trim() }),
+      });
+      const data = await res.json();
+      if (!data.success) { setDeletePasswordError('Incorrect password.'); return; }
+      setDeleteStep('confirm');
+    } catch { setDeletePasswordError('Could not verify. Try again.'); }
+    finally { setDeletePasswordLoading(false); }
+  }
+
+  async function handleDeleteConfirm() {
+    const profile = await getUserProfile();
+    const pw = await getOrganiserPassword();
+    if (!profile || !pw) return;
+    setDeleteLoading(true);
+    const result = await deleteEvent(params.slug, profile.mobile, pw);
+    setDeleteLoading(false);
+    setDeleteStep(null);
+    if (result.error) {
+      showAlert('Error', result.error);
+    } else {
+      router.replace('/(master)/dashboard');
+    }
   }
 
   function normalizeIndianPhone(raw: string): string {
@@ -524,6 +540,60 @@ export default function EventDetailScreen() {
         </Modal>
       )}
 
+      {/* Delete Step 1: Password */}
+      <Modal visible={deleteStep === 'password'} transparent animationType="fade" onRequestClose={() => setDeleteStep(null)}>
+        <View style={styles.deletingOverlay}>
+          <View style={styles.deleteModal}>
+            <Text style={styles.deleteModalTitle}>Verify your password</Text>
+            <Text style={styles.deleteModalWarning}>
+              This action <Text style={{ color: '#E53935', fontWeight: '700' }}>cannot be undone</Text>. All photos in this event will be permanently deleted.
+            </Text>
+            <TextInput
+              placeholder="Enter your password"
+              placeholderTextColor="#555"
+              secureTextEntry
+              value={deletePassword}
+              onChangeText={setDeletePassword}
+              autoCapitalize="none"
+              style={styles.deletePasswordInput}
+            />
+            {deletePasswordError && <Text style={styles.deletePasswordError}>{deletePasswordError}</Text>}
+            <View style={styles.deleteModalButtons}>
+              <TouchableOpacity style={styles.deleteModalCancel} onPress={() => setDeleteStep(null)}>
+                <Text style={styles.deleteModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.deleteModalConfirm, (!deletePassword.trim() || deletePasswordLoading) && { opacity: 0.5 }]}
+                onPress={handleDeletePasswordSubmit}
+                disabled={!deletePassword.trim() || deletePasswordLoading}
+              >
+                <Text style={styles.deleteModalConfirmText}>{deletePasswordLoading ? 'Verifying…' : 'Continue'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete Step 2: Final Confirm */}
+      <Modal visible={deleteStep === 'confirm'} transparent animationType="fade" onRequestClose={() => setDeleteStep(null)}>
+        <View style={styles.deletingOverlay}>
+          <View style={styles.deleteModal}>
+            <Text style={[styles.deleteModalTitle, { color: '#E53935' }]}>Delete "{params.name}"?</Text>
+            <Text style={styles.deleteModalWarning}>
+              You are about to permanently delete this event and all its photos. There is no way to recover them.
+            </Text>
+            <View style={styles.deleteModalButtons}>
+              <TouchableOpacity style={styles.deleteModalCancel} onPress={() => setDeleteStep(null)}>
+                <Text style={styles.deleteModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.deleteModalConfirm} onPress={handleDeleteConfirm}>
+                <Text style={styles.deleteModalConfirmText}>Yes, Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Co-Admin Panel */}
       <Modal visible={showCoadminPanel} animationType="slide" onRequestClose={() => setShowCoadminPanel(false)}>
         <SafeAreaView style={styles.container}>
@@ -745,8 +815,18 @@ const styles = StyleSheet.create({
   openBtnText: { ...Typography.buttonText, color: Colors.background },
   deleteBtn: { backgroundColor: '#2a2a2a', borderWidth: 1, borderColor: 'rgba(229,57,53,0.6)', borderRadius: 8, padding: 12, alignItems: 'center' },
   deleteBtnText: { ...Typography.buttonText, color: '#E53935' },
-  deletingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', gap: 16 },
+  deletingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
   deletingText: { fontSize: 15, fontWeight: '700', color: Colors.white },
+  deleteModal: { width: '100%', backgroundColor: '#1C1C1C', borderRadius: 16, padding: 24, borderWidth: 0.5, borderColor: '#333' },
+  deleteModalTitle: { fontSize: 16, fontWeight: '800', color: Colors.white, marginBottom: 8 },
+  deleteModalWarning: { fontSize: 13, color: '#888780', lineHeight: 20, marginBottom: 20 },
+  deletePasswordInput: { backgroundColor: '#111', borderWidth: 0.5, borderColor: '#333', borderRadius: 10, padding: 14, fontSize: 15, color: Colors.white, marginBottom: 10 },
+  deletePasswordError: { fontSize: 13, color: '#E53935', marginBottom: 10 },
+  deleteModalButtons: { flexDirection: 'row', gap: 10 },
+  deleteModalCancel: { flex: 1, borderWidth: 1.5, borderColor: '#333', borderRadius: 10, padding: 14, alignItems: 'center' },
+  deleteModalCancelText: { fontSize: 15, fontWeight: '700', color: '#888780' },
+  deleteModalConfirm: { flex: 1, backgroundColor: '#E53935', borderRadius: 10, padding: 14, alignItems: 'center' },
+  deleteModalConfirmText: { fontSize: 15, fontWeight: '800', color: '#fff' },
   panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 0.5, borderBottomColor: '#222' },
   panelTitle: { fontSize: 18, fontWeight: '700', color: Colors.white },
   panelClose: { fontSize: 28, color: Colors.textMuted, paddingHorizontal: 4 },

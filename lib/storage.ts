@@ -8,7 +8,6 @@ const KEYS = {
   LAST_NAME: 'user_last_name',
   MOBILE: 'user_mobile',
   LAST_EVENT_CODE: 'last_event_code',
-  LAST_ADMIN_EVENT_CODE: 'last_admin_event_code',
   EVENT_USER_ID: 'event_user_id',
 };
 
@@ -56,13 +55,6 @@ export async function getLastEventCode(): Promise<string | null> {
   return SecureStore.getItemAsync(KEYS.LAST_EVENT_CODE);
 }
 
-export async function saveLastAdminEventCode(code: string): Promise<void> {
-  await SecureStore.setItemAsync(KEYS.LAST_ADMIN_EVENT_CODE, code);
-}
-
-export async function getLastAdminEventCode(): Promise<string | null> {
-  return SecureStore.getItemAsync(KEYS.LAST_ADMIN_EVENT_CODE);
-}
 
 export async function clearUserProfile(): Promise<void> {
   await SecureStore.deleteItemAsync(KEYS.FIRST_NAME);

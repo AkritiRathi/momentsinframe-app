@@ -84,8 +84,8 @@ export async function getEventPhotos(slug: string) {
   return get(`/api/events/${slug}/photos`);
 }
 
-export async function getPhotoUrls(slug: string, ids: string[]) {
-  return post(`/api/events/${slug}/photo-urls`, { ids });
+export async function getPhotoUrls(slug: string, ids: string[], adminPhone?: string) {
+  return post(`/api/events/${slug}/photo-urls`, { ids, ...(adminPhone ? { adminPhone } : {}) });
 }
 
 export async function getUploadUrl(eventSlug: string, filename: string, contentType: string) {
@@ -96,29 +96,19 @@ export async function processUpload(eventSlug: string, stagingKey: string, origi
   return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId });
 }
 
-export async function deletePhotos(slug: string, photoIds: string[], adminPassword: string, uploaderMobile?: string, eventUserId?: string, deviceId?: string, adminPhone?: string) {
+export async function deletePhotos(slug: string, photoIds: string[], uploaderMobile?: string, eventUserId?: string, deviceId?: string, adminPhone?: string) {
   const body = adminPhone
     ? { photoIds, adminPhone }
-    : adminPassword
-    ? { photoIds, adminPassword }
     : { photoIds, uploaderMobile, eventUserId, deviceId };
   return del(`/api/native/events/${slug}/photos`, body);
 }
 
-export async function downloadZipRaw(slug: string, photoIds: string[]): Promise<Response> {
-  return postRaw(`/api/native/events/${slug}/download-zip`, { photoIds });
+export async function getPhotoDownloadUrl(photoId: string, adminPhone?: string): Promise<{ url: string; filename: string; error?: string }> {
+  return post(`/api/native/photos/${photoId}/download-url`, { ...(adminPhone ? { adminPhone } : {}) });
 }
 
-export async function downloadPhotoRaw(photoId: string, adminPassword?: string): Promise<Response> {
-  return postRaw('/api/download-photo', { photoId, adminPassword: adminPassword ?? '' });
-}
-
-export async function getPhotoDownloadUrl(photoId: string, adminPassword?: string): Promise<{ url: string; filename: string; error?: string }> {
-  return post(`/api/native/photos/${photoId}/download-url`, { adminPassword: adminPassword ?? '' });
-}
-
-export async function prepareZip(slug: string, photoIds: string[]): Promise<{ zipUrl: string; filename: string; error?: string }> {
-  return post(`/api/native/events/${slug}/prepare-zip`, { photoIds });
+export async function prepareZip(slug: string, photoIds: string[], adminPhone?: string): Promise<{ zipUrl: string; filename: string; error?: string }> {
+  return post(`/api/native/events/${slug}/prepare-zip`, { photoIds, ...(adminPhone ? { adminPhone } : {}) });
 }
 
 // Co-admin API

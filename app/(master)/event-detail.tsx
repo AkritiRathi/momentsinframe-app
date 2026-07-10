@@ -518,7 +518,6 @@ export default function EventDetailScreen() {
               expiresAt: params.expires_at,
               createdAt: params.created_at,
               isAdmin: 'true',
-              adminPassword: '',
               adminPhone: params.organiserPhone ?? '',
               allowGuestDelete: allowGuestDelete ? 'true' : 'false',
             },

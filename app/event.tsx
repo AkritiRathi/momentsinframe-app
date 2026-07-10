@@ -402,7 +402,7 @@ export default function EventScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     slug: string; name: string; expiresAt: string; createdAt: string;
-    isAdmin: string; adminPassword: string; adminPhone: string; allowGuestDelete: string;
+    isAdmin: string; adminPhone: string; allowGuestDelete: string;
   }>();
 
   const isAdmin = params.isAdmin === 'true';
@@ -517,7 +517,6 @@ export default function EventScreen() {
       expiresAt: params.expiresAt ?? '',
       createdAt: params.createdAt ?? '',
       isAdmin: params.isAdmin ?? 'false',
-      adminPassword: params.adminPassword ?? '',
     });
 
     const appStateSub = AppState.addEventListener('change', state => {
@@ -1128,8 +1127,8 @@ export default function EventScreen() {
         onPress: async () => {
           setDeletingPhoto(true);
           const result = isAdmin
-            ? await deletePhotos(slug, [id], '', undefined, undefined, undefined, userMobile ?? undefined)
-            : await deletePhotos(slug, [id], '', userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
+            ? await deletePhotos(slug, [id], undefined, undefined, undefined, userMobile ?? undefined)
+            : await deletePhotos(slug, [id], userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
           setDeletingPhoto(false);
           if (result.error) { showAlert('Error', result.error); return; }
           const currentIdx = lightboxIndex;
@@ -1161,8 +1160,8 @@ export default function EventScreen() {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
           const result = isAdmin
-            ? await deletePhotos(slug, ids, '', undefined, undefined, undefined, userMobile ?? undefined)
-            : await deletePhotos(slug, ids, '', userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
+            ? await deletePhotos(slug, ids, undefined, undefined, undefined, userMobile ?? undefined)
+            : await deletePhotos(slug, ids, userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
           if (result.error) { showAlert('Error', result.error); return; }
           exitSelectMode();
           await loadPhotos();
@@ -1248,7 +1247,7 @@ export default function EventScreen() {
             const rawName = photo?.original_filename ?? `photo_${id}.jpg`;
             const ext = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
             const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
-            const urlRes = await getPhotoDownloadUrl(id, isAdmin ? params.adminPassword : undefined);
+            const urlRes = await getPhotoDownloadUrl(id, params.adminPhone || undefined);
             if (urlRes.error) throw new Error(urlRes.error);
             const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
             await saveFileToDownloads(filename, urlRes.url, 'image/jpeg', folderPath, mode, true, dateTakenMs);
@@ -1282,7 +1281,7 @@ export default function EventScreen() {
       // Fetch fresh signed URLs for this chunk right before downloading
       let urlMap: Record<string, { url?: string; displayUrl?: string; originalFilename?: string | null }> = {};
       try {
-        const fetched = await getPhotoUrls(slug, chunkIds);
+        const fetched = await getPhotoUrls(slug, chunkIds, params.adminPhone || undefined);
         if (fetched.urls) urlMap = fetched.urls;
       } catch { /* all in chunk will fail */ }
 
@@ -1350,7 +1349,7 @@ export default function EventScreen() {
         const filename = totalBatches > 1
           ? `${slug}-photos-part${i + 1}of${totalBatches}.zip`
           : `${slug}-photos.zip`;
-        const zipRes = await prepareZip(slug, batchIds);
+        const zipRes = await prepareZip(slug, batchIds, params.adminPhone || undefined);
         if (zipRes.error) throw new Error(zipRes.error);
         await saveZipToDownloads(filename, zipRes.zipUrl);
         savedBatches++;

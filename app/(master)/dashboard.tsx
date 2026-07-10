@@ -167,7 +167,6 @@ export default function DashboardScreen() {
               expiresAt: item.expires_at,
               createdAt: item.created_at,
               isAdmin: 'true',
-              adminPassword: '',
               adminPhone: organiserPhone ?? '',
               allowGuestDelete: item.allow_guest_delete ? 'true' : 'false',
             },

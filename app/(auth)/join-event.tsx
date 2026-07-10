@@ -61,7 +61,6 @@ export default function JoinEventScreen() {
             expiresAt: result.event.expires_at,
             createdAt: result.event.created_at ?? new Date().toISOString(),
             isAdmin: isAdmin ? 'true' : 'false',
-            adminPassword: '',
             adminPhone: '',
             allowGuestDelete: result.event.allow_guest_delete ? 'true' : 'false',
           },

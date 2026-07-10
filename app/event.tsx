@@ -2018,7 +2018,7 @@ export default function EventScreen() {
               </TouchableOpacity>
               <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
               <View style={styles.lbActions}>
-                {(isAdmin || (currentPhoto != null && userPhotoIds.has(currentPhoto.id))) && (
+                {(isAdmin || (allowGuestDelete && currentPhoto != null && userPhotoIds.has(currentPhoto.id))) && (
                   <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>
                     <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
                   </TouchableOpacity>

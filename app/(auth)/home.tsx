@@ -11,6 +11,8 @@ import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
 
+const ORGANISER_WHITELIST = ['8826388888', '9899092777', '9899060282'];
+
 export default function HomeScreen() {
   const router = useRouter();
   const { showAlert, alertOverlay } = useAlert();
@@ -128,6 +130,7 @@ export default function HomeScreen() {
           <Text style={styles.arrowDark}>›</Text>
         </TouchableOpacity>
 
+        {ORGANISER_WHITELIST.includes(profile?.mobile ?? '') && (
         <TouchableOpacity style={styles.cardSecondary} onPress={() => router.push('/(auth)/organiser-login')}>
           <View style={[styles.iconWrap, styles.iconSecondary]}>
             <Text style={styles.iconText}>🎬</Text>
@@ -138,6 +141,7 @@ export default function HomeScreen() {
           </View>
           <Text style={styles.arrowLight}>›</Text>
         </TouchableOpacity>
+        )}
       </View>
 
       {alertOverlay}

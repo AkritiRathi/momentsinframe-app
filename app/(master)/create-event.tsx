@@ -1,6 +1,6 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView, Switch,
+  KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -33,7 +33,6 @@ export default function CreateEventScreen() {
   const [name, setName] = useState('');
   const [expiryDate, setExpiryDate] = useState<Date | null>(null);
   const [showPicker, setShowPicker] = useState(false);
-  const [isClosed, setIsClosed] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const tomorrow = new Date();
@@ -59,7 +58,7 @@ export default function CreateEventScreen() {
         return;
       }
 
-      const result = await createEvent(profile.mobile, organiserPassword, name.trim(), toAPIFormat(expiryDate), isClosed);
+      const result = await createEvent(profile.mobile, organiserPassword, name.trim(), toAPIFormat(expiryDate), false);
       if (result.error) {
         showAlert('Error', result.error);
         return;
@@ -117,24 +116,6 @@ export default function CreateEventScreen() {
                 }}
               />
             )}
-
-            <Text style={styles.label}>ACCESS</Text>
-            <View style={styles.toggleCard}>
-              <View style={styles.toggleInfo}>
-                <Text style={styles.toggleLabel}>{isClosed ? 'Invite-only' : 'Open to all'}</Text>
-                <Text style={styles.toggleDesc}>
-                  {isClosed
-                    ? 'Only guests you add can join and view photos.'
-                    : 'Anyone with the event code can join.'}
-                </Text>
-              </View>
-              <Switch
-                value={isClosed}
-                onValueChange={setIsClosed}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-            </View>
 
             <View style={styles.noteCard}>
               <Text style={styles.noteIcon}>ℹ️</Text>

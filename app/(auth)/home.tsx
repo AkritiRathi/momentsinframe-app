@@ -124,7 +124,7 @@ export default function HomeScreen() {
             <Text style={styles.iconText}>📷</Text>
           </View>
           <View style={styles.cardBody}>
-            <Text style={styles.cardTitleDark}>Join As Guest</Text>
+            <Text style={styles.cardTitleDark}>Guest login</Text>
             <Text style={styles.cardDescDark}>Enter an event code to view and share photos.</Text>
           </View>
           <Text style={styles.arrowDark}>›</Text>
@@ -136,7 +136,7 @@ export default function HomeScreen() {
             <Text style={styles.iconText}>🎬</Text>
           </View>
           <View style={styles.cardBody}>
-            <Text style={styles.cardTitleLight}>I'm an Organiser</Text>
+            <Text style={styles.cardTitleLight}>Organiser login</Text>
             <Text style={styles.cardDescLight}>Create and manage your own events.</Text>
           </View>
           <Text style={styles.arrowLight}>›</Text>

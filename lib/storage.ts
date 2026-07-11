@@ -70,7 +70,6 @@ export type SavedEventParams = {
   expiresAt: string;
   createdAt: string;
   isAdmin: string;
-  adminPassword: string;
 };
 
 export async function saveLastEvent(params: SavedEventParams): Promise<void> {

@@ -1,10 +1,10 @@
 import {
   View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
   Modal, ActivityIndicator, Dimensions, TextInput,
-  Platform, BackHandler, AppState, RefreshControl,
+  Platform, BackHandler, AppState, RefreshControl, Alert,
 } from 'react-native';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -14,7 +14,10 @@ import RNFetchBlob from 'react-native-blob-util';
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
-import BackgroundUpload from 'background-upload';
+let BackgroundUpload: { startService: (t: string, d: string) => Promise<void>; updateService: (t: string, d: string, p: number, m: number) => Promise<void>; stopService: () => Promise<void>; isRunning: () => boolean } | null = null;
+try { BackgroundUpload = require('background-upload').default; } catch {}
+let PhotoSaver: { saveToPhotos: (fileUri: string) => Promise<void> } | null = null;
+try { PhotoSaver = require('photo-saver').default; } catch {}
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
@@ -229,6 +232,7 @@ function getMimeType(uri: string): string {
 
 // Module-level state shared with the background upload task
 let _bgSlug = '';
+let _iosDebugAlertShown = false; // temp: show first upload error only once
 let _bgDate: string = new Date().toISOString();
 let _bgUserMobile: string | null = null;
 let _bgUserName: string | null = null;
@@ -306,8 +310,12 @@ async function backgroundUploadTask(): Promise<void> {
   const localUris = await Promise.all(toUpload.map(async (asset) => {
     try {
       const info = await MediaLibrary.getAssetInfoAsync(asset.id);
+      if (Platform.OS === 'ios') {
+        // On iOS, ph:// URIs cannot be read — only use file:// paths
+        return info?.localUri?.startsWith('file://') ? info.localUri : null;
+      }
       return info?.localUri ?? asset.uri;
-    } catch { return asset.uri; }
+    } catch { return Platform.OS === 'ios' ? null : asset.uri; }
   }));
 
   if (_bgCancelled) {
@@ -328,7 +336,7 @@ async function backgroundUploadTask(): Promise<void> {
   // Pre-fetch done — now flip the card to "0 of N uploaded" and begin uploads
   _bgProgressCb?.(0, toUpload.length);
   try {
-    await BackgroundUpload.updateService('Uploading photos', `0 of ${toUpload.length} uploaded`, 0, toUpload.length);
+    await BackgroundUpload?.updateService('Uploading photos', `0 of ${toUpload.length} uploaded`, 0, toUpload.length);
   } catch {}
 
   const results: UploadFileResult[] = new Array(toUpload.length);
@@ -338,24 +346,58 @@ async function backgroundUploadTask(): Promise<void> {
   async function uploadOne(asset: MediaLibrary.Asset, index: number): Promise<void> {
     const filename = asset.filename;
     const uploadUri = localUris[index];
-    const contentType = getMimeType(uploadUri);
+    const contentType = getMimeType(uploadUri ?? asset.uri);
     const urlResult = presignedUrls[index];
     let result: UploadFileResult;
     try {
-      if (urlResult.error) {
+      if (urlResult.error || !uploadUri) {
+        if (Platform.OS === 'ios' && !uploadUri && !_iosDebugAlertShown) {
+          _iosDebugAlertShown = true;
+          Alert.alert('DEBUG: no usable URI', `filename=${filename}\nassetId=${(asset as any).assetId ?? 'none'}`);
+        }
         result = { status: 'failed', section: null, uri: asset.uri, filename };
       } else {
         const { uploadUrl, stagingKey } = urlResult;
-        const upRes = await RNFetchBlob.fetch('PUT', uploadUrl,
-          { 'Content-Type': contentType },
-          RNFetchBlob.wrap(uploadUri),
-        );
-        const uploadOk = upRes.respInfo.status >= 200 && upRes.respInfo.status < 300;
+        let uploadOk = false;
+        if (Platform.OS === 'ios') {
+          // Background NSURLSession can't read Photos library paths — copy to app cache first
+          const cacheUri = `${FileSystem.cacheDirectory}mif_upload_${Date.now()}_${filename}`;
+          try {
+            await FileSystem.copyAsync({ from: uploadUri!, to: cacheUri });
+            const iosResult = await FileSystem.uploadAsync(uploadUrl, cacheUri, {
+              httpMethod: 'PUT',
+              uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+              headers: { 'Content-Type': contentType },
+            });
+            uploadOk = iosResult.status >= 200 && iosResult.status < 300;
+            if (!uploadOk && !_iosDebugAlertShown) {
+              _iosDebugAlertShown = true;
+              Alert.alert('DEBUG: upload HTTP fail', `status=${iosResult.status}\nuri=${uploadUri}\ncontentType=${contentType}\nuploadUrl=${uploadUrl.slice(0, 80)}`);
+            }
+          } catch (e: any) {
+            if (!_iosDebugAlertShown) {
+              _iosDebugAlertShown = true;
+              Alert.alert('DEBUG: uploadAsync threw', `${e?.message ?? String(e)}\nuri=${uploadUri}\ncontentType=${contentType}`);
+            }
+          } finally {
+            await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+          }
+        } else {
+          const upRes = await RNFetchBlob.fetch('PUT', uploadUrl,
+            { 'Content-Type': contentType },
+            RNFetchBlob.wrap(uploadUri!),
+          );
+          uploadOk = upRes.respInfo.status >= 200 && upRes.respInfo.status < 300;
+        }
         if (!uploadOk) {
           result = { status: 'failed', section: null, uri: asset.uri, filename };
         } else {
           const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined, eventUserId ?? undefined);
           if (proc.error) {
+            if (Platform.OS === 'ios' && !_iosDebugAlertShown) {
+              _iosDebugAlertShown = true;
+              Alert.alert('DEBUG: processUpload error', `error=${proc.error}\nfilename=${filename}\nstagingKey=${stagingKey}`);
+            }
             result = { status: 'failed', section: null, uri: asset.uri, filename };
           } else if (proc.duplicate) {
             result = { status: 'duplicate', section: proc.inMainTimeline ? 'main' : 'other', existingPhotoId: proc.existingPhotoId, uri: asset.uri, filename };
@@ -366,14 +408,18 @@ async function backgroundUploadTask(): Promise<void> {
           }
         }
       }
-    } catch {
+    } catch (e: any) {
+      if (Platform.OS === 'ios' && !_iosDebugAlertShown) {
+        _iosDebugAlertShown = true;
+        Alert.alert('DEBUG: uploadOne outer catch', `${e?.message ?? String(e)}\nfilename=${filename}\nuploadUri=${uploadUri ?? 'null'}`);
+      }
       result = { status: 'failed', section: null, uri: asset.uri, filename };
     }
     results[index] = result;
     completed += 1;
     _bgProgressCb?.(completed, toUpload.length);
     try {
-      await BackgroundUpload.updateService('Uploading photos', `${completed} of ${toUpload.length} uploaded`, completed, toUpload.length);
+      await BackgroundUpload?.updateService('Uploading photos', `${completed} of ${toUpload.length} uploaded`, completed, toUpload.length);
     } catch {}
   }
 
@@ -400,6 +446,7 @@ async function backgroundUploadTask(): Promise<void> {
 
 export default function EventScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     slug: string; name: string; expiresAt: string; createdAt: string;
     isAdmin: string; adminPhone: string; allowGuestDelete: string;
@@ -800,17 +847,26 @@ export default function EventScreen() {
     bgUploadCancelledRef.current = false;
     _bgCancelled = false;
     setBgCancelRequested(false);
+    _iosDebugAlertShown = false;
     setBgUploading(true);
     setBgUploadProgress({ current: 0, total: assets.length });
     setNewlyUploadedIds(new Set());
     setUploadSummary(null);
 
-    // Pre-fetch all localURIs in parallel
+    // Pre-fetch all localURIs in parallel.
     const localUris = await Promise.all(assets.map(async (asset) => {
-      if (asset.assetId) {
+      if (Platform.OS === 'android' && asset.assetId) {
+        // Android: use any localUri returned (file:// or content://)
         try {
           const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
           if (info?.localUri) return info.localUri;
+        } catch {}
+      } else if (Platform.OS === 'ios' && asset.assetId) {
+        // iOS: only use file:// URIs — ph:// URIs cannot be read by FileSystem
+        // file:// localUri is the original camera file and preserves EXIF
+        try {
+          const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
+          if (info?.localUri?.startsWith('file://')) return info.localUri;
         } catch {}
       }
       return asset.uri;
@@ -881,16 +937,46 @@ export default function EventScreen() {
             result = { status: 'failed', section: null, uri: asset.uri, filename };
           } else {
             const { uploadUrl, stagingKey } = urlResult;
-            const upRes = await RNFetchBlob.fetch('PUT', uploadUrl,
-              { 'Content-Type': contentType },
-              RNFetchBlob.wrap(uploadUri),
-            );
-            const uploadOk = upRes.respInfo.status >= 200 && upRes.respInfo.status < 300;
+            let uploadOk = false;
+            if (Platform.OS === 'ios') {
+              // Background NSURLSession can't read Photos library paths — copy to app cache first
+              const cacheUri = `${FileSystem.cacheDirectory}mif_upload_${Date.now()}_${filename}`;
+              try {
+                await FileSystem.copyAsync({ from: uploadUri, to: cacheUri });
+                const iosResult = await FileSystem.uploadAsync(uploadUrl, cacheUri, {
+                  httpMethod: 'PUT',
+                  uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+                  headers: { 'Content-Type': contentType },
+                });
+                uploadOk = iosResult.status >= 200 && iosResult.status < 300;
+                if (!uploadOk && !_iosDebugAlertShown) {
+                  _iosDebugAlertShown = true;
+                  Alert.alert('DEBUG: upload HTTP fail', `status=${iosResult.status}\nuri=${uploadUri}\ncontentType=${contentType}\nuploadUrl=${uploadUrl.slice(0, 80)}`);
+                }
+              } catch (e: any) {
+                if (!_iosDebugAlertShown) {
+                  _iosDebugAlertShown = true;
+                  Alert.alert('DEBUG: uploadAsync threw', `${e?.message ?? String(e)}\nuri=${uploadUri}\ncontentType=${contentType}`);
+                }
+              } finally {
+                await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+              }
+            } else {
+              const upRes = await RNFetchBlob.fetch('PUT', uploadUrl,
+                { 'Content-Type': contentType },
+                RNFetchBlob.wrap(uploadUri),
+              );
+              uploadOk = upRes.respInfo.status >= 200 && upRes.respInfo.status < 300;
+            }
             if (!uploadOk) {
               result = { status: 'failed', section: null, uri: asset.uri, filename };
             } else {
               const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined, eventUserId ?? undefined);
               if (proc.error) {
+                if (Platform.OS === 'ios' && !_iosDebugAlertShown) {
+                  _iosDebugAlertShown = true;
+                  Alert.alert('DEBUG: processUpload error', `error=${proc.error}\nfilename=${filename}\nstagingKey=${stagingKey}`);
+                }
                 result = { status: 'failed', section: null, uri: asset.uri, filename };
               } else if (proc.duplicate) {
                 result = { status: 'duplicate', section: proc.inMainTimeline ? 'main' : 'other', existingPhotoId: proc.existingPhotoId, uri: asset.uri, filename };
@@ -901,7 +987,11 @@ export default function EventScreen() {
               }
             }
           }
-        } catch {
+        } catch (e: any) {
+          if (Platform.OS === 'ios' && !_iosDebugAlertShown) {
+            _iosDebugAlertShown = true;
+            Alert.alert('DEBUG: uploadOne outer catch', `${e?.message ?? String(e)}\nfilename=${filename}\nuri=${uploadUri}`);
+          }
           result = { status: 'failed', section: null, uri: asset.uri, filename };
         }
       }
@@ -995,7 +1085,7 @@ export default function EventScreen() {
 
     _bgCompleteCb = async (results: UploadFileResult[], preSkipped: number) => {
       _bgCompleteCb = null;
-      try { await BackgroundUpload.stopService(); } catch {}
+      try { await BackgroundUpload?.stopService(); } catch {}
       deactivateKeepAwake();
       setBgUploading(false);
       setBgUploadProgress({ current: 0, total: 0 });
@@ -1037,19 +1127,20 @@ export default function EventScreen() {
         await showUploadCompleteNotification(summary);
       } else if (dupsAndUpgrades.length > 0) {
         showAlert('Upload complete', summary, [
-          { text: 'View duplicates', onPress: () => { setDuplicateResults(dupsAndUpgrades); setDuplicateViewerIndex(0); setDuplicateViewerVisible(true); } },
+          { text: 'View photos', onPress: () => { setDuplicateResults(dupsAndUpgrades); setDuplicateViewerIndex(0); setDuplicateViewerVisible(true); } },
           { text: 'OK' },
         ]);
       }
     };
 
+    _iosDebugAlertShown = false;
     setBgUploading(true);
     setBgUploadProgress({ current: 0, total: 0 });
     activateKeepAwakeAsync();
 
     const dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     try {
-      await BackgroundUpload.startService('Uploading photos', `Scanning photos from ${dateStr}…`);
+      await BackgroundUpload?.startService('Uploading photos', `Scanning photos from ${dateStr}…`);
       backgroundUploadTask();
     } catch {
       setBgUploading(false);
@@ -1105,19 +1196,11 @@ export default function EventScreen() {
   }
 
   function showUploadOptions() {
-    if (Platform.OS === 'ios') {
-      const { ActionSheetIOS } = require('react-native');
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options: ['Cancel', 'Upload by date', 'Choose from library'], cancelButtonIndex: 0 },
-        (i: number) => { if (i === 1) handleDateUpload(); if (i === 2) handleUpload('gallery'); }
-      );
-    } else {
-      showAlert('Upload photos', 'Choose a source', [
-        { text: 'Choose from library', onPress: () => handleUpload('gallery') },
-        { text: 'Upload by date', onPress: () => handleDateUpload() },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-    }
+    showAlert('Upload photos', 'Choose a source', [
+      { text: 'Choose from library', onPress: () => handleUpload('gallery') },
+      { text: 'Upload by date', onPress: () => handleDateUpload() },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   }
 
   async function handleDeletePhoto(id: string) {
@@ -1206,10 +1289,15 @@ export default function EventScreen() {
       await MediaStore.saveToDownloads(localPath, filename, folderName, mimeType, dateTakenMs);
       await FileSystem.deleteAsync(cacheUri, { idempotent: true });
     } else {
+      // iOS: save to Photos using resource-based API to preserve EXIF
       const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
       const dlResult = await FileSystem.downloadAsync(url, cacheUri);
       if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-      await Sharing.shareAsync(cacheUri, { mimeType, dialogTitle: 'Save file' });
+      if (PhotoSaver) {
+        await PhotoSaver.saveToPhotos(cacheUri);
+      } else {
+        await MediaLibrary.saveToLibraryAsync(cacheUri);
+      }
       await FileSystem.deleteAsync(cacheUri, { idempotent: true });
     }
   }
@@ -1237,7 +1325,7 @@ export default function EventScreen() {
     const mode = await ensureStorageMode();
     if (!mode) return;
     const folderPath = await getDownloadFolder();
-    if (!folderPath && mode === 'downloads') return;
+    if (Platform.OS === 'android' && !folderPath && mode === 'downloads') return;
 
     showAlert('Download photo', 'Save this photo to your Downloads folder?', [
       {
@@ -1252,7 +1340,7 @@ export default function EventScreen() {
             const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
             await saveFileToDownloads(filename, urlRes.url, 'image/jpeg', folderPath, mode, true, dateTakenMs);
             const folderName = folderPath?.split('/').pop() ?? params.name;
-            showAlert('Done', `Photo saved to Downloads/${folderName}.`);
+            showAlert('Done', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : `Photo saved to Downloads/${folderName}.`);
           } catch (e: any) {
             showAlert('Error', e?.message ?? 'Could not download photo.');
           } finally {
@@ -1313,7 +1401,7 @@ export default function EventScreen() {
     exitSelectMode();
     const parts: string[] = [];
     const folderName = folderPath?.split('/').pop() ?? params.name;
-    if (saved > 0) parts.push(`${saved} JPG${saved !== 1 ? 's' : ''} saved to Downloads/${folderName}`);
+    if (saved > 0) parts.push(Platform.OS === 'ios' ? `${saved} JPG${saved !== 1 ? 's' : ''} saved to your Photos` : `${saved} JPG${saved !== 1 ? 's' : ''} saved to Downloads/${folderName}`);
     if (failedIds.length > 0) parts.push(`${failedIds.length} failed`);
     const alertButtons: AlertButton[] = [];
     if (failedIds.length > 0) {
@@ -1357,9 +1445,9 @@ export default function EventScreen() {
       setDownloadingBulk(false);
       exitSelectMode();
       const zipFolderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
-      const msg = totalBatches > 1
-        ? `${savedBatches} of ${totalBatches} ZIPs saved to Downloads/${zipFolderName}.`
-        : `ZIP saved to Downloads/${zipFolderName}.`;
+      const msg = Platform.OS === 'ios'
+        ? (totalBatches > 1 ? `${savedBatches} of ${totalBatches} ZIPs shared.` : 'ZIP shared.')
+        : (totalBatches > 1 ? `${savedBatches} of ${totalBatches} ZIPs saved to Downloads/${zipFolderName}.` : `ZIP saved to Downloads/${zipFolderName}.`);
       if (AppState.currentState !== 'active') {
         await showDownloadCompleteNotification(msg);
       } else {
@@ -1403,7 +1491,7 @@ export default function EventScreen() {
     const mode = await ensureStorageMode();
     if (!mode) return;
     const folderPath = await getDownloadFolder();
-    if (!folderPath && mode === 'downloads') return;
+    if (Platform.OS === 'android' && !folderPath && mode === 'downloads') return;
 
     if (ids.length > JPG_LIMIT) {
       showAlert(
@@ -2008,10 +2096,8 @@ export default function EventScreen() {
 
       {/* Lightbox */}
       <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
-        <GestureHandlerRootView style={{ flex: 1 }}>
-        <View style={styles.lightbox}>
-          <SafeAreaView style={styles.lightboxInner}>
-            <View style={styles.lbHeader}>
+        <GestureHandlerRootView style={styles.lightboxInner}>
+            <View style={[styles.lbHeader, { paddingTop: insets.top + 12 }]}>
               <TouchableOpacity onPress={() => setLightboxVisible(false)}>
                 <Text style={styles.lbBack}>←</Text>
               </TouchableOpacity>
@@ -2073,8 +2159,6 @@ export default function EventScreen() {
               <Text style={styles.lbUploadedBy}>Uploaded by {currentPhoto.uploaded_by_name}</Text>
             )}
             <Text style={styles.lbSwipeHint}>Swipe left / right to navigate</Text>
-          </SafeAreaView>
-        </View>
         {downloadingPhoto && (
           <View style={styles.lbDownloadOverlay}>
             <ActivityIndicator color={Colors.white} size="large" />
@@ -2212,8 +2296,8 @@ export default function EventScreen() {
 
       {/* Notifications panel */}
       <Modal visible={notificationsVisible} animationType="slide" onRequestClose={() => setNotificationsVisible(false)}>
-        <SafeAreaView style={styles.container}>
-          <View style={styles.skippedHeader}>
+        <View style={styles.container}>
+          <View style={[styles.skippedHeader, { paddingTop: insets.top + 12 }]}>
             <Text style={styles.notifPanelTitle}>Upload History</Text>
             <TouchableOpacity onPress={() => setNotificationsVisible(false)}>
               <Text style={styles.skippedClose}>×</Text>
@@ -2284,7 +2368,7 @@ export default function EventScreen() {
                             setDuplicateViewerVisible(true);
                           }}
                         >
-                          <Text style={styles.notifViewDupsText}>View duplicates</Text>
+                          <Text style={styles.notifViewDupsText}>View photos</Text>
                         </TouchableOpacity>
                       )}
                       {hasFailed && item.source === 'individual' && (
@@ -2319,7 +2403,7 @@ export default function EventScreen() {
               }}
             />
           )}
-        </SafeAreaView>
+        </View>
       </Modal>
 
 
@@ -2432,9 +2516,8 @@ const styles = StyleSheet.create({
   uploadOverlayPct: { fontSize: 11, color: '#666' },
 
   // Lightbox
-  lightbox: { flex: 1, backgroundColor: '#000' },
-  lightboxInner: { flex: 1 },
-  lbHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
+  lightboxInner: { flex: 1, backgroundColor: '#000' },
+  lbHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   lbBack: { fontSize: 22, color: Colors.textMuted, marginRight: 12 },
   lbDeletingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', gap: 12 },
   lbDeletingText: { fontSize: 14, fontWeight: '700', color: Colors.white },

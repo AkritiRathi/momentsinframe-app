@@ -51,7 +51,7 @@ export default function JoinEventScreen() {
           getDeviceId().then(async deviceId => {
             const userResult = await joinEventUser(result.event.slug, `${profile.firstName} ${profile.lastName}`, profile.mobile, deviceId);
             if (userResult.eventUserId) await saveEventUserId(userResult.eventUserId);
-          });
+          }).catch(() => {});
         }
         router.replace({
           pathname: '/event',

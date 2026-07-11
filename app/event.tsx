@@ -577,7 +577,7 @@ export default function EventScreen() {
     setUploadSummary(null);
     setNewlyUploadedIds(new Set());
     try {
-      const data = await getEventPhotos(slug);
+      const data = await getEventPhotos(slug, params.adminPhone || undefined);
       if (data.error) { showAlert('Error', data.error); return; }
       const main: Photo[] = data.photos ?? [];
       const other: Photo[] = data.otherPhotos ?? [];

@@ -80,8 +80,11 @@ export async function checkAdminStatus(slug: string, phone: string): Promise<{ i
 }
 
 // Photo endpoints
-export async function getEventPhotos(slug: string) {
-  return get(`/api/events/${slug}/photos`);
+export async function getEventPhotos(slug: string, adminPhone?: string) {
+  const url = adminPhone
+    ? `/api/events/${slug}/photos?adminPhone=${encodeURIComponent(adminPhone)}`
+    : `/api/events/${slug}/photos`;
+  return get(url);
 }
 
 export async function getPhotoUrls(slug: string, ids: string[], adminPhone?: string) {

@@ -3,7 +3,7 @@ import {
   Modal, ActivityIndicator, Dimensions, TextInput,
   Platform, BackHandler, AppState, RefreshControl,
 } from 'react-native';
-import MediaStore from 'media-store';
+const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';

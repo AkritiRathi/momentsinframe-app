@@ -232,7 +232,6 @@ function getMimeType(uri: string): string {
 
 // Module-level state shared with the background upload task
 let _bgSlug = '';
-let _iosDebugAlertShown = false; // temp: show first upload error only once
 let _bgDate: string = new Date().toISOString();
 let _bgUserMobile: string | null = null;
 let _bgUserName: string | null = null;
@@ -351,10 +350,6 @@ async function backgroundUploadTask(): Promise<void> {
     let result: UploadFileResult;
     try {
       if (urlResult.error || !uploadUri) {
-        if (Platform.OS === 'ios' && !uploadUri && !_iosDebugAlertShown) {
-          _iosDebugAlertShown = true;
-          Alert.alert('DEBUG: no usable URI', `filename=${filename}\nassetId=${(asset as any).assetId ?? 'none'}`);
-        }
         result = { status: 'failed', section: null, uri: asset.uri, filename };
       } else {
         const { uploadUrl, stagingKey } = urlResult;
@@ -370,15 +365,8 @@ async function backgroundUploadTask(): Promise<void> {
               headers: { 'Content-Type': contentType },
             });
             uploadOk = iosResult.status >= 200 && iosResult.status < 300;
-            if (!uploadOk && !_iosDebugAlertShown) {
-              _iosDebugAlertShown = true;
-              Alert.alert('DEBUG: upload HTTP fail', `status=${iosResult.status}\nuri=${uploadUri}\ncontentType=${contentType}\nuploadUrl=${uploadUrl.slice(0, 80)}`);
-            }
-          } catch (e: any) {
-            if (!_iosDebugAlertShown) {
-              _iosDebugAlertShown = true;
-              Alert.alert('DEBUG: uploadAsync threw', `${e?.message ?? String(e)}\nuri=${uploadUri}\ncontentType=${contentType}`);
-            }
+          } catch {
+            // upload failed, uploadOk stays false
           } finally {
             await FileSystem.deleteAsync(cacheUri, { idempotent: true });
           }
@@ -394,10 +382,6 @@ async function backgroundUploadTask(): Promise<void> {
         } else {
           const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined, eventUserId ?? undefined);
           if (proc.error) {
-            if (Platform.OS === 'ios' && !_iosDebugAlertShown) {
-              _iosDebugAlertShown = true;
-              Alert.alert('DEBUG: processUpload error', `error=${proc.error}\nfilename=${filename}\nstagingKey=${stagingKey}`);
-            }
             result = { status: 'failed', section: null, uri: asset.uri, filename };
           } else if (proc.duplicate) {
             result = { status: 'duplicate', section: proc.inMainTimeline ? 'main' : 'other', existingPhotoId: proc.existingPhotoId, uri: asset.uri, filename };
@@ -408,11 +392,7 @@ async function backgroundUploadTask(): Promise<void> {
           }
         }
       }
-    } catch (e: any) {
-      if (Platform.OS === 'ios' && !_iosDebugAlertShown) {
-        _iosDebugAlertShown = true;
-        Alert.alert('DEBUG: uploadOne outer catch', `${e?.message ?? String(e)}\nfilename=${filename}\nuploadUri=${uploadUri ?? 'null'}`);
-      }
+    } catch {
       result = { status: 'failed', section: null, uri: asset.uri, filename };
     }
     results[index] = result;
@@ -847,7 +827,6 @@ export default function EventScreen() {
     bgUploadCancelledRef.current = false;
     _bgCancelled = false;
     setBgCancelRequested(false);
-    _iosDebugAlertShown = false;
     setBgUploading(true);
     setBgUploadProgress({ current: 0, total: assets.length });
     setNewlyUploadedIds(new Set());
@@ -949,15 +928,8 @@ export default function EventScreen() {
                   headers: { 'Content-Type': contentType },
                 });
                 uploadOk = iosResult.status >= 200 && iosResult.status < 300;
-                if (!uploadOk && !_iosDebugAlertShown) {
-                  _iosDebugAlertShown = true;
-                  Alert.alert('DEBUG: upload HTTP fail', `status=${iosResult.status}\nuri=${uploadUri}\ncontentType=${contentType}\nuploadUrl=${uploadUrl.slice(0, 80)}`);
-                }
-              } catch (e: any) {
-                if (!_iosDebugAlertShown) {
-                  _iosDebugAlertShown = true;
-                  Alert.alert('DEBUG: uploadAsync threw', `${e?.message ?? String(e)}\nuri=${uploadUri}\ncontentType=${contentType}`);
-                }
+              } catch {
+                // upload failed, uploadOk stays false
               } finally {
                 await FileSystem.deleteAsync(cacheUri, { idempotent: true });
               }
@@ -973,10 +945,6 @@ export default function EventScreen() {
             } else {
               const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined, eventUserId ?? undefined);
               if (proc.error) {
-                if (Platform.OS === 'ios' && !_iosDebugAlertShown) {
-                  _iosDebugAlertShown = true;
-                  Alert.alert('DEBUG: processUpload error', `error=${proc.error}\nfilename=${filename}\nstagingKey=${stagingKey}`);
-                }
                 result = { status: 'failed', section: null, uri: asset.uri, filename };
               } else if (proc.duplicate) {
                 result = { status: 'duplicate', section: proc.inMainTimeline ? 'main' : 'other', existingPhotoId: proc.existingPhotoId, uri: asset.uri, filename };
@@ -987,11 +955,7 @@ export default function EventScreen() {
               }
             }
           }
-        } catch (e: any) {
-          if (Platform.OS === 'ios' && !_iosDebugAlertShown) {
-            _iosDebugAlertShown = true;
-            Alert.alert('DEBUG: uploadOne outer catch', `${e?.message ?? String(e)}\nfilename=${filename}\nuri=${uploadUri}`);
-          }
+        } catch {
           result = { status: 'failed', section: null, uri: asset.uri, filename };
         }
       }
@@ -1133,7 +1097,6 @@ export default function EventScreen() {
       }
     };
 
-    _iosDebugAlertShown = false;
     setBgUploading(true);
     setBgUploadProgress({ current: 0, total: 0 });
     activateKeepAwakeAsync();

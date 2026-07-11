@@ -2225,15 +2225,26 @@ export default function EventScreen() {
           <View style={styles.datePickerOverlay}>
             <View style={styles.datePickerCard}>
               <Text style={styles.datePickerTitle}>Select date</Text>
-              <DateTimePicker
-                value={datePickerDate}
-                mode="date"
-                display="spinner"
-                maximumDate={new Date()}
-                onChange={(_: any, date?: Date) => { if (date) setDatePickerDate(date); }}
-                textColor={Colors.white}
-                style={{ width: '100%' }}
-              />
+              {Platform.OS === 'ios' ? (
+                <View style={{ alignItems: 'center' }}>
+                  <DateTimePicker
+                    value={datePickerDate}
+                    mode="date"
+                    display="inline"
+                    maximumDate={new Date()}
+                    onChange={(_: any, date?: Date) => { if (date) setDatePickerDate(date); }}
+                  />
+                </View>
+              ) : (
+                <DateTimePicker
+                  value={datePickerDate}
+                  mode="date"
+                  display="spinner"
+                  maximumDate={new Date()}
+                  onChange={(_: any, date?: Date) => { if (date) setDatePickerDate(date); }}
+                  style={{ width: '100%' }}
+                />
+              )}
               <View style={styles.datePickerBtns}>
                 <TouchableOpacity style={styles.datePickerCancelBtn} onPress={() => setShowDatePickerModal(false)}>
                   <Text style={styles.datePickerCancelText}>Cancel</Text>
@@ -2566,11 +2577,11 @@ const styles = StyleSheet.create({
 
   // Date picker modal (iOS)
   datePickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  datePickerCard: { backgroundColor: Colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 20, paddingBottom: 40, paddingHorizontal: 20 },
-  datePickerTitle: { fontSize: 16, fontWeight: '600', color: Colors.white, textAlign: 'center', marginBottom: 8 },
-  datePickerBtns: { flexDirection: 'row', gap: 12, marginTop: 12 },
-  datePickerCancelBtn: { flex: 1, borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
-  datePickerCancelText: { fontSize: 15, fontWeight: '600', color: Colors.textMuted },
+  datePickerCard: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 20, paddingBottom: 40, paddingHorizontal: 8 },
+  datePickerTitle: { fontSize: 16, fontWeight: '600', color: '#111', textAlign: 'center', marginBottom: 4 },
+  datePickerBtns: { flexDirection: 'row', gap: 12, marginTop: 12, paddingHorizontal: 12 },
+  datePickerCancelBtn: { flex: 1, borderWidth: 0.5, borderColor: '#ccc', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  datePickerCancelText: { fontSize: 15, fontWeight: '600', color: '#555' },
   datePickerConfirmBtn: { flex: 1, backgroundColor: Colors.accent, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   datePickerConfirmText: { fontSize: 15, fontWeight: '700', color: Colors.background },
 });

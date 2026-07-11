@@ -1,6 +1,6 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  KeyboardAvoidingView, Platform, ScrollView,
+  KeyboardAvoidingView, Platform, ScrollView, Modal, Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -96,7 +96,7 @@ export default function CreateEventScreen() {
             <Text style={styles.charCount}>{name.length}/50</Text>
 
             <Text style={styles.label}>EXPIRY DATE</Text>
-            <TouchableOpacity style={styles.dateBtn} onPress={() => setShowPicker(true)}>
+            <TouchableOpacity style={styles.dateBtn} onPress={() => { Keyboard.dismiss(); setShowPicker(true); }}>
               <Text style={expiryDate ? styles.dateBtnText : styles.dateBtnPlaceholder}>
                 {expiryDate ? formatDisplay(expiryDate) : 'Select date'}
               </Text>
@@ -104,7 +104,7 @@ export default function CreateEventScreen() {
             </TouchableOpacity>
             <Text style={styles.hint}>Guests lose access after this date.</Text>
 
-            {showPicker && (
+            {showPicker && Platform.OS === 'android' && (
               <DateTimePicker
                 value={expiryDate ?? tomorrow}
                 mode="date"
@@ -115,6 +115,32 @@ export default function CreateEventScreen() {
                   if (selected) setExpiryDate(selected);
                 }}
               />
+            )}
+            {Platform.OS === 'ios' && (
+              <Modal transparent animationType="fade" visible={showPicker} onRequestClose={() => setShowPicker(false)}>
+                <View style={styles.iosPickerOverlay}>
+                  <View style={styles.iosPickerCard}>
+                    <Text style={styles.iosPickerTitle}>Select expiry date</Text>
+                    <View style={{ alignItems: 'center' }}>
+                      <DateTimePicker
+                        value={expiryDate ?? tomorrow}
+                        mode="date"
+                        display="inline"
+                        minimumDate={today}
+                        onChange={(_, selected) => { if (selected) setExpiryDate(selected); }}
+                      />
+                    </View>
+                    <View style={styles.iosPickerBtns}>
+                      <TouchableOpacity style={styles.iosPickerCancelBtn} onPress={() => setShowPicker(false)}>
+                        <Text style={styles.iosPickerCancelText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.iosPickerConfirmBtn} onPress={() => setShowPicker(false)}>
+                        <Text style={styles.iosPickerConfirmText}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              </Modal>
             )}
 
             <View style={styles.noteCard}>
@@ -200,4 +226,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   createBtnText: { ...Typography.buttonText, color: Colors.background },
+  iosPickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  iosPickerCard: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 20, paddingBottom: 40, paddingHorizontal: 8 },
+  iosPickerTitle: { color: '#111', fontSize: 16, fontWeight: '600', textAlign: 'center', marginBottom: 4 },
+  iosPickerBtns: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, paddingHorizontal: 12 },
+  iosPickerCancelBtn: { padding: 12, flex: 1, alignItems: 'center' },
+  iosPickerCancelText: { color: '#555', fontSize: 15 },
+  iosPickerConfirmBtn: { padding: 12, flex: 1, alignItems: 'center', backgroundColor: Colors.accent, borderRadius: 10 },
+  iosPickerConfirmText: { color: Colors.background, fontSize: 15, fontWeight: '700' },
 });

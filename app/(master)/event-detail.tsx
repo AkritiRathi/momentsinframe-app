@@ -1,11 +1,11 @@
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput,
+  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useState, useEffect, useCallback } from 'react';
 import { Clipboard } from 'react-native';
-import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import * as Contacts from 'expo-contacts';
 import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
@@ -31,6 +31,8 @@ export default function EventDetailScreen() {
     is_closed: string; allow_guest_delete: string; organiserPhone: string;
   }>();
 
+  const [showExtendPicker, setShowExtendPicker] = useState(false);
+  const [extendPickerDate, setExtendPickerDate] = useState<Date>(new Date());
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteStep, setDeleteStep] = useState<null | 'password' | 'confirm'>(null);
   const [deletePassword, setDeletePassword] = useState('');
@@ -176,24 +178,43 @@ export default function EventDetailScreen() {
 
   async function handleExtend() {
     const current = params.expires_at ? new Date(params.expires_at) : new Date();
-    DateTimePickerAndroid.open({
-      value: current,
-      mode: 'date',
-      minimumDate: new Date(),
-      onChange: async (event, date) => {
-        if (event.type !== 'set' || !date) return;
-        const iso = date.toISOString().split('T')[0];
-        const profile = await getUserProfile();
-        const pw = await getOrganiserPassword();
-        if (!profile || !pw) return;
-        const result = await extendEvent(params.slug, profile.mobile, pw, iso);
-        if (result.error) {
-          showAlert('Error', result.error);
-        } else {
-          showAlert('Done', 'Expiry date updated.', [{ text: 'OK', onPress: () => router.back() }]);
-        }
-      },
-    });
+    if (Platform.OS === 'ios') {
+      setExtendPickerDate(current);
+      setShowExtendPicker(true);
+    } else {
+      DateTimePickerAndroid.open({
+        value: current,
+        mode: 'date',
+        minimumDate: new Date(),
+        onChange: async (event, date) => {
+          if (event.type !== 'set' || !date) return;
+          const iso = date.toISOString().split('T')[0];
+          const profile = await getUserProfile();
+          const pw = await getOrganiserPassword();
+          if (!profile || !pw) return;
+          const result = await extendEvent(params.slug, profile.mobile, pw, iso);
+          if (result.error) {
+            showAlert('Error', result.error);
+          } else {
+            showAlert('Done', 'Expiry date updated.', [{ text: 'OK', onPress: () => router.back() }]);
+          }
+        },
+      });
+    }
+  }
+
+  async function confirmExtendIos() {
+    setShowExtendPicker(false);
+    const iso = extendPickerDate.toISOString().split('T')[0];
+    const profile = await getUserProfile();
+    const pw = await getOrganiserPassword();
+    if (!profile || !pw) return;
+    const result = await extendEvent(params.slug, profile.mobile, pw, iso);
+    if (result.error) {
+      showAlert('Error', result.error);
+    } else {
+      showAlert('Done', 'Expiry date updated.', [{ text: 'OK', onPress: () => router.back() }]);
+    }
   }
 
   function handleDelete() {
@@ -772,6 +793,33 @@ export default function EventDetailScreen() {
       </Modal>
 
       {alertOverlay}
+
+      {Platform.OS === 'ios' && (
+        <Modal transparent animationType="fade" visible={showExtendPicker} onRequestClose={() => setShowExtendPicker(false)}>
+          <View style={styles.iosPickerOverlay}>
+            <View style={styles.iosPickerCard}>
+              <Text style={styles.iosPickerTitle}>Select new expiry date</Text>
+              <View style={{ alignItems: 'center' }}>
+                <DateTimePicker
+                  value={extendPickerDate}
+                  mode="date"
+                  display="inline"
+                  minimumDate={new Date()}
+                  onChange={(_, date) => { if (date) setExtendPickerDate(date); }}
+                />
+              </View>
+              <View style={styles.iosPickerBtns}>
+                <TouchableOpacity style={styles.iosPickerCancelBtn} onPress={() => setShowExtendPicker(false)}>
+                  <Text style={styles.iosPickerCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.iosPickerConfirmBtn} onPress={confirmExtendIos}>
+                  <Text style={styles.iosPickerConfirmText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
     </SafeAreaView>
   );
 }
@@ -848,4 +896,12 @@ const styles = StyleSheet.create({
   manualCancelText: { fontSize: 14, fontWeight: '700', color: Colors.textMuted },
   manualAdd: { flex: 1, padding: 12, borderRadius: 8, backgroundColor: Colors.accent, alignItems: 'center' },
   manualAddText: { fontSize: 14, fontWeight: '700', color: Colors.background },
+  iosPickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' },
+  iosPickerCard: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingTop: 20, paddingBottom: 40, paddingHorizontal: 8 },
+  iosPickerTitle: { color: '#111', fontSize: 16, fontWeight: '600', textAlign: 'center', marginBottom: 4 },
+  iosPickerBtns: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, paddingHorizontal: 12 },
+  iosPickerCancelBtn: { padding: 12, flex: 1, alignItems: 'center' },
+  iosPickerCancelText: { color: '#555', fontSize: 15 },
+  iosPickerConfirmBtn: { padding: 12, flex: 1, alignItems: 'center', backgroundColor: Colors.accent, borderRadius: 10 },
+  iosPickerConfirmText: { color: Colors.background, fontSize: 15, fontWeight: '700' },
 });

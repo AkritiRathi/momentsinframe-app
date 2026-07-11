@@ -1957,7 +1957,7 @@ export default function EventScreen() {
 
       {/* Duplicate Viewer */}
       <Modal visible={duplicateViewerVisible} animationType="slide" onRequestClose={() => setDuplicateViewerVisible(false)}>
-        <SafeAreaView style={styles.container}>
+        <View style={[styles.container, { paddingBottom: insets.bottom }]}>
           {(() => {
             const cur = duplicateResults[duplicateViewerIndex];
             const isUpgrade = cur?.status === 'upgraded';
@@ -1966,7 +1966,7 @@ export default function EventScreen() {
               : null;
             return (
               <>
-                <View style={styles.skippedHeader}>
+                <View style={[styles.skippedHeader, { paddingTop: insets.top + 12 }]}>
                   <Text style={styles.skippedTitle}>
                     {isUpgrade ? 'Upgraded' : 'Duplicate'} — {duplicateViewerIndex + 1} of {duplicateResults.length}
                   </Text>
@@ -2018,7 +2018,7 @@ export default function EventScreen() {
               </>
             );
           })()}
-        </SafeAreaView>
+        </View>
       </Modal>
 
       {/* Failed Uploads Viewer */}
@@ -2110,18 +2110,19 @@ export default function EventScreen() {
                 </TouchableOpacity>
               )}
             </View>
-            {currentPhoto?.taken_at && (
-              <Text style={styles.lbMeta}>
-                {new Date(currentPhoto.taken_at).toLocaleString('en-IN', {
-                  day: '2-digit', month: 'short', year: 'numeric',
-                  hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
-                })}
-              </Text>
-            )}
-            {currentPhoto?.uploaded_by_name && (
-              <Text style={styles.lbUploadedBy}>Uploaded by {currentPhoto.uploaded_by_name}</Text>
-            )}
-            <Text style={styles.lbSwipeHint}>Swipe left / right to navigate</Text>
+            <View style={[styles.lbFooter, { paddingBottom: insets.bottom + 12 }]}>
+              {currentPhoto?.uploaded_by_name && (
+                <Text style={styles.lbFooterLine1}>Uploaded by {currentPhoto.uploaded_by_name}</Text>
+              )}
+              {currentPhoto?.taken_at && (
+                <Text style={styles.lbFooterLine2}>
+                  {'Taken on '}{new Date(currentPhoto.taken_at).toLocaleString('en-IN', {
+                    day: '2-digit', month: 'short', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
+                  })}
+                </Text>
+              )}
+            </View>
         {downloadingPhoto && (
           <View style={styles.lbDownloadOverlay}>
             <ActivityIndicator color={Colors.white} size="large" />
@@ -2267,7 +2268,7 @@ export default function EventScreen() {
             </TouchableOpacity>
           </View>
           {notifications.length === 0 ? (
-            <View style={styles.notifEmpty}>
+            <View style={[styles.notifEmpty, { paddingBottom: insets.bottom + 16 }]}>
               <Text style={styles.notifEmptyTitle}>No upload history yet.</Text>
               <Text style={styles.notifEmptySub}>Your upload results will appear here after each upload, whether you were on the screen or not.</Text>
             </View>
@@ -2275,7 +2276,7 @@ export default function EventScreen() {
             <FlatList
               data={notifications}
               keyExtractor={n => n.id}
-              contentContainerStyle={{ padding: 16, gap: 12 }}
+              contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 16 }}
               renderItem={({ item }) => {
                 const d = new Date(item.timestamp);
                 const dateStr = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
@@ -2535,9 +2536,9 @@ const styles = StyleSheet.create({
 
   lbDownloadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 10, justifyContent: 'center', alignItems: 'center', gap: 12 },
   lbDownloadText: { color: Colors.white, fontSize: 14, fontWeight: '500' },
-  lbMeta: { fontSize: 12, color: '#555', textAlign: 'center', paddingHorizontal: 16, paddingVertical: 8 },
-  lbUploadedBy: { fontSize: 12, color: '#444', textAlign: 'center', paddingHorizontal: 16, paddingBottom: 4 },
-  lbSwipeHint: { fontSize: 10, color: '#333', textAlign: 'center', paddingBottom: 10 },
+  lbFooter: { paddingHorizontal: 16, paddingTop: 10 },
+  lbFooterLine1: { fontSize: 13, color: '#ccc', marginBottom: 2 },
+  lbFooterLine2: { fontSize: 12, color: '#888' },
 
   // Notifications
   notifPanelTitle: { fontSize: 18, fontWeight: '700', color: Colors.white, flex: 1 },

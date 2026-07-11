@@ -92,6 +92,38 @@ export async function clearLastEvent(): Promise<void> {
   } catch {}
 }
 
+// ── Joined Events List ────────────────────────────────────────────────────────
+
+export type JoinedEventEntry = {
+  slug: string;
+  name: string;
+  expiresAt: string;
+  joinCode: string;
+  createdAt: string;
+  allowGuestDelete: boolean;
+  isOrganiser?: boolean;
+};
+
+const JOINED_EVENTS_KEY = 'joined_events_list';
+const MAX_JOINED_EVENTS = 10;
+
+export async function saveJoinedEvent(entry: JoinedEventEntry): Promise<void> {
+  try {
+    const existing = await getJoinedEvents();
+    const filtered = existing.filter(e => e.slug !== entry.slug);
+    const updated = [entry, ...filtered].slice(0, MAX_JOINED_EVENTS);
+    await AsyncStorage.setItem(JOINED_EVENTS_KEY, JSON.stringify(updated));
+  } catch {}
+}
+
+export async function getJoinedEvents(): Promise<JoinedEventEntry[]> {
+  try {
+    const raw = await AsyncStorage.getItem(JOINED_EVENTS_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as JoinedEventEntry[];
+  } catch { return []; }
+}
+
 // ── Upload Notifications ──────────────────────────────────────────────────────
 
 export type UploadNotificationEntry = {

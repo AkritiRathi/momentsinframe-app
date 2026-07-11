@@ -7,7 +7,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { getOrganiserPassword } from '../../lib/auth';
-import { getUserProfile } from '../../lib/storage';
+import { getUserProfile, saveJoinedEvent } from '../../lib/storage';
 import { createEvent } from '../../lib/api';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -62,6 +62,18 @@ export default function CreateEventScreen() {
       if (result.error) {
         showAlert('Error', result.error);
         return;
+      }
+
+      if (result.event) {
+        await saveJoinedEvent({
+          slug: result.event.slug,
+          name: result.event.name,
+          expiresAt: result.event.expires_at,
+          joinCode: result.event.join_code ?? '',
+          createdAt: result.event.created_at ?? new Date().toISOString(),
+          allowGuestDelete: result.event.allow_guest_delete ?? false,
+          isOrganiser: true,
+        });
       }
 
       router.replace('/(master)/dashboard');

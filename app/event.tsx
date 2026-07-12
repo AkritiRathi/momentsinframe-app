@@ -23,8 +23,9 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
-  getPhotoDownloadUrl, prepareZip,
+  prepareZip,
 } from '../lib/api';
+import { API_BASE_URL } from '../constants/config';
 import {
   getUserProfile, getEventUserId, getDeviceId,
   saveUploadNotification, getUploadNotifications, markNotificationsRead,
@@ -1296,12 +1297,13 @@ export default function EventScreen() {
           setDownloadingPhoto(true);
           try {
             const rawName = photo?.original_filename ?? `photo_${id}.jpg`;
-            const ext = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
+            const rawExt = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
+            const ext = (rawExt === 'heic' || rawExt === 'heif') ? 'jpg' : rawExt;
             const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
-            const urlRes = await getPhotoDownloadUrl(id, params.adminPhone || undefined);
-            if (urlRes.error) throw new Error(urlRes.error);
+            const adminParam = params.adminPhone ? `?adminPhone=${encodeURIComponent(params.adminPhone)}` : '';
+            const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
             const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
-            await saveFileToDownloads(filename, urlRes.url, 'image/jpeg', folderPath, mode, true, dateTakenMs);
+            await saveFileToDownloads(filename, downloadUrl, 'image/jpeg', folderPath, mode, true, dateTakenMs);
             const folderName = folderPath?.split('/').pop() ?? params.name;
             showAlert('Done', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : `Photo saved to Downloads/${folderName}.`);
           } catch (e: any) {
@@ -1329,31 +1331,20 @@ export default function EventScreen() {
       if (downloadCancelledRef.current) break;
       const chunkIds = ids.slice(chunkStart, chunkStart + CHUNK);
 
-      // Fetch fresh signed URLs for this chunk right before downloading
-      let urlMap: Record<string, { url?: string; displayUrl?: string; originalFilename?: string | null }> = {};
-      try {
-        const fetched = await getPhotoUrls(slug, chunkIds, params.adminPhone || undefined);
-        if (fetched.urls) urlMap = fetched.urls;
-      } catch { /* all in chunk will fail */ }
-
       for (let j = 0; j < chunkIds.length; j++) {
         if (downloadCancelledRef.current) break;
         const id = chunkIds[j];
         const globalIndex = chunkStart + j;
-        const u = urlMap[id];
-        const url = u?.url ?? u?.displayUrl ?? null;
-        if (!url) {
-          failedIds.push(id);
-          setDownloadProgress({ current: globalIndex + 1, total: ids.length });
-          continue;
-        }
         try {
-          const rawName = u?.originalFilename ?? `photo_${id}.jpg`;
-          const ext = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
           const photo = allPhotos.find(p => p.id === id);
+          const rawName = photo?.original_filename ?? `photo_${id}.jpg`;
+          const rawExt = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
+          const ext = (rawExt === 'heic' || rawExt === 'heif') ? 'jpg' : rawExt;
           const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
+          const adminParam = params.adminPhone ? `?adminPhone=${encodeURIComponent(params.adminPhone)}` : '';
+          const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
           const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
-          await saveFileToDownloads(filename, url, 'image/jpeg', folderPath, mode, false, dateTakenMs);
+          await saveFileToDownloads(filename, downloadUrl, 'image/jpeg', folderPath, mode, false, dateTakenMs);
           saved++;
         } catch { failedIds.push(id); }
         setDownloadProgress({ current: globalIndex + 1, total: ids.length });

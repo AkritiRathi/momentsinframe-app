@@ -1,12 +1,13 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  ActivityIndicator, Dimensions,
+  ActivityIndicator, Dimensions, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useEffect, useState, useRef } from 'react';
 import * as Updates from 'expo-updates';
-import { getUserProfile, UserProfile } from '../../lib/storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
@@ -18,6 +19,7 @@ export default function HomeScreen() {
   const { showAlert, alertOverlay } = useAlert();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [settingsVisible, setSettingsVisible] = useState(false);
+  const [userDetailsVisible, setUserDetailsVisible] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [dropPos, setDropPos] = useState({ top: 0, right: 0 });
   const gearRef = useRef<TouchableOpacity>(null);
@@ -64,6 +66,44 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
 
+      {/* User details modal */}
+      <Modal
+        visible={userDetailsVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setUserDetailsVisible(false)}
+      >
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setUserDetailsVisible(false)}>
+          <View style={styles.userDetailsSheet}>
+            <Text style={styles.userDetailsTitle}>Your Details</Text>
+            <Text style={styles.userDetailsText}>Name: {profile?.firstName ?? ''} {profile?.lastName ?? ''}</Text>
+            <Text style={styles.userDetailsText}>Mobile: +91 {profile?.mobile ?? ''}</Text>
+            <View style={styles.userDetailsButtons}>
+              <TouchableOpacity style={styles.logoutBtn} onPress={() => {
+                setUserDetailsVisible(false);
+                setTimeout(() => {
+                  Alert.alert('Logout', 'Are you sure you want to log out?', [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Logout', style: 'destructive', onPress: async () => {
+                        await clearUserProfile();
+                        await AsyncStorage.clear();
+                        router.replace('/(auth)/name-entry');
+                      },
+                    },
+                  ]);
+                }, 300);
+              }}>
+                <Text style={styles.logoutBtnText}>Logout</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.okBtn} onPress={() => setUserDetailsVisible(false)}>
+                <Text style={styles.okBtnText}>OK</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       {/* Settings modal */}
       <Modal
         visible={settingsVisible}
@@ -83,12 +123,7 @@ export default function HomeScreen() {
             <View style={styles.settingsDivider} />
             <TouchableOpacity style={styles.settingsRow} onPress={() => {
               setSettingsVisible(false);
-              setTimeout(() => {
-                showAlert(
-                  'Your Details',
-                  `Name: ${profile?.firstName ?? ''} ${profile?.lastName ?? ''}\nMobile: +91 ${profile?.mobile ?? ''}`,
-                );
-              }, 300);
+              setTimeout(() => setUserDetailsVisible(true), 300);
             }}>
               <View style={styles.settingsRowBody}>
                 <Text style={styles.settingsRowLabel}>See user details</Text>
@@ -225,4 +260,33 @@ const styles = StyleSheet.create({
   settingsRowBody: {},
   settingsRowLabel: { fontSize: 14, fontWeight: '600', color: Colors.white },
   settingsRowSub: { fontSize: 11, color: '#555', marginTop: 1 },
+
+  userDetailsSheet: {
+    position: 'absolute',
+    top: '35%',
+    left: 32,
+    right: 32,
+    backgroundColor: '#1C1C1C',
+    borderRadius: 20,
+    padding: 24,
+  },
+  userDetailsTitle: { fontSize: 17, fontWeight: '700', color: Colors.white, textAlign: 'center', marginBottom: 16 },
+  userDetailsText: { fontSize: 14, color: Colors.textMuted, textAlign: 'center', marginBottom: 6 },
+  userDetailsButtons: { flexDirection: 'row', gap: 12, marginTop: 24 },
+  logoutBtn: {
+    flex: 1,
+    backgroundColor: '#2A2A2A',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  logoutBtnText: { fontSize: 15, fontWeight: '700', color: '#FF4444' },
+  okBtn: {
+    flex: 1,
+    backgroundColor: Colors.accent,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  okBtnText: { fontSize: 15, fontWeight: '700', color: '#0F0F0F' },
 });

@@ -191,6 +191,27 @@ export async function hasUnreadNotifications(slug: string): Promise<boolean> {
   return notifs.some(n => !n.read);
 }
 
+export async function clearAllUploadNotifications(slug: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(notifKey(slug));
+  } catch {}
+}
+
+// Removes notifications older than 48 hours or where the event has already expired
+export async function pruneUploadNotifications(slug: string, eventExpiresAt: string | null): Promise<void> {
+  try {
+    const existing = await getUploadNotifications(slug);
+    const now = Date.now();
+    const FORTY_EIGHT_HOURS = 48 * 60 * 60 * 1000;
+    const eventExpired = eventExpiresAt ? new Date(eventExpiresAt).getTime() < now : false;
+    const pruned = existing.filter(n => {
+      if (eventExpired) return false;
+      return now - new Date(n.timestamp).getTime() < FORTY_EIGHT_HOURS;
+    });
+    await AsyncStorage.setItem(notifKey(slug), JSON.stringify(pruned));
+  } catch {}
+}
+
 export async function mergeUploadNotification(
   slug: string,
   id: string,

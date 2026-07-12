@@ -29,7 +29,8 @@ import { API_BASE_URL } from '../constants/config';
 import {
   getUserProfile, getEventUserId, getDeviceId,
   saveUploadNotification, getUploadNotifications, markNotificationsRead,
-  deleteUploadNotification, mergeUploadNotification,
+  deleteUploadNotification, mergeUploadNotification, clearAllUploadNotifications,
+  pruneUploadNotifications,
   saveLastEvent, clearLastEvent,
   type UploadNotification,
 } from '../lib/storage';
@@ -522,6 +523,7 @@ export default function EventScreen() {
   const savedTranslateY = useSharedValue(0);
 
   async function refreshNotifications() {
+    await pruneUploadNotifications(slug, params.expiresAt ?? null);
     const notifs = await getUploadNotifications(slug);
     setNotifications(notifs);
     setHasUnread(notifs.some(n => !n.read));
@@ -2265,6 +2267,15 @@ export default function EventScreen() {
         <View style={styles.container}>
           <View style={[styles.skippedHeader, { paddingTop: insets.top + 12 }]}>
             <Text style={styles.notifPanelTitle}>Upload History</Text>
+            {notifications.length > 0 && (
+              <TouchableOpacity onPress={async () => {
+                await clearAllUploadNotifications(slug);
+                setNotifications([]);
+                setHasUnread(false);
+              }} style={{ marginRight: 12 }}>
+                <Text style={styles.notifClearAll}>Clear all</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity onPress={() => setNotificationsVisible(false)}>
               <Text style={styles.skippedClose}>×</Text>
             </TouchableOpacity>
@@ -2554,8 +2565,9 @@ const styles = StyleSheet.create({
   notifCardDate: { fontSize: 13, fontWeight: '600', color: Colors.white },
   notifCardSource: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
   notifCardSummary: { fontSize: 13, color: '#22C55E' },
-  notifDeleteBtn: { paddingLeft: 12, paddingBottom: 4 },
-  notifDeleteText: { fontSize: 22, color: Colors.textMuted, lineHeight: 22 },
+  notifDeleteBtn: { paddingLeft: 12, paddingBottom: 4, paddingTop: 2 },
+  notifDeleteText: { fontSize: 28, color: Colors.textMuted, lineHeight: 28 },
+  notifClearAll: { fontSize: 14, fontWeight: '600', color: '#FF4444' },
   notifBtnRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   notifViewDupsBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingVertical: 8, paddingHorizontal: 12, alignSelf: 'flex-start' },
   notifViewDupsText: { fontSize: 13, fontWeight: '600', color: Colors.accent },

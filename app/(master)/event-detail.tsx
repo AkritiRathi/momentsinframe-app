@@ -609,6 +609,7 @@ export default function EventDetailScreen() {
               <Text style={styles.panelClose}>×</Text>
             </TouchableOpacity>
           </View>
+          <Text style={styles.panelDesc}>Co-Admins can delete any photo uploaded by any guest or other Co-Admins but not photos uploaded by the Organiser. They join using the event code, just like other guests.</Text>
           <ScrollView contentContainerStyle={styles.panelScroll}>
             {coadminsLoading ? (
               <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
@@ -698,6 +699,7 @@ export default function EventDetailScreen() {
                 <Text style={styles.panelClose}>×</Text>
               </TouchableOpacity>
             </View>
+            <Text style={styles.panelDesc}>Only guests on this list can join the event. Add guests by their phone number and they'll be able to enter the event code and join.</Text>
             <ScrollView contentContainerStyle={styles.panelScroll}>
               {allowedGuestsLoading ? (
                 <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
@@ -909,6 +911,7 @@ const styles = StyleSheet.create({
   panelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 0.5, borderBottomColor: '#222' },
   panelTitle: { fontSize: 18, fontWeight: '700', color: Colors.white },
   panelClose: { fontSize: 28, color: Colors.textMuted, paddingHorizontal: 4 },
+  panelDesc: { fontSize: 13, color: Colors.textMuted, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, lineHeight: 19 },
   panelScroll: { padding: 16, gap: 8 },
   pickerSearchWrap: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#222' },
   pickerSearch: { backgroundColor: '#1E1E1E', borderRadius: 8, padding: 10, fontSize: 14, color: Colors.white, borderWidth: 0.5, borderColor: '#333' },

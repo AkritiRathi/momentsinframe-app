@@ -1,8 +1,8 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, FlatList,
+  ActivityIndicator, Modal, ScrollView,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { joinEvent, joinEventUser, checkAdminStatus, listEvents } from '../../lib/api';
@@ -27,10 +27,12 @@ function formatExpiry(expiresAt: string): string {
 export default function JoinEventScreen() {
   const router = useRouter();
   const { showAlert, alertOverlay } = useAlert();
+  const insets = useSafeAreaInsets();
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [joinedEvents, setJoinedEvents] = useState<JoinedEventEntry[]>([]);
   const [rejoining, setRejoining] = useState<string | null>(null);
+  const [eventsModalVisible, setEventsModalVisible] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -106,6 +108,7 @@ export default function JoinEventScreen() {
           isAdmin: isAdmin ? 'true' : 'false',
           adminPhone: '',
           allowGuestDelete: result.event.allow_guest_delete ? 'true' : 'false',
+          joinCode,
         },
       });
     } catch {
@@ -135,6 +138,7 @@ export default function JoinEventScreen() {
           isAdmin: isAdmin ? 'true' : 'false',
           adminPhone: '',
           allowGuestDelete: entry.allowGuestDelete ? 'true' : 'false',
+          joinCode: entry.joinCode,
         },
       });
     } catch {
@@ -144,95 +148,118 @@ export default function JoinEventScreen() {
     }
   }
 
+  function renderEventCard(item: JoinedEventEntry) {
+    const expired = isExpired(item.expiresAt);
+    return (
+      <TouchableOpacity
+        key={item.slug}
+        style={[styles.eventCard, expired && !item.isOrganiser && styles.eventCardExpired]}
+        onPress={() => {
+          if (!expired || item.isOrganiser) {
+            setEventsModalVisible(false);
+            setTimeout(() => handleRejoin(item), 300);
+          }
+        }}
+        disabled={(!item.isOrganiser && expired) || rejoining === item.slug}
+        activeOpacity={expired ? 1 : 0.7}
+      >
+        <View style={styles.eventCardLeft}>
+          <Text style={[styles.eventName, expired && styles.eventNameExpired]} numberOfLines={1}>
+            {item.name}
+          </Text>
+          <Text style={styles.eventExpiry}>
+            {item.isOrganiser && <Text style={styles.organiserPrefix}>Organiser · </Text>}
+            {expired ? 'Expired' : `Active · expires ${formatExpiry(item.expiresAt)}`}
+          </Text>
+        </View>
+        {rejoining === item.slug
+          ? <ActivityIndicator size="small" color={Colors.accent} />
+          : !expired && <Text style={styles.eventArrow}>›</Text>
+        }
+        {expired && <View style={styles.expiredBadge}><Text style={styles.expiredBadgeText}>Expired</Text></View>}
+      </TouchableOpacity>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.container}>
+      {/* Current Event modal */}
+      <Modal
+        visible={eventsModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEventsModalVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={() => setEventsModalVisible(false)}
+        >
+          <View
+            style={[styles.eventsSheet, { paddingBottom: insets.bottom + 16 }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>Your Events</Text>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {joinedEvents.map(renderEventCard)}
+            </ScrollView>
+            <TouchableOpacity style={styles.cancelBtn} onPress={() => setEventsModalVisible(false)}>
+              <Text style={styles.cancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
       <TouchableOpacity style={styles.back} onPress={() => router.back()}>
         <Text style={styles.backText}>←</Text>
       </TouchableOpacity>
 
-      <FlatList
-        data={joinedEvents}
-        keyExtractor={item => item.slug}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={styles.scroll}
-        ListHeaderComponent={
-          <View>
-            <Text style={styles.title}>Guest login</Text>
-            <Text style={styles.subtitle}>Enter a 6-digit event code to join, or tap a previous event below.</Text>
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
+        <Text style={styles.title}>Guest login</Text>
+        <Text style={styles.subtitle}>Enter a 6-digit event code to join{joinedEvents.length > 0 ? ', or open a previous event.' : '.'}</Text>
 
-            {joinedEvents.length > 0 && (
-              <Text style={styles.sectionLabel}>YOUR EVENTS</Text>
-            )}
-          </View>
-        }
-        renderItem={({ item }) => {
-          const expired = isExpired(item.expiresAt);
-          return (
-            <TouchableOpacity
-              style={[styles.eventCard, expired && !item.isOrganiser && styles.eventCardExpired]}
-              onPress={() => (!expired || item.isOrganiser) && handleRejoin(item)}
-              disabled={(!item.isOrganiser && expired) || rejoining === item.slug}
-              activeOpacity={expired ? 1 : 0.7}
-            >
-              <View style={styles.eventCardLeft}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-                  <Text style={[styles.eventName, expired && styles.eventNameExpired]} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                  {item.isOrganiser && (
-                    <View style={styles.organiserBadge}><Text style={styles.organiserBadgeText}>Organiser</Text></View>
-                  )}
-                </View>
-                <Text style={styles.eventExpiry}>
-                  {expired ? 'Expired' : `Active · expires ${formatExpiry(item.expiresAt)}`}
-                </Text>
-              </View>
-              {rejoining === item.slug
-                ? <ActivityIndicator size="small" color={Colors.accent} />
-                : !expired && <Text style={styles.eventArrow}>›</Text>
-              }
-              {expired && <View style={styles.expiredBadge}><Text style={styles.expiredBadgeText}>Expired</Text></View>}
+        {joinedEvents.length > 0 && (
+          <>
+            <Text style={styles.sectionLabel}>CURRENT EVENT</Text>
+            <TouchableOpacity style={styles.currentEventRow} onPress={() => setEventsModalVisible(true)}>
+              <Text style={styles.currentEventText}>Your events ({joinedEvents.length})</Text>
+              <Text style={styles.eventArrow}>›</Text>
             </TouchableOpacity>
-          );
-        }}
-        ListFooterComponent={
-          <View>
-            {joinedEvents.length > 0 && (
-              <Text style={styles.sectionLabel}>JOIN A NEW EVENT</Text>
-            )}
+          </>
+        )}
 
-            <Text style={styles.label}>EVENT CODE</Text>
-            <TextInput
-              style={styles.codeInput}
-              value={code}
-              onChangeText={handleCodeChange}
-              keyboardType="number-pad"
-              maxLength={6}
-              placeholder="– – – – – –"
-              placeholderTextColor="#333"
-              textAlign="center"
-            />
+        <Text style={[styles.sectionLabel, { marginTop: joinedEvents.length > 0 ? 20 : 0 }]}>JOIN A NEW EVENT</Text>
+        <Text style={styles.label}>EVENT CODE</Text>
+        <TextInput
+          style={styles.codeInput}
+          value={code}
+          onChangeText={handleCodeChange}
+          keyboardType="number-pad"
+          maxLength={6}
+          placeholder="– – – – – –"
+          placeholderTextColor="#333"
+          textAlign="center"
+        />
 
-            <TouchableOpacity
-              style={[styles.joinBtn, (code.length !== 6 || loading) && { opacity: 0.4 }]}
-              onPress={() => attemptJoin(code)}
-              disabled={code.length !== 6 || loading}
-            >
-              {loading
-                ? <ActivityIndicator color={Colors.background} />
-                : <Text style={styles.joinBtnText}>Join Event</Text>
-              }
-            </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.joinBtn, (code.length !== 6 || loading) && { opacity: 0.4 }]}
+          onPress={() => attemptJoin(code)}
+          disabled={code.length !== 6 || loading}
+        >
+          {loading
+            ? <ActivityIndicator color={Colors.background} />
+            : <Text style={styles.joinBtnText}>Join Event</Text>
+          }
+        </TouchableOpacity>
 
-            <View style={styles.divider} />
+        <View style={styles.divider} />
 
-            <TouchableOpacity style={styles.qrButton} onPress={() => showAlert('Coming soon', 'QR scanner will be added shortly.')}>
-              <Text style={styles.qrIcon}>📷</Text>
-              <Text style={styles.qrText}>Scan QR code instead</Text>
-            </TouchableOpacity>
-          </View>
-        }
-      />
+        <TouchableOpacity style={styles.qrButton} onPress={() => showAlert('Coming soon', 'QR scanner will be added shortly.')}>
+          <Text style={styles.qrIcon}>📷</Text>
+          <Text style={styles.qrText}>Scan QR code instead</Text>
+        </TouchableOpacity>
+      </ScrollView>
       {alertOverlay}
     </SafeAreaView>
   );
@@ -246,6 +273,46 @@ const styles = StyleSheet.create({
   title: { ...Typography.heading, color: Colors.white, marginBottom: 8 },
   subtitle: { ...Typography.body, color: Colors.textMuted, marginBottom: 28 },
   sectionLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1.2, color: Colors.accent, marginBottom: 12, marginTop: 4 },
+
+  currentEventRow: {
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.cardBorder,
+    borderRadius: 14,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  currentEventText: { fontSize: 15, fontWeight: '600', color: Colors.white },
+
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
+  eventsSheet: {
+    backgroundColor: '#1C1C1C',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 20,
+    maxHeight: '75%',
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: '#444',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  sheetTitle: { fontSize: 17, fontWeight: '700', color: Colors.white, textAlign: 'center', marginBottom: 16 },
+  cancelBtn: {
+    backgroundColor: '#2A2A2A',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  cancelBtnText: { fontSize: 15, fontWeight: '600', color: Colors.textMuted },
+
   eventCard: {
     backgroundColor: Colors.card,
     borderWidth: 1,
@@ -262,6 +329,7 @@ const styles = StyleSheet.create({
   eventNameExpired: { color: Colors.textMuted },
   eventExpiry: { fontSize: 12, color: Colors.textMuted },
   eventArrow: { fontSize: 22, color: Colors.accent, marginLeft: 8 },
+  organiserPrefix: { color: Colors.accent, fontWeight: '700' },
   organiserBadge: {
     backgroundColor: '#2a2200',
     borderRadius: 6,

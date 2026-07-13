@@ -431,7 +431,7 @@ export default function EventScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     slug: string; name: string; expiresAt: string; createdAt: string;
-    isAdmin: string; adminPhone: string; allowGuestDelete: string;
+    isAdmin: string; adminPhone: string; allowGuestDelete: string; joinCode: string;
   }>();
 
   const isAdmin = params.isAdmin === 'true';
@@ -1683,6 +1683,7 @@ export default function EventScreen() {
             </View>
             <View style={styles.eventHeaderBody}>
               <Text style={styles.eventName}>{params.name || 'Event'}</Text>
+              {params.joinCode ? <Text style={styles.eventCode}>Code: {params.joinCode}</Text> : null}
               {params.expiresAt && (
                 <Text style={styles.eventMeta}>
                   Event expires {formatDate(params.expiresAt)}
@@ -2412,6 +2413,7 @@ const styles = StyleSheet.create({
   backText: { fontSize: 24, color: Colors.textMuted },
   eventHeaderBody: { alignItems: 'center' },
   eventName: { ...Typography.eventName, color: Colors.white, textAlign: 'center', marginBottom: 4 },
+  eventCode: { fontSize: 12, color: '#888', textAlign: 'center', marginBottom: 2 },
   eventMeta: { fontSize: 12, color: '#888', textAlign: 'center', marginBottom: 2 },
   eventMetaSub: { fontSize: 12, color: '#666', textAlign: 'center' },
 

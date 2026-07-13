@@ -1683,7 +1683,7 @@ export default function EventScreen() {
             </View>
             <View style={styles.eventHeaderBody}>
               <Text style={styles.eventName}>{params.name || 'Event'}</Text>
-              {params.joinCode ? <Text style={styles.eventCode}>Code: {params.joinCode}</Text> : null}
+              {params.joinCode ? <Text style={styles.eventCode}>Event Code: {params.joinCode}</Text> : null}
               {params.expiresAt && (
                 <Text style={styles.eventMeta}>
                   Event expires {formatDate(params.expiresAt)}

@@ -405,9 +405,12 @@ export default function EventDetailScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
-        <TouchableOpacity onPress={() => router.back()}>
-          <Text style={styles.back}>←</Text>
-        </TouchableOpacity>
+        <View style={styles.pageHeader}>
+          <TouchableOpacity onPress={() => router.back()}>
+            <Text style={styles.back}>←</Text>
+          </TouchableOpacity>
+          <Text style={styles.pageTitle}>Manage Event</Text>
+        </View>
 
         <Text style={styles.eventName}>{params.name}</Text>
         <Text style={styles.eventSub}>
@@ -827,7 +830,9 @@ export default function EventDetailScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   scroll: { padding: 20 },
-  back: { fontSize: 24, color: Colors.textMuted, marginBottom: 16 },
+  pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  pageTitle: { fontSize: 18, fontWeight: '500', color: Colors.white },
+  back: { fontSize: 24, color: Colors.textMuted },
   eventName: { ...Typography.eventName, color: Colors.white, marginBottom: 4 },
   eventSub: { ...Typography.body, color: '#666', marginBottom: 24 },
   codeHighlight: { color: Colors.accent, fontWeight: '800', letterSpacing: 1 },

@@ -1,7 +1,7 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput, Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useState, useEffect, useCallback } from 'react';
 import { Clipboard } from 'react-native';
@@ -24,6 +24,7 @@ type AllowedGuest = { phone: string; name: string | null; added_at: string };
 
 export default function EventDetailScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { showAlert, alertOverlay } = useAlert();
   const params = useLocalSearchParams<{
     id: string; name: string; slug: string; join_code: string;
@@ -49,6 +50,7 @@ export default function EventDetailScreen() {
   const [allowedGuests, setAllowedGuests] = useState<AllowedGuest[]>([]);
   const [allowedGuestsLoading, setAllowedGuestsLoading] = useState(false);
   const [addingGuest, setAddingGuest] = useState(false);
+  const [showGuestsPanel, setShowGuestsPanel] = useState(false);
 
   type PickerContact = { name: string; phones: string[] };
   const [showContactPicker, setShowContactPicker] = useState(false);
@@ -140,6 +142,7 @@ export default function EventDetailScreen() {
                 setIsClosed(true);
                 await loadAllowedGuests();
                 setClosedUpdating(false);
+                setShowGuestsPanel(true);
               },
             },
             {
@@ -150,6 +153,7 @@ export default function EventDetailScreen() {
                 await updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: true });
                 setIsClosed(true);
                 setClosedUpdating(false);
+                setShowGuestsPanel(true);
               },
             },
             { text: 'Cancel', style: 'cancel' },
@@ -160,6 +164,7 @@ export default function EventDetailScreen() {
         await updateEventSettings(params.slug, params.organiserPhone, pw, { isClosed: true });
         setIsClosed(true);
         setClosedUpdating(false);
+        setShowGuestsPanel(true);
       }
     } else {
       // Reopening the event
@@ -309,6 +314,7 @@ export default function EventDetailScreen() {
   }
 
   async function handleAddCoadmin() {
+    await Contacts.requestPermissionsAsync();
     showAlert(
       'Add Co-Admin',
       'How would you like to add a co-admin?',
@@ -321,6 +327,10 @@ export default function EventDetailScreen() {
   }
 
   async function confirmAddCoadmin(phone: string, name: string | null) {
+    if (coadmins.some(c => c.phone === phone)) {
+      showAlert('Already added', `${name ?? phone} is already a co-admin.`);
+      return;
+    }
     const pw = await getOrganiserPassword();
     if (!pw || !params.organiserPhone) return;
     const result = await addCoadmin(params.slug, params.organiserPhone, pw, phone, name);
@@ -332,6 +342,7 @@ export default function EventDetailScreen() {
   }
 
   async function handleAddGuest() {
+    await Contacts.requestPermissionsAsync();
     showAlert(
       'Add Guest',
       'How would you like to add a guest?',
@@ -344,6 +355,10 @@ export default function EventDetailScreen() {
   }
 
   async function confirmAddGuest(phone: string, name?: string) {
+    if (allowedGuests.some(g => g.phone === phone)) {
+      showAlert('Already added', `${name ?? phone} is already in the allowed guests list.`);
+      return;
+    }
     const pw = await getOrganiserPassword();
     if (!pw || !params.organiserPhone) return;
     const result = await addAllowedGuests(params.slug, params.organiserPhone, pw, [{ phone, name }]);
@@ -477,6 +492,13 @@ export default function EventDetailScreen() {
             <Text style={styles.settingDesc}>
               {isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
             </Text>
+            {isClosed && (
+              <TouchableOpacity onPress={() => { loadAllowedGuests(); setShowGuestsPanel(true); }}>
+                <Text style={styles.manageGuestsInline}>
+                  Manage Guests{allowedGuests.length > 0 ? ` (${allowedGuests.length})` : ''} →
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
           {closedUpdating
             ? <ActivityIndicator color={Colors.accent} />
@@ -488,46 +510,6 @@ export default function EventDetailScreen() {
               />
           }
         </View>
-
-        {isClosed && (
-          <>
-            <Text style={styles.sectionLabel}>ALLOWED GUESTS</Text>
-            {allowedGuestsLoading ? (
-              <ActivityIndicator color={Colors.accent} style={{ marginVertical: 12 }} />
-            ) : (
-              <>
-                {allowedGuests.length === 0 ? (
-                  <Text style={styles.emptyText}>No guests added yet. Add guests to let them in.</Text>
-                ) : (
-                  allowedGuests.map(g => (
-                    <View key={g.phone} style={styles.coadminRow}>
-                      <View style={styles.coadminInfo}>
-                        <Text style={styles.coadminName}>{g.name ?? g.phone}</Text>
-                        {g.name ? <Text style={styles.coadminPhone}>{g.phone}</Text> : null}
-                      </View>
-                      <TouchableOpacity
-                        style={styles.removeBtn}
-                        onPress={() => handleRemoveGuest(g.phone, g.name)}
-                      >
-                        <Text style={styles.removeBtnText}>Remove</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ))
-                )}
-                <TouchableOpacity
-                  style={[styles.btn, styles.addCoadminBtn, addingGuest && { opacity: 0.5 }]}
-                  onPress={handleAddGuest}
-                  disabled={addingGuest}
-                >
-                  {addingGuest
-                    ? <ActivityIndicator color={Colors.accent} />
-                    : <Text style={[styles.btnText, { color: Colors.accent }]}>+ Add Guest</Text>
-                  }
-                </TouchableOpacity>
-              </>
-            )}
-          </>
-        )}
 
 
         <View style={styles.divider} />
@@ -620,7 +602,7 @@ export default function EventDetailScreen() {
 
       {/* Co-Admin Panel */}
       <Modal visible={showCoadminPanel} animationType="slide" onRequestClose={() => setShowCoadminPanel(false)}>
-        <SafeAreaView style={styles.container}>
+        <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           <View style={styles.panelHeader}>
             <Text style={styles.panelTitle}>Co-Admins{coadmins.length > 0 ? ` (${coadmins.length})` : ''}</Text>
             <TouchableOpacity onPress={() => setShowCoadminPanel(false)}>
@@ -703,12 +685,101 @@ export default function EventDetailScreen() {
             </View>
           </Modal>
           {alertOverlay}
-        </SafeAreaView>
+        </View>
       </Modal>
+
+      {/* Allowed Guests Panel */}
+      {showGuestsPanel && (
+        <Modal visible animationType="slide" onRequestClose={() => setShowGuestsPanel(false)}>
+          <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+            <View style={styles.panelHeader}>
+              <Text style={styles.panelTitle}>Allowed Guests{allowedGuests.length > 0 ? ` (${allowedGuests.length})` : ''}</Text>
+              <TouchableOpacity onPress={() => setShowGuestsPanel(false)}>
+                <Text style={styles.panelClose}>×</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView contentContainerStyle={styles.panelScroll}>
+              {allowedGuestsLoading ? (
+                <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
+              ) : allowedGuests.length === 0 ? (
+                <Text style={styles.emptyText}>No guests added yet. Add guests to let them in.</Text>
+              ) : (
+                allowedGuests.map(g => (
+                  <View key={g.phone} style={styles.coadminRow}>
+                    <View style={styles.coadminInfo}>
+                      <Text style={styles.coadminName}>{g.name ?? g.phone}</Text>
+                      {g.name ? <Text style={styles.coadminPhone}>{g.phone}</Text> : null}
+                    </View>
+                    <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveGuest(g.phone, g.name)}>
+                      <Text style={styles.removeBtnText}>Remove</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))
+              )}
+              <TouchableOpacity
+                style={[styles.btn, { marginTop: 12, borderColor: Colors.accent, opacity: addingGuest ? 0.5 : 1 }]}
+                onPress={handleAddGuest}
+                disabled={addingGuest}
+              >
+                {addingGuest
+                  ? <ActivityIndicator color={Colors.accent} />
+                  : <Text style={[styles.btnText, { color: Colors.accent }]}>+ Add Guest</Text>
+                }
+              </TouchableOpacity>
+            </ScrollView>
+            <Modal visible={showManualInput && manualInputMode === 'guest'} animationType="fade" transparent onRequestClose={() => setShowManualInput(false)}>
+              <View style={styles.manualOverlay}>
+                <View style={styles.manualCard}>
+                  <Text style={styles.manualTitle}>Enter phone number</Text>
+                  <TextInput
+                    style={styles.manualInput}
+                    value={manualPhone}
+                    onChangeText={setManualPhone}
+                    keyboardType="phone-pad"
+                    placeholder="e.g. 9876543210"
+                    placeholderTextColor="#555"
+                    autoFocus
+                  />
+                  <View style={styles.manualBtns}>
+                    <TouchableOpacity style={styles.manualCancel} onPress={() => setShowManualInput(false)}>
+                      <Text style={styles.manualCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.manualAdd, !manualPhone.trim() && { opacity: 0.4 }]}
+                      disabled={!manualPhone.trim()}
+                      onPress={async () => {
+                        const clean = normalizeIndianPhone(manualPhone);
+                        if (!isIndianMobile(clean)) {
+                          showAlert('Invalid number', 'Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9).');
+                          return;
+                        }
+                        setShowManualInput(false);
+                        let name: string | undefined = contactsList.find(c => c.phones.includes(clean))?.name;
+                        if (!name) {
+                          try {
+                            const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
+                            const match = data.find(c => (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === clean));
+                            if (match?.name) name = match.name;
+                          } catch {}
+                        }
+                        confirmAddGuest(clean, name);
+                      }}
+                    >
+                      <Text style={styles.manualAddText}>Add</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+                {alertOverlay}
+              </View>
+            </Modal>
+            {alertOverlay}
+          </View>
+        </Modal>
+      )}
 
       {/* Contact Picker Modal */}
       <Modal visible={showContactPicker} animationType="slide" onRequestClose={() => setShowContactPicker(false)}>
-        <SafeAreaView style={styles.container}>
+        <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           <View style={styles.panelHeader}>
             <Text style={styles.panelTitle}>Select Contact</Text>
             <TouchableOpacity onPress={() => setShowContactPicker(false)}>
@@ -745,54 +816,8 @@ export default function EventDetailScreen() {
                 </View>
               ))}
           </ScrollView>
-          {/* Manual Input — inside contact picker for guest flow */}
-          <Modal visible={showManualInput && manualInputMode === 'guest'} animationType="fade" transparent onRequestClose={() => setShowManualInput(false)}>
-            <View style={styles.manualOverlay}>
-              <View style={styles.manualCard}>
-                <Text style={styles.manualTitle}>Enter phone number</Text>
-                <TextInput
-                  style={styles.manualInput}
-                  value={manualPhone}
-                  onChangeText={setManualPhone}
-                  keyboardType="phone-pad"
-                  placeholder="e.g. 9876543210"
-                  placeholderTextColor="#555"
-                  autoFocus
-                />
-                <View style={styles.manualBtns}>
-                  <TouchableOpacity style={styles.manualCancel} onPress={() => setShowManualInput(false)}>
-                    <Text style={styles.manualCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.manualAdd, !manualPhone.trim() && { opacity: 0.4 }]}
-                    disabled={!manualPhone.trim()}
-                    onPress={async () => {
-                      const clean = normalizeIndianPhone(manualPhone);
-                      if (!isIndianMobile(clean)) {
-                        showAlert('Invalid number', 'Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9).');
-                        return;
-                      }
-                      setShowManualInput(false);
-                      let name: string | undefined = contactsList.find(c => c.phones.includes(clean))?.name;
-                      if (!name) {
-                        try {
-                          const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
-                          const match = data.find(c => (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === clean));
-                          if (match?.name) name = match.name;
-                        } catch {}
-                      }
-                      confirmAddGuest(clean, name);
-                    }}
-                  >
-                    <Text style={styles.manualAddText}>Add</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-              {alertOverlay}
-            </View>
-          </Modal>
           {alertOverlay}
-        </SafeAreaView>
+        </View>
       </Modal>
 
       {alertOverlay}
@@ -844,6 +869,7 @@ const styles = StyleSheet.create({
   metaLabel: { ...Typography.inputLabel, color: Colors.textMuted, marginBottom: 2 },
   metaValue: { ...Typography.body, color: Colors.textMuted, fontWeight: '600' },
   emptyText: { fontSize: 13, color: '#555', marginBottom: 10 },
+  manageGuestsInline: { fontSize: 13, fontWeight: '600', color: Colors.accent, marginTop: 6 },
   settingRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: '#1A1A1A', borderRadius: 8, padding: 12, marginBottom: 4,

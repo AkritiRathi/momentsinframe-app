@@ -274,11 +274,11 @@ export default function DashboardScreen() {
               </View>
               {cpError ? <Text style={styles.cpError}>{cpError}</Text> : null}
               <View style={styles.cpBtns}>
-                <TouchableOpacity style={styles.cpBtnPrimary} onPress={submitChangePassword}>
-                  <Text style={styles.cpBtnPrimaryText}>Save</Text>
-                </TouchableOpacity>
                 <TouchableOpacity style={styles.cpBtnCancel} onPress={() => { setCpVisible(false); setCpError(''); }}>
                   <Text style={styles.cpBtnCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.cpBtnPrimary} onPress={submitChangePassword}>
+                  <Text style={styles.cpBtnPrimaryText}>Save</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -338,9 +338,9 @@ const styles = StyleSheet.create({
   cpInput: { flex: 1, padding: 12, fontSize: 15, color: Colors.white },
   cpEye: { padding: 12 },
   cpError: { fontSize: 13, color: '#E53935', marginBottom: 8 },
-  cpBtns: { gap: 8, marginTop: 4 },
-  cpBtnPrimary: { backgroundColor: Colors.accent, borderRadius: 10, padding: 14, alignItems: 'center' },
+  cpBtns: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  cpBtnPrimary: { flex: 1, backgroundColor: Colors.accent, borderRadius: 10, padding: 14, alignItems: 'center' },
   cpBtnPrimaryText: { fontSize: 15, fontWeight: '700', color: Colors.background },
-  cpBtnCancel: { borderRadius: 10, padding: 14, alignItems: 'center' },
+  cpBtnCancel: { flex: 1, borderRadius: 10, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: '#333' },
   cpBtnCancelText: { fontSize: 15, fontWeight: '700', color: Colors.textMuted },
 });

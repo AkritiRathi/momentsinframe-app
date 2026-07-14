@@ -7,7 +7,7 @@ import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
 import { joinEvent, joinEventUser, checkAdminStatus, listEvents, checkEventExists } from '../../lib/api';
 import {
-  saveLastEventCode, getDeviceId, saveEventUserId, getUserProfile,
+  saveLastEventCode, getLastEventCode, getDeviceId, saveEventUserId, getUserProfile,
   saveJoinedEvent, getJoinedEvents, removeJoinedEvent, JoinedEventEntry,
 } from '../../lib/storage';
 import { getOrganiserPassword } from '../../lib/auth';
@@ -39,6 +39,9 @@ export default function JoinEventScreen() {
     async function load() {
       // Show cached events immediately — no server wait
       setJoinedEvents(await getJoinedEvents());
+      // Pre-fill last used event code
+      const lastCode = await getLastEventCode();
+      if (lastCode) setCode(lastCode);
       // Refresh from server in background
       const profile = await getUserProfile();
       const pw = await getOrganiserPassword();
@@ -81,9 +84,20 @@ export default function JoinEventScreen() {
       const profile = await getUserProfile();
       const result = await joinEvent(joinCode, profile?.mobile);
       if (result.error) {
-        showAlert('Could not join', result.error, [
-          { text: 'Try again', onPress: () => setCode('') },
-        ]);
+        if (result.error === 'This event has expired.') {
+          const cached = await getJoinedEvents();
+          const match = cached.find(e => e.joinCode === joinCode);
+          if (match) await removeJoinedEvent(match.slug);
+          setJoinedEvents(await getJoinedEvents());
+          const eventName = match?.name ?? 'This event';
+          showAlert('Event expired', `${eventName} has expired.`, [
+            { text: 'OK', onPress: () => setCode('') },
+          ]);
+        } else {
+          showAlert('Could not join', result.error, [
+            { text: 'Try again', onPress: () => setCode('') },
+          ]);
+        }
         return;
       }
       await saveLastEventCode(joinCode);

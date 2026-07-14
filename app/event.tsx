@@ -431,10 +431,11 @@ export default function EventScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     slug: string; name: string; expiresAt: string; createdAt: string;
-    isAdmin: string; adminPhone: string; allowGuestDelete: string; joinCode: string;
+    isAdmin: string; adminPhone: string; allowGuestDelete: string; joinCode: string; role?: string;
   }>();
 
   const isAdmin = params.isAdmin === 'true';
+  const adminLabel = params.role === 'organiser' ? 'Organiser' : params.role === 'coadmin' ? 'Co-Admin' : 'Admin';
   const allowGuestDelete = params.allowGuestDelete === 'true';
   const slug = params.slug;
 
@@ -1667,7 +1668,7 @@ export default function EventScreen() {
               </TouchableOpacity>
               <View style={styles.adminRow}>
                 {isAdmin && (
-                  <Text style={styles.adminBadge}>Admin</Text>
+                  <Text style={styles.adminBadge}>{adminLabel}</Text>
                 )}
                 <TouchableOpacity style={styles.notifGearBtn} onPress={async () => {
                   const notifs = await getUploadNotifications(slug);

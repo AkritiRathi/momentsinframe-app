@@ -526,6 +526,7 @@ export default function EventDetailScreen() {
               isAdmin: 'true',
               adminPhone: params.organiserPhone ?? '',
               allowGuestDelete: allowGuestDelete ? 'true' : 'false',
+              role: 'organiser',
             },
           })}
         >

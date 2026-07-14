@@ -88,9 +88,11 @@ export default function JoinEventScreen() {
       }
       await saveLastEventCode(joinCode);
       let isAdmin = false;
+      let adminRole = '';
       if (profile?.mobile) {
         const adminCheck = await checkAdminStatus(result.event.slug, profile.mobile);
         isAdmin = adminCheck.isAdmin ?? false;
+        adminRole = adminCheck.role ?? '';
       }
       if (profile) {
         getDeviceId().then(async deviceId => {
@@ -117,6 +119,7 @@ export default function JoinEventScreen() {
           adminPhone: isAdmin ? (profile?.mobile ?? '') : '',
           allowGuestDelete: result.event.allow_guest_delete ? 'true' : 'false',
           joinCode,
+          role: adminRole,
         },
       });
     } catch {
@@ -132,9 +135,11 @@ export default function JoinEventScreen() {
     try {
       const profile = await getUserProfile();
       let isAdmin = entry.isOrganiser ?? false;
+      let adminRole = isAdmin ? 'organiser' : '';
       if (!isAdmin && profile?.mobile) {
         const adminCheck = await checkAdminStatus(entry.slug, profile.mobile);
         isAdmin = adminCheck.isAdmin ?? false;
+        adminRole = adminCheck.role ?? '';
       }
       router.replace({
         pathname: '/event',
@@ -147,6 +152,7 @@ export default function JoinEventScreen() {
           adminPhone: isAdmin ? (profile?.mobile ?? '') : '',
           allowGuestDelete: entry.allowGuestDelete ? 'true' : 'false',
           joinCode: entry.joinCode,
+          role: adminRole,
         },
       });
     } catch {

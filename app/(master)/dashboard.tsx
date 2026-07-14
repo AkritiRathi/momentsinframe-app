@@ -168,6 +168,7 @@ export default function DashboardScreen() {
               createdAt: item.created_at,
               isAdmin: 'true',
               adminPhone: organiserPhone ?? '',
+              role: 'organiser',
               allowGuestDelete: item.allow_guest_delete ? 'true' : 'false',
             },
           })}>

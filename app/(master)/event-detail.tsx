@@ -685,6 +685,48 @@ export default function EventDetailScreen() {
               {alertOverlay}
             </View>
           </Modal>
+          {/* Contact Picker — nested inside co-admin modal so iOS can stack it */}
+          <Modal visible={showContactPicker && contactPickerMode === 'coadmin'} animationType="slide" onRequestClose={() => setShowContactPicker(false)}>
+            <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+              <View style={styles.panelHeader}>
+                <Text style={styles.panelTitle}>Select Contact</Text>
+                <TouchableOpacity onPress={() => setShowContactPicker(false)}>
+                  <Text style={styles.panelClose}>×</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.pickerSearchWrap}>
+                <TextInput
+                  style={styles.pickerSearch}
+                  value={contactSearch}
+                  onChangeText={t => { setContactSearch(t); setExpandedContact(null); }}
+                  placeholder="Search by name…"
+                  placeholderTextColor="#555"
+                  autoCorrect={false}
+                />
+              </View>
+              <ScrollView contentContainerStyle={styles.panelScroll}>
+                {contactsList
+                  .filter(c => c.name.toLowerCase().includes(contactSearch.toLowerCase()))
+                  .map((contact, i) => (
+                    <View key={i} style={styles.pickerContact}>
+                      <TouchableOpacity
+                        style={styles.pickerNameRow}
+                        onPress={() => setExpandedContact(expandedContact === i ? null : i)}
+                      >
+                        <Text style={styles.pickerName}>{contact.name || contact.phones[0]}</Text>
+                        <Text style={styles.pickerChevron}>{expandedContact === i ? '▲' : '▼'}</Text>
+                      </TouchableOpacity>
+                      {expandedContact === i && contact.phones.map((phone, j) => (
+                        <TouchableOpacity key={j} style={styles.pickerPhoneRow} onPress={() => handlePickerSelect(phone, contact.name)}>
+                          <Text style={styles.pickerPhone}>{phone}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  ))}
+              </ScrollView>
+              {alertOverlay}
+            </View>
+          </Modal>
           {alertOverlay}
         </View>
       </Modal>
@@ -774,53 +816,52 @@ export default function EventDetailScreen() {
                 {alertOverlay}
               </View>
             </Modal>
+            {/* Contact Picker — nested inside guest modal so iOS can stack it */}
+            <Modal visible={showContactPicker && contactPickerMode === 'guest'} animationType="slide" onRequestClose={() => setShowContactPicker(false)}>
+              <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+                <View style={styles.panelHeader}>
+                  <Text style={styles.panelTitle}>Select Contact</Text>
+                  <TouchableOpacity onPress={() => setShowContactPicker(false)}>
+                    <Text style={styles.panelClose}>×</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.pickerSearchWrap}>
+                  <TextInput
+                    style={styles.pickerSearch}
+                    value={contactSearch}
+                    onChangeText={t => { setContactSearch(t); setExpandedContact(null); }}
+                    placeholder="Search by name…"
+                    placeholderTextColor="#555"
+                    autoCorrect={false}
+                  />
+                </View>
+                <ScrollView contentContainerStyle={styles.panelScroll}>
+                  {contactsList
+                    .filter(c => c.name.toLowerCase().includes(contactSearch.toLowerCase()))
+                    .map((contact, i) => (
+                      <View key={i} style={styles.pickerContact}>
+                        <TouchableOpacity
+                          style={styles.pickerNameRow}
+                          onPress={() => setExpandedContact(expandedContact === i ? null : i)}
+                        >
+                          <Text style={styles.pickerName}>{contact.name || contact.phones[0]}</Text>
+                          <Text style={styles.pickerChevron}>{expandedContact === i ? '▲' : '▼'}</Text>
+                        </TouchableOpacity>
+                        {expandedContact === i && contact.phones.map((phone, j) => (
+                          <TouchableOpacity key={j} style={styles.pickerPhoneRow} onPress={() => handlePickerSelect(phone, contact.name)}>
+                            <Text style={styles.pickerPhone}>{phone}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    ))}
+                </ScrollView>
+                {alertOverlay}
+              </View>
+            </Modal>
             {alertOverlay}
           </View>
         </Modal>
       )}
-
-      {/* Contact Picker Modal */}
-      <Modal visible={showContactPicker} animationType="slide" onRequestClose={() => setShowContactPicker(false)}>
-        <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-          <View style={styles.panelHeader}>
-            <Text style={styles.panelTitle}>Select Contact</Text>
-            <TouchableOpacity onPress={() => setShowContactPicker(false)}>
-              <Text style={styles.panelClose}>×</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.pickerSearchWrap}>
-            <TextInput
-              style={styles.pickerSearch}
-              value={contactSearch}
-              onChangeText={t => { setContactSearch(t); setExpandedContact(null); }}
-              placeholder="Search by name…"
-              placeholderTextColor="#555"
-              autoCorrect={false}
-            />
-          </View>
-          <ScrollView contentContainerStyle={styles.panelScroll}>
-            {contactsList
-              .filter(c => c.name.toLowerCase().includes(contactSearch.toLowerCase()))
-              .map((contact, i) => (
-                <View key={i} style={styles.pickerContact}>
-                  <TouchableOpacity
-                    style={styles.pickerNameRow}
-                    onPress={() => setExpandedContact(expandedContact === i ? null : i)}
-                  >
-                    <Text style={styles.pickerName}>{contact.name || contact.phones[0]}</Text>
-                    <Text style={styles.pickerChevron}>{expandedContact === i ? '▲' : '▼'}</Text>
-                  </TouchableOpacity>
-                  {expandedContact === i && contact.phones.map((phone, j) => (
-                    <TouchableOpacity key={j} style={styles.pickerPhoneRow} onPress={() => handlePickerSelect(phone, contact.name)}>
-                      <Text style={styles.pickerPhone}>{phone}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ))}
-          </ScrollView>
-          {alertOverlay}
-        </View>
-      </Modal>
 
       {alertOverlay}
 

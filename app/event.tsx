@@ -608,7 +608,7 @@ export default function EventScreen() {
     setNewlyUploadedIds(new Set());
     try {
       const data = await getEventPhotos(slug, params.adminPhone || undefined);
-      if (data.error) { showAlert('Error', data.error); return; }
+      if (data.error) { setLoading(false); showAlert('Error', data.error); return; }
       const main: Photo[] = data.photos ?? [];
       const other: Photo[] = data.otherPhotos ?? [];
       setPhotos(main);
@@ -628,7 +628,7 @@ export default function EventScreen() {
     await Promise.all(
       batches.map(async (batch) => {
         try {
-          const result = await getPhotoUrls(slug, batch);
+          const result = await getPhotoUrls(slug, batch, params.adminPhone || undefined);
           if (result.urls) setPhotoUrls(prev => ({ ...prev, ...result.urls }));
         } catch { /* skip */ }
       })

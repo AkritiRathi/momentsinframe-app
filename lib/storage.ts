@@ -124,6 +124,13 @@ export async function getJoinedEvents(): Promise<JoinedEventEntry[]> {
   } catch { return []; }
 }
 
+export async function removeJoinedEvent(slug: string): Promise<void> {
+  try {
+    const existing = await getJoinedEvents();
+    await AsyncStorage.setItem(JOINED_EVENTS_KEY, JSON.stringify(existing.filter(e => e.slug !== slug)));
+  } catch {}
+}
+
 // ── Upload Notifications ──────────────────────────────────────────────────────
 
 export type UploadNotificationEntry = {

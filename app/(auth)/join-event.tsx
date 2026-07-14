@@ -5,10 +5,10 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
-import { joinEvent, joinEventUser, checkAdminStatus, listEvents } from '../../lib/api';
+import { joinEvent, joinEventUser, checkAdminStatus, listEvents, checkEventExists } from '../../lib/api';
 import {
   saveLastEventCode, getDeviceId, saveEventUserId, getUserProfile,
-  saveJoinedEvent, getJoinedEvents, JoinedEventEntry,
+  saveJoinedEvent, getJoinedEvents, removeJoinedEvent, JoinedEventEntry,
 } from '../../lib/storage';
 import { getOrganiserPassword } from '../../lib/auth';
 import { Colors } from '../../constants/colors';
@@ -33,9 +33,13 @@ export default function JoinEventScreen() {
   const [joinedEvents, setJoinedEvents] = useState<JoinedEventEntry[]>([]);
   const [rejoining, setRejoining] = useState<string | null>(null);
   const [eventsModalVisible, setEventsModalVisible] = useState(false);
+  const [checkingEvents, setCheckingEvents] = useState(false);
 
   useEffect(() => {
     async function load() {
+      // Show cached events immediately — no server wait
+      setJoinedEvents(await getJoinedEvents());
+      // Refresh from server in background
       const profile = await getUserProfile();
       const pw = await getOrganiserPassword();
       if (profile?.mobile && pw) {
@@ -51,6 +55,10 @@ export default function JoinEventScreen() {
               allowGuestDelete: ev.allow_guest_delete ?? false,
               isOrganiser: true,
             })));
+            // Remove cached organiser events that no longer exist on server (deleted)
+            const serverSlugs = new Set(result.events.map((ev: any) => ev.slug));
+            const cached = await getJoinedEvents();
+            await Promise.all(cached.filter(e => e.isOrganiser && !serverSlugs.has(e.slug)).map(e => removeJoinedEvent(e.slug)));
           }
         } catch { /* silent — show whatever is cached */ }
       }
@@ -106,7 +114,7 @@ export default function JoinEventScreen() {
           expiresAt: result.event.expires_at,
           createdAt: result.event.created_at ?? new Date().toISOString(),
           isAdmin: isAdmin ? 'true' : 'false',
-          adminPhone: '',
+          adminPhone: isAdmin ? (profile?.mobile ?? '') : '',
           allowGuestDelete: result.event.allow_guest_delete ? 'true' : 'false',
           joinCode,
         },
@@ -136,7 +144,7 @@ export default function JoinEventScreen() {
           expiresAt: entry.expiresAt,
           createdAt: entry.createdAt,
           isAdmin: isAdmin ? 'true' : 'false',
-          adminPhone: '',
+          adminPhone: isAdmin ? (profile?.mobile ?? '') : '',
           allowGuestDelete: entry.allowGuestDelete ? 'true' : 'false',
           joinCode: entry.joinCode,
         },
@@ -181,6 +189,22 @@ export default function JoinEventScreen() {
     );
   }
 
+  async function handleOpenEvents() {
+    if (visibleEvents.length === 0) return;
+    setCheckingEvents(true);
+    // Check non-organiser events still exist on server; remove deleted ones from cache
+    const guestEvents = visibleEvents.filter(e => !e.isOrganiser);
+    await Promise.all(guestEvents.map(async (e) => {
+      const exists = await checkEventExists(e.slug);
+      if (!exists) await removeJoinedEvent(e.slug);
+    }));
+    setJoinedEvents(await getJoinedEvents());
+    setCheckingEvents(false);
+    setEventsModalVisible(true);
+  }
+
+  const visibleEvents = joinedEvents.filter(e => !isExpired(e.expiresAt) || e.isOrganiser);
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Current Event modal */}
@@ -202,7 +226,7 @@ export default function JoinEventScreen() {
             <View style={styles.sheetHandle} />
             <Text style={styles.sheetTitle}>Your Events</Text>
             <ScrollView showsVerticalScrollIndicator={false}>
-              {joinedEvents.map(renderEventCard)}
+              {visibleEvents.map(renderEventCard)}
             </ScrollView>
             <TouchableOpacity style={styles.cancelBtn} onPress={() => setEventsModalVisible(false)}>
               <Text style={styles.cancelBtnText}>Cancel</Text>
@@ -217,19 +241,23 @@ export default function JoinEventScreen() {
 
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Guest login</Text>
-        <Text style={styles.subtitle}>Enter a 6-digit event code to join{joinedEvents.length > 0 ? ', or open a previous event.' : '.'}</Text>
+        <Text style={styles.subtitle}>Enter a 6-digit event code to join{visibleEvents.length > 0 ? ', or open a previous event.' : '.'}</Text>
 
-        {joinedEvents.length > 0 && (
-          <>
-            <Text style={styles.sectionLabel}>CURRENT EVENT</Text>
-            <TouchableOpacity style={styles.currentEventRow} onPress={() => setEventsModalVisible(true)}>
-              <Text style={styles.currentEventText}>Your events ({joinedEvents.length})</Text>
-              <Text style={styles.eventArrow}>›</Text>
-            </TouchableOpacity>
-          </>
-        )}
+        <Text style={styles.sectionLabel}>CURRENT EVENT</Text>
+        <TouchableOpacity
+          style={[styles.currentEventRow, visibleEvents.length === 0 && { opacity: 0.4 }]}
+          onPress={handleOpenEvents}
+          activeOpacity={visibleEvents.length > 0 ? 0.7 : 1}
+          disabled={checkingEvents || visibleEvents.length === 0}
+        >
+          <Text style={styles.currentEventText}>Your events ({visibleEvents.length})</Text>
+          {checkingEvents
+            ? <ActivityIndicator size="small" color={Colors.accent} />
+            : visibleEvents.length > 0 && <Text style={styles.eventArrow}>›</Text>
+          }
+        </TouchableOpacity>
 
-        <Text style={[styles.sectionLabel, { marginTop: joinedEvents.length > 0 ? 20 : 0 }]}>JOIN A NEW EVENT</Text>
+        <Text style={[styles.sectionLabel, { marginTop: 20 }]}>JOIN A NEW EVENT</Text>
         <Text style={styles.label}>EVENT CODE</Text>
         <TextInput
           style={styles.codeInput}

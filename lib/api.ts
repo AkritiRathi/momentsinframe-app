@@ -75,6 +75,13 @@ export async function joinEventUser(slug: string, name: string, mobile: string, 
   return post(`/api/native/events/${slug}/join-user`, { name, mobile, deviceId });
 }
 
+export async function checkEventExists(slug: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/native/events/${encodeURIComponent(slug)}`);
+    return res.ok;
+  } catch { return true; } // assume exists on network error — don't delete from cache
+}
+
 export async function checkAdminStatus(slug: string, phone: string): Promise<{ isAdmin: boolean; role?: string }> {
   return post(`/api/native/events/${slug}/check-admin`, { phone });
 }

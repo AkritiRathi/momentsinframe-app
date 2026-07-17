@@ -1,7 +1,5 @@
 import ExpoModulesCore
 import Photos
-import ImageIO
-import MobileCoreServices
 
 public class PhotoSaverModule: Module {
   public func definition() -> ModuleDefinition {
@@ -15,20 +13,6 @@ public class PhotoSaverModule: Module {
 
       let dateTaken: Date? = dateTakenMs > 0 ? Date(timeIntervalSince1970: dateTakenMs / 1000.0) : nil
 
-      // Stamp the correct date into the JPEG EXIF bytes in memory
-      let saveUrl: URL
-      if let date = dateTaken, let stampedData = self.stampExifDate(sourceUrl: url, date: date) {
-        let tempUrl = url.deletingLastPathComponent().appendingPathComponent("stamped_\(url.lastPathComponent)")
-        do {
-          try stampedData.write(to: tempUrl, options: .atomic)
-          saveUrl = tempUrl
-        } catch {
-          saveUrl = url
-        }
-      } else {
-        saveUrl = url
-      }
-
       PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
         guard status == .authorized || status == .limited else {
           promise.reject("ERR_NO_PERMISSION", "Photos permission not granted")
@@ -41,61 +25,47 @@ public class PhotoSaverModule: Module {
             return
           }
 
+          // Step 1: Save asset and add to album
+          var assetIdentifier: String?
           PHPhotoLibrary.shared().performChanges({
             let creationRequest = PHAssetCreationRequest.forAsset()
             let options = PHAssetResourceCreationOptions()
             options.shouldMoveFile = false
-            creationRequest.addResource(with: .photo, fileURL: saveUrl, options: options)
-            if let date = dateTaken {
-              creationRequest.creationDate = date
-            }
-            if let placeholder = creationRequest.placeholderForCreatedAsset,
-               let addRequest = PHAssetCollectionChangeRequest(for: collection) {
-              addRequest.addAssets([placeholder] as NSArray)
+            creationRequest.addResource(with: .photo, fileURL: url, options: options)
+            if let placeholder = creationRequest.placeholderForCreatedAsset {
+              assetIdentifier = placeholder.localIdentifier
+              if let addRequest = PHAssetCollectionChangeRequest(for: collection) {
+                addRequest.addAssets([placeholder] as NSArray)
+              }
             }
           }) { success, error in
-            if saveUrl != url {
-              try? FileManager.default.removeItem(at: saveUrl)
-            }
-            if success {
-              promise.resolve(nil)
-            } else {
+            guard success, let identifier = assetIdentifier else {
               promise.reject("ERR_SAVE_FAILED", error?.localizedDescription ?? "Failed to save photo")
+              return
+            }
+
+            // Step 2: Update creation date on the saved asset
+            guard let dateTaken = dateTaken else {
+              promise.resolve(nil)
+              return
+            }
+
+            let assets = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+            guard let asset = assets.firstObject else {
+              promise.resolve(nil)
+              return
+            }
+
+            PHPhotoLibrary.shared().performChanges({
+              let changeRequest = PHAssetChangeRequest(for: asset)
+              changeRequest.creationDate = dateTaken
+            }) { _, _ in
+              promise.resolve(nil)
             }
           }
         }
       }
     }
-  }
-
-  // Rewrites JPEG bytes in memory with correct EXIF date fields
-  private func stampExifDate(sourceUrl: URL, date: Date) -> Data? {
-    guard let sourceData = try? Data(contentsOf: sourceUrl),
-          let source = CGImageSourceCreateWithData(sourceData as CFData, nil),
-          let uti = CGImageSourceGetType(source) else { return nil }
-
-    let formatter = DateFormatter()
-    formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
-    formatter.timeZone = TimeZone.current
-    let exifDateString = formatter.string(from: date)
-
-    var metadata = (CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]) ?? [:]
-
-    var tiff = (metadata[kCGImagePropertyTIFFDictionary as String] as? [String: Any]) ?? [:]
-    tiff[kCGImagePropertyTIFFDateTime as String] = exifDateString
-    metadata[kCGImagePropertyTIFFDictionary as String] = tiff
-
-    var exif = (metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]) ?? [:]
-    exif[kCGImagePropertyExifDateTimeOriginal as String] = exifDateString
-    exif[kCGImagePropertyExifDateTimeDigitized as String] = exifDateString
-    metadata[kCGImagePropertyExifDictionary as String] = exif
-
-    let outputData = NSMutableData()
-    guard let destination = CGImageDestinationCreateWithData(outputData, uti, 1, nil) else { return nil }
-    CGImageDestinationAddImageFromSource(destination, source, 0, metadata as CFDictionary)
-    guard CGImageDestinationFinalize(destination) else { return nil }
-
-    return outputData as Data
   }
 
   private func findOrCreateAlbum(named title: String, completion: @escaping (PHAssetCollection?) -> Void) {

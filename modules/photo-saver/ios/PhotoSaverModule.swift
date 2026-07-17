@@ -15,10 +15,16 @@ public class PhotoSaverModule: Module {
 
       let dateTaken: Date? = dateTakenMs > 0 ? Date(timeIntervalSince1970: dateTakenMs / 1000.0) : nil
 
-      // Stamp the correct date into the JPEG EXIF bytes so iOS Photos reads it from the file
+      // Stamp the correct date into the JPEG EXIF bytes in memory
       let saveUrl: URL
-      if let date = dateTaken, let stamped = self.stampExifDate(sourceUrl: url, date: date) {
-        saveUrl = stamped
+      if let date = dateTaken, let stampedData = self.stampExifDate(sourceUrl: url, date: date) {
+        let tempUrl = url.deletingLastPathComponent().appendingPathComponent("stamped_\(url.lastPathComponent)")
+        do {
+          try stampedData.write(to: tempUrl, options: .atomic)
+          saveUrl = tempUrl
+        } catch {
+          saveUrl = url
+        }
       } else {
         saveUrl = url
       }
@@ -48,7 +54,6 @@ public class PhotoSaverModule: Module {
               addRequest.addAssets([placeholder] as NSArray)
             }
           }) { success, error in
-            // Clean up temp stamped file if we created one
             if saveUrl != url {
               try? FileManager.default.removeItem(at: saveUrl)
             }
@@ -63,10 +68,10 @@ public class PhotoSaverModule: Module {
     }
   }
 
-  // Writes the correct date into EXIF DateTimeOriginal / DateTimeDigitized / DateTime
-  // Returns a new temp file URL, or nil if stamping failed (caller falls back to original)
-  private func stampExifDate(sourceUrl: URL, date: Date) -> URL? {
-    guard let source = CGImageSourceCreateWithURL(sourceUrl as CFURL, nil),
+  // Rewrites JPEG bytes in memory with correct EXIF date fields
+  private func stampExifDate(sourceUrl: URL, date: Date) -> Data? {
+    guard let sourceData = try? Data(contentsOf: sourceUrl),
+          let source = CGImageSourceCreateWithData(sourceData as CFData, nil),
           let uti = CGImageSourceGetType(source) else { return nil }
 
     let formatter = DateFormatter()
@@ -76,25 +81,21 @@ public class PhotoSaverModule: Module {
 
     var metadata = (CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]) ?? [:]
 
-    // TIFF DateTime
     var tiff = (metadata[kCGImagePropertyTIFFDictionary as String] as? [String: Any]) ?? [:]
     tiff[kCGImagePropertyTIFFDateTime as String] = exifDateString
     metadata[kCGImagePropertyTIFFDictionary as String] = tiff
 
-    // EXIF DateTimeOriginal + DateTimeDigitized
     var exif = (metadata[kCGImagePropertyExifDictionary as String] as? [String: Any]) ?? [:]
     exif[kCGImagePropertyExifDateTimeOriginal as String] = exifDateString
     exif[kCGImagePropertyExifDateTimeDigitized as String] = exifDateString
     metadata[kCGImagePropertyExifDictionary as String] = exif
 
-    let tempUrl = sourceUrl.deletingLastPathComponent()
-      .appendingPathComponent("stamped_\(sourceUrl.lastPathComponent)")
-
-    guard let destination = CGImageDestinationCreateWithURL(tempUrl as CFURL, uti, 1, nil) else { return nil }
+    let outputData = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(outputData, uti, 1, nil) else { return nil }
     CGImageDestinationAddImageFromSource(destination, source, 0, metadata as CFDictionary)
     guard CGImageDestinationFinalize(destination) else { return nil }
 
-    return tempUrl
+    return outputData as Data
   }
 
   private func findOrCreateAlbum(named title: String, completion: @escaping (PHAssetCollection?) -> Void) {

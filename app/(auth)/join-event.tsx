@@ -84,19 +84,17 @@ export default function JoinEventScreen() {
       const profile = await getUserProfile();
       const result = await joinEvent(joinCode, profile?.mobile);
       if (result.error) {
+        setCode('');
+        await saveLastEventCode('');
         if (result.error === 'This event has expired.') {
           const cached = await getJoinedEvents();
           const match = cached.find(e => e.joinCode === joinCode);
           if (match) await removeJoinedEvent(match.slug);
           setJoinedEvents(await getJoinedEvents());
           const eventName = match?.name ?? 'This event';
-          showAlert('Event expired', `${eventName} has expired.`, [
-            { text: 'OK', onPress: () => setCode('') },
-          ]);
+          showAlert('Event expired', `${eventName} has expired.`);
         } else {
-          showAlert('Could not join', result.error, [
-            { text: 'Try again', onPress: () => setCode('') },
-          ]);
+          showAlert('Could not join', result.error);
         }
         return;
       }
@@ -115,6 +113,8 @@ export default function JoinEventScreen() {
           if (userResult.error) {
             // Blocked guests get a clear error; other failures are logged but don't block entry
             if (userResult.error.includes('removed from this event')) {
+              setCode('');
+              await saveLastEventCode('');
               showAlert('Access removed', userResult.error);
               return;
             }

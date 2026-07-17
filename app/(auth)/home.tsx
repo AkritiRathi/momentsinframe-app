@@ -11,13 +11,13 @@ import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
-
-const ORGANISER_WHITELIST = ['8826388888', '9899092777', '9899060282'];
+import { checkWhitelist } from '../../lib/api';
 
 export default function HomeScreen() {
   const router = useRouter();
   const { showAlert, alertOverlay } = useAlert();
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [isWhitelisted, setIsWhitelisted] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [userDetailsVisible, setUserDetailsVisible] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -25,7 +25,14 @@ export default function HomeScreen() {
   const gearRef = useRef<TouchableOpacity>(null);
 
   useEffect(() => {
-    getUserProfile().then(setProfile);
+    (async () => {
+      const p = await getUserProfile();
+      setProfile(p);
+      if (p?.mobile) {
+        const result = await checkWhitelist(p.mobile).catch(() => ({ whitelisted: false }));
+        setIsWhitelisted(result.whitelisted);
+      }
+    })();
   }, []);
 
   async function checkForUpdates() {
@@ -165,7 +172,7 @@ export default function HomeScreen() {
           <Text style={styles.arrowDark}>›</Text>
         </TouchableOpacity>
 
-        {ORGANISER_WHITELIST.includes(profile?.mobile ?? '') && (
+        {isWhitelisted && (
         <TouchableOpacity style={styles.cardSecondary} onPress={() => router.push('/(auth)/organiser-login')}>
           <View style={[styles.iconWrap, styles.iconSecondary]}>
             <Text style={styles.iconText}>🎬</Text>

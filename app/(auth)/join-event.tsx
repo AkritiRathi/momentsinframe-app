@@ -109,10 +109,18 @@ export default function JoinEventScreen() {
         adminRole = adminCheck.role ?? '';
       }
       if (profile) {
-        getDeviceId().then(async deviceId => {
+        try {
+          const deviceId = await getDeviceId();
           const userResult = await joinEventUser(result.event.slug, `${profile.firstName} ${profile.lastName}`, profile.mobile, deviceId);
+          if (userResult.error) {
+            // Blocked guests get a clear error; other failures are logged but don't block entry
+            if (userResult.error.includes('removed from this event')) {
+              showAlert('Access removed', userResult.error);
+              return;
+            }
+          }
           if (userResult.eventUserId) await saveEventUserId(userResult.eventUserId);
-        }).catch(() => {});
+        } catch {}
       }
       await saveJoinedEvent({
         slug: result.event.slug,
@@ -154,6 +162,18 @@ export default function JoinEventScreen() {
         const adminCheck = await checkAdminStatus(entry.slug, profile.mobile);
         isAdmin = adminCheck.isAdmin ?? false;
         adminRole = adminCheck.role ?? '';
+      }
+      // Ensure guest is registered in event_users (handles cases where initial join was skipped)
+      if (profile && !isAdmin) {
+        try {
+          const deviceId = await getDeviceId();
+          const userResult = await joinEventUser(entry.slug, `${profile.firstName} ${profile.lastName}`, profile.mobile, deviceId);
+          if (userResult.error?.includes('removed from this event')) {
+            showAlert('Access removed', userResult.error);
+            return;
+          }
+          if (userResult.eventUserId) await saveEventUserId(userResult.eventUserId);
+        } catch {}
       }
       router.replace({
         pathname: '/event',

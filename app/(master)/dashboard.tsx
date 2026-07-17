@@ -170,6 +170,7 @@ export default function DashboardScreen() {
               adminPhone: organiserPhone ?? '',
               role: 'organiser',
               allowGuestDelete: item.allow_guest_delete ? 'true' : 'false',
+              joinCode: item.join_code,
             },
           })}>
             <Text style={styles.openEventText}>Open Event →</Text>
@@ -238,6 +239,14 @@ export default function DashboardScreen() {
               }}>
                 <Text style={styles.dropText}>Change Password</Text>
               </TouchableOpacity>
+              {organiserPhone === '8826388888' && (
+                <TouchableOpacity style={styles.dropRow} onPress={() => {
+                  setSettingsVisible(false);
+                  router.push('/(master)/whitelist');
+                }}>
+                  <Text style={styles.dropText}>Manage Whitelist</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </TouchableOpacity>
         </Modal>

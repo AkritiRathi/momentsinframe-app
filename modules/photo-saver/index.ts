@@ -2,7 +2,7 @@ import { requireNativeModule } from 'expo-modules-core';
 import { Platform } from 'react-native';
 
 interface PhotoSaverModule {
-  saveToPhotos(fileUri: string): Promise<void>;
+  saveToPhotos(fileUri: string, dateTakenMs: number, albumName: string): Promise<void>;
 }
 
 // iOS only — Android uses MediaStore directly

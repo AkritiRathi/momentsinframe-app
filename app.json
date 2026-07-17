@@ -55,6 +55,7 @@
     "plugins": [
       "expo-router",
       "./plugins/withBackgroundUpload",
+      "./plugins/withExcludeFromBackup",
       "expo-updates",
       "@react-native-community/datetimepicker",
       [

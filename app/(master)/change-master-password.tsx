@@ -115,6 +115,10 @@ export default function ChangeMasterPasswordScreen() {
           <TouchableOpacity style={styles.saveBtn} onPress={handleChange} disabled={loading}>
             <Text style={styles.saveBtnText}>{loading ? 'Saving...' : 'Save new password →'}</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity style={styles.forgotBtn} onPress={() => showAlert('Coming soon', 'OTP-based password reset will be available soon.')}>
+            <Text style={styles.forgotText}>Forgot password?</Text>
+          </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
       {alertOverlay}
@@ -150,4 +154,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   saveBtnText: { ...Typography.buttonText, color: Colors.background },
+  forgotBtn: { alignItems: 'center', marginTop: 20 },
+  forgotText: { fontSize: 14, color: Colors.textMuted, fontWeight: '600' },
 });

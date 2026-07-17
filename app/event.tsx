@@ -16,7 +16,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 let BackgroundUpload: { startService: (t: string, d: string) => Promise<void>; updateService: (t: string, d: string, p: number, m: number) => Promise<void>; stopService: () => Promise<void>; isRunning: () => boolean } | null = null;
 try { BackgroundUpload = require('background-upload').default; } catch {}
-let PhotoSaver: { saveToPhotos: (fileUri: string) => Promise<void> } | null = null;
+let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<void> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -241,6 +241,7 @@ let _bgEventUserId: string | null = null;
 let _bgProgressCb: ((current: number, total: number) => void) | null = null;
 let _bgCompleteCb: ((results: UploadFileResult[], preSkipped: number) => void) | null = null;
 let _bgCancelled = false;
+let _bgDeselectedIds: Set<string> = new Set();
 
 async function backgroundUploadTask(): Promise<void> {
   const slug = _bgSlug;
@@ -299,7 +300,7 @@ async function backgroundUploadTask(): Promise<void> {
 
   // Filter out exact filename matches (already uploaded — skip without touching duplicate detection)
   const preSkipped = allAssets.filter(asset => existingFilenames.has(asset.filename)).length;
-  const toUpload = allAssets.filter(asset => !existingFilenames.has(asset.filename));
+  const toUpload = allAssets.filter(asset => !existingFilenames.has(asset.filename) && !_bgDeselectedIds.has(asset.id));
 
   if (toUpload.length === 0) {
     _bgCompleteCb?.([], preSkipped);
@@ -490,6 +491,11 @@ export default function EventScreen() {
   const [bgCancelRequested, setBgCancelRequested] = useState(false);
   const [showDatePickerModal, setShowDatePickerModal] = useState(false);
   const [datePickerDate, setDatePickerDate] = useState(new Date());
+  const [showPhotoSelectModal, setShowPhotoSelectModal] = useState(false);
+  const [photoSelectDate, setPhotoSelectDate] = useState<Date>(new Date());
+  const [photoSelectAssets, setPhotoSelectAssets] = useState<Array<{ id: string; uri: string; filename: string }>>([]);
+  const [deselectedPhotoIds, setDeselectedPhotoIds] = useState<Set<string>>(new Set());
+  const [photoSelectLoading, setPhotoSelectLoading] = useState(false);
 
   const [folderSetupVisible, setFolderSetupVisible] = useState(false);
   const [folderNameDraft, setFolderNameDraft] = useState('MomentsInFrame');
@@ -1036,7 +1042,8 @@ export default function EventScreen() {
     }
   }
 
-  async function startDateUpload(date: Date) {
+  async function startDateUpload(date: Date, deselectedIds: Set<string> = new Set()) {
+    _bgDeselectedIds = deselectedIds;
     _bgCancelled = false;
     bgUploadCancelledRef.current = false;
     setBgCancelRequested(false);
@@ -1138,17 +1145,7 @@ export default function EventScreen() {
                 mode: 'date',
                 maximumDate: new Date(),
                 onChange: (_event: any, date?: Date) => {
-                  if (date) {
-                    const dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-                    showAlert(
-                      'Upload photos from this date',
-                      `Upload all photos from your Camera folder taken on ${dateStr}?`,
-                      [
-                        { text: 'Upload', onPress: () => startDateUpload(date) },
-                        { text: 'Cancel', style: 'cancel' },
-                      ]
-                    );
-                  }
+                  if (date) openPhotoSelectModal(date);
                 },
               });
             } else {
@@ -1160,6 +1157,43 @@ export default function EventScreen() {
         { text: 'Cancel', style: 'cancel' },
       ]
     );
+  }
+
+  async function openPhotoSelectModal(date: Date) {
+    setPhotoSelectDate(date);
+    setDeselectedPhotoIds(new Set());
+    setPhotoSelectAssets([]);
+    setPhotoSelectLoading(true);
+    setShowPhotoSelectModal(true);
+
+    const startOfDay = new Date(date);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(date);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    let assets: Array<{ id: string; uri: string; filename: string }> = [];
+    try {
+      const albums = await MediaLibrary.getAlbumsAsync();
+      const cameraAlbum = albums.find(a => a.title === 'Camera') ?? null;
+      let cursor: string | undefined;
+      while (true) {
+        const page = await MediaLibrary.getAssetsAsync({
+          mediaType: MediaLibrary.MediaType.photo,
+          createdAfter: startOfDay.getTime(),
+          createdBefore: endOfDay.getTime(),
+          first: 100,
+          after: cursor,
+          sortBy: MediaLibrary.SortBy.creationTime,
+          ...(cameraAlbum ? { album: cameraAlbum } : {}),
+        });
+        assets = [...assets, ...page.assets.map(a => ({ id: a.id, uri: a.uri, filename: a.filename }))];
+        if (!page.hasNextPage) break;
+        cursor = page.endCursor;
+      }
+    } catch {}
+
+    setPhotoSelectAssets(assets);
+    setPhotoSelectLoading(false);
   }
 
   function showUploadOptions() {
@@ -1261,7 +1295,7 @@ export default function EventScreen() {
       const dlResult = await FileSystem.downloadAsync(url, cacheUri);
       if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
       if (PhotoSaver) {
-        await PhotoSaver.saveToPhotos(cacheUri);
+        await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs ?? 0, params.name);
       } else {
         await MediaLibrary.saveToLibraryAsync(cacheUri);
       }
@@ -2215,6 +2249,89 @@ export default function EventScreen() {
       </Modal>
 
       {/* iOS date picker modal for Upload by date */}
+      {showPhotoSelectModal && (() => {
+        const SCREEN_WIDTH = Dimensions.get('window').width;
+        const PHOTO_SIZE = Math.floor((SCREEN_WIDTH - 3) / 3);
+        const selectedCount = photoSelectAssets.length - deselectedPhotoIds.size;
+        const dateLabel = photoSelectDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        return (
+          <Modal animationType="slide" onRequestClose={() => setShowPhotoSelectModal(false)}>
+            <View style={styles.photoSelectContainer}>
+              <View style={styles.photoSelectHeader}>
+                <TouchableOpacity onPress={() => setShowPhotoSelectModal(false)} style={styles.photoSelectCancel}>
+                  <Text style={styles.photoSelectCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <View style={{ flex: 1, alignItems: 'center' }}>
+                  <Text style={styles.photoSelectTitle}>{dateLabel}</Text>
+                  <Text style={styles.photoSelectSubtitle}>
+                    {photoSelectLoading ? 'Loading…' : `${selectedCount} of ${photoSelectAssets.length} selected`}
+                  </Text>
+                </View>
+                <View style={{ width: 70 }} />
+              </View>
+
+              {photoSelectLoading ? (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                  <ActivityIndicator size="large" color={Colors.accent} />
+                </View>
+              ) : photoSelectAssets.length === 0 ? (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                  <Text style={styles.photoSelectEmpty}>No photos found for this date</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={photoSelectAssets}
+                  keyExtractor={item => item.id}
+                  numColumns={3}
+                  renderItem={({ item }) => {
+                    const isDeselected = deselectedPhotoIds.has(item.id);
+                    return (
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          setDeselectedPhotoIds(prev => {
+                            const next = new Set(prev);
+                            if (next.has(item.id)) next.delete(item.id);
+                            else next.add(item.id);
+                            return next;
+                          });
+                        }}
+                        style={{ width: PHOTO_SIZE, height: PHOTO_SIZE, margin: 0.5 }}
+                      >
+                        <Image source={{ uri: item.uri }} style={{ width: '100%', height: '100%' }} />
+                        {isDeselected && (
+                          <View style={styles.photoSelectOverlay} />
+                        )}
+                        {!isDeselected && (
+                          <View style={styles.photoSelectCheck}>
+                            <Text style={styles.photoSelectCheckText}>✓</Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
+              )}
+
+              <View style={styles.photoSelectFooter}>
+                <TouchableOpacity
+                  style={[styles.photoSelectUploadBtn, selectedCount === 0 && styles.photoSelectUploadBtnDisabled]}
+                  disabled={selectedCount === 0 || photoSelectLoading}
+                  onPress={() => {
+                    setShowPhotoSelectModal(false);
+                    startDateUpload(photoSelectDate, new Set(deselectedPhotoIds));
+                  }}
+                >
+                  <Text style={styles.photoSelectUploadText}>
+                    {selectedCount === 0 ? 'Upload' : `Upload (${selectedCount})`}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+        );
+      })()}
+
       {showDatePickerModal && (
         <Modal transparent animationType="fade" onRequestClose={() => setShowDatePickerModal(false)}>
           <View style={styles.datePickerOverlay}>
@@ -2246,15 +2363,7 @@ export default function EventScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.datePickerConfirmBtn} onPress={() => {
                   setShowDatePickerModal(false);
-                  const dateStr = datePickerDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
-                  showAlert(
-                    'Upload photos from this date',
-                    `Upload all photos from your Camera folder taken on ${dateStr}?`,
-                    [
-                      { text: 'Upload', onPress: () => startDateUpload(datePickerDate) },
-                      { text: 'Cancel', style: 'cancel' },
-                    ]
-                  );
+                  openPhotoSelectModal(datePickerDate);
                 }}>
                   <Text style={styles.datePickerConfirmText}>Next</Text>
                 </TouchableOpacity>
@@ -2580,6 +2689,22 @@ const styles = StyleSheet.create({
   bgUploadBannerInner: { backgroundColor: Colors.card, borderRadius: 14, borderWidth: 0.5, borderColor: Colors.cardBorder, padding: 16, gap: 8 },
   bgUploadBannerTitle: { fontSize: 14, fontWeight: '600', color: Colors.white },
   bgUploadBannerSub: { fontSize: 12, color: Colors.textMuted },
+
+  // Photo selection modal (Upload by Date)
+  photoSelectContainer: { flex: 1, backgroundColor: '#fff' },
+  photoSelectHeader: { flexDirection: 'row', alignItems: 'center', paddingTop: 56, paddingBottom: 12, paddingHorizontal: 16, borderBottomWidth: 0.5, borderBottomColor: '#e0e0e0' },
+  photoSelectCancel: { width: 70 },
+  photoSelectCancelText: { fontSize: 16, color: Colors.accent },
+  photoSelectTitle: { fontSize: 15, fontWeight: '700', color: '#111' },
+  photoSelectSubtitle: { fontSize: 12, color: '#888', marginTop: 2 },
+  photoSelectEmpty: { fontSize: 15, color: '#888' },
+  photoSelectOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' },
+  photoSelectCheck: { position: 'absolute', top: 4, right: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: Colors.accent, justifyContent: 'center', alignItems: 'center' },
+  photoSelectCheckText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  photoSelectFooter: { padding: 16, paddingBottom: 36, borderTopWidth: 0.5, borderTopColor: '#e0e0e0' },
+  photoSelectUploadBtn: { backgroundColor: Colors.accent, borderRadius: 12, paddingVertical: 15, alignItems: 'center' },
+  photoSelectUploadBtnDisabled: { backgroundColor: '#ccc' },
+  photoSelectUploadText: { fontSize: 16, fontWeight: '700', color: Colors.background },
 
   // Date picker modal (iOS)
   datePickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },

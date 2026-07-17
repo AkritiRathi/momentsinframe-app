@@ -1,15 +1,15 @@
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput, Platform,
+  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput, Platform, Dimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Clipboard } from 'react-native';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import * as Contacts from 'expo-contacts';
 import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
-import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, listJoinedGuests } from '../../lib/api';
+import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, listJoinedGuests, setGuestBlocked } from '../../lib/api';
 import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -51,6 +51,18 @@ export default function EventDetailScreen() {
   const [allowedGuestsLoading, setAllowedGuestsLoading] = useState(false);
   const [addingGuest, setAddingGuest] = useState(false);
   const [showGuestsPanel, setShowGuestsPanel] = useState(false);
+
+  const gearRef = useRef<TouchableOpacity>(null);
+  const [gearMenuVisible, setGearMenuVisible] = useState(false);
+  const [gearDropPos, setGearDropPos] = useState({ top: 0, right: 0 });
+
+  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean };
+  const [showManageGuestsPanel, setShowManageGuestsPanel] = useState(false);
+  const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
+  const [joinedGuestsLoading, setJoinedGuestsLoading] = useState(false);
+  const [joinedGuestsError, setJoinedGuestsError] = useState<string | null>(null);
+  const [togglingGuest, setTogglingGuest] = useState<string | null>(null);
+  const [guestContactMap, setGuestContactMap] = useState<Record<string, string>>({});
 
   type PickerContact = { name: string; phones: string[] };
   const [showContactPicker, setShowContactPicker] = useState(false);
@@ -97,6 +109,53 @@ export default function EventDetailScreen() {
   }, [params.slug, params.organiserPhone]);
 
   useEffect(() => { if (isClosed) loadAllowedGuests(); }, [isClosed, loadAllowedGuests]);
+
+  const loadJoinedGuests = useCallback(async () => {
+    const pw = await getOrganiserPassword();
+    if (!pw || !params.organiserPhone) return;
+    setJoinedGuestsLoading(true);
+    setJoinedGuestsError(null);
+    try {
+      const result = await listJoinedGuests(params.slug, params.organiserPhone, pw);
+      if (result.guests) {
+        setJoinedGuests(result.guests);
+        // Look up each mobile in the organiser's contacts
+        try {
+          const { status } = await Contacts.requestPermissionsAsync();
+          if (status === 'granted') {
+            const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
+            const map: Record<string, string> = {};
+            for (const guest of result.guests) {
+              const match = allContacts.find(c =>
+                (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === guest.mobile)
+              );
+              if (match?.name) map[guest.mobile] = match.name;
+            }
+            setGuestContactMap(map);
+          }
+        } catch {}
+      } else {
+        setJoinedGuestsError(result.error ?? 'Could not load guests.');
+      }
+    } catch {
+      setJoinedGuestsError('Network error. Please try again.');
+    } finally {
+      setJoinedGuestsLoading(false);
+    }
+  }, [params.slug, params.organiserPhone]);
+
+  async function handleToggleBlock(mobile: string, currentlyBlocked: boolean) {
+    const pw = await getOrganiserPassword();
+    if (!pw || !params.organiserPhone) return;
+    setTogglingGuest(mobile);
+    const result = await setGuestBlocked(params.slug, mobile, !currentlyBlocked, params.organiserPhone, pw);
+    setTogglingGuest(null);
+    if (result.error) {
+      showAlert('Error', result.error);
+    } else {
+      setJoinedGuests(prev => prev.map(g => g.mobile === mobile ? { ...g, is_blocked: !currentlyBlocked } : g));
+    }
+  }
 
   async function handleToggleGuestDelete(value: boolean) {
     const pw = await getOrganiserPassword();
@@ -183,14 +242,19 @@ export default function EventDetailScreen() {
 
   async function handleExtend() {
     const current = params.expires_at ? new Date(params.expires_at) : new Date();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const pickerDate = current > tomorrow ? current : tomorrow;
     if (Platform.OS === 'ios') {
-      setExtendPickerDate(current);
+      setExtendPickerDate(pickerDate);
       setShowExtendPicker(true);
     } else {
       DateTimePickerAndroid.open({
-        value: current,
+        value: pickerDate,
         mode: 'date',
-        minimumDate: new Date(),
+        minimumDate: today,
         onChange: async (event, date) => {
           if (event.type !== 'set' || !date) return;
           const iso = date.toISOString().split('T')[0];
@@ -425,6 +489,18 @@ export default function EventDetailScreen() {
             <Text style={styles.back}>←</Text>
           </TouchableOpacity>
           <Text style={styles.pageTitle}>Manage Event</Text>
+          <TouchableOpacity
+            ref={gearRef}
+            style={styles.headerGear}
+            onPress={() => {
+              gearRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
+                setGearDropPos({ top: pageY + height + 4, right: Dimensions.get('window').width - pageX - width });
+                setGearMenuVisible(true);
+              });
+            }}
+          >
+            <Text style={styles.headerGearIcon}>⚙️</Text>
+          </TouchableOpacity>
         </View>
 
         <Text style={styles.eventName}>{params.name}</Text>
@@ -527,6 +603,7 @@ export default function EventDetailScreen() {
               adminPhone: params.organiserPhone ?? '',
               allowGuestDelete: allowGuestDelete ? 'true' : 'false',
               role: 'organiser',
+              joinCode: params.join_code,
             },
           })}
         >
@@ -866,6 +943,79 @@ export default function EventDetailScreen() {
 
       {alertOverlay}
 
+      {/* Gear dropdown */}
+      {gearMenuVisible && (
+        <Modal transparent animationType="fade" onRequestClose={() => setGearMenuVisible(false)}>
+          <TouchableOpacity style={styles.dropBackdrop} activeOpacity={1} onPress={() => setGearMenuVisible(false)}>
+            <View style={[styles.dropdown, { position: 'absolute', top: gearDropPos.top, right: gearDropPos.right }]}>
+              <TouchableOpacity style={styles.dropRow} onPress={() => {
+                setGearMenuVisible(false);
+                loadJoinedGuests();
+                setShowManageGuestsPanel(true);
+              }}>
+                <Text style={styles.dropText}>Manage Guests</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+
+      {/* Manage Guests panel */}
+      <Modal visible={showManageGuestsPanel} animationType="slide" onRequestClose={() => setShowManageGuestsPanel(false)}>
+        <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+          <View style={styles.panelHeader}>
+            <Text style={styles.panelTitle}>Manage Guests{joinedGuests.length > 0 ? ` (${joinedGuests.length})` : ''}</Text>
+            <TouchableOpacity onPress={() => setShowManageGuestsPanel(false)}>
+              <Text style={styles.panelClose}>×</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.panelDesc}>Block a guest to remove their access to this event. They will not be able to rejoin. You can unblock them at any time.</Text>
+          <ScrollView contentContainerStyle={styles.panelScroll}>
+            {joinedGuestsLoading ? (
+              <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
+            ) : joinedGuestsError ? (
+              <View style={styles.guestErrorBox}>
+                <Text style={styles.guestErrorText}>{joinedGuestsError}</Text>
+                <TouchableOpacity onPress={loadJoinedGuests} style={styles.retryBtn}>
+                  <Text style={styles.retryBtnText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : joinedGuests.length === 0 ? (
+              <Text style={styles.emptyText}>No guests have joined this event yet.</Text>
+            ) : (
+              joinedGuests.map(guest => {
+                const contactName = guestContactMap[guest.mobile];
+                const displayName = contactName || guest.name || guest.mobile;
+                const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
+                return (
+                  <View key={guest.mobile} style={[styles.coadminRow, guest.is_blocked && styles.blockedRow]}>
+                    <View style={styles.coadminInfo}>
+                      <Text style={[styles.coadminName, guest.is_blocked && styles.blockedText]}>{displayName}</Text>
+                      {subName ? <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{subName}</Text> : null}
+                      <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{guest.mobile}</Text>
+                      {guest.is_blocked && <Text style={styles.blockedBadge}>BLOCKED</Text>}
+                    </View>
+                    {togglingGuest === guest.mobile ? (
+                      <ActivityIndicator size="small" color={Colors.accent} />
+                    ) : (
+                      <TouchableOpacity
+                        style={[styles.removeBtn, guest.is_blocked && styles.unblockBtn]}
+                        onPress={() => handleToggleBlock(guest.mobile, guest.is_blocked)}
+                      >
+                        <Text style={[styles.removeBtnText, guest.is_blocked && styles.unblockBtnText]}>
+                          {guest.is_blocked ? 'Unblock' : 'Block'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })
+            )}
+          </ScrollView>
+          {alertOverlay}
+        </View>
+      </Modal>
+
       {Platform.OS === 'ios' && (
         <Modal transparent animationType="fade" visible={showExtendPicker} onRequestClose={() => setShowExtendPicker(false)}>
           <View style={styles.iosPickerOverlay}>
@@ -899,7 +1049,7 @@ export default function EventDetailScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   scroll: { padding: 20 },
-  pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16, paddingRight: 4 },
   pageTitle: { fontSize: 18, fontWeight: '500', color: Colors.white },
   back: { fontSize: 24, color: Colors.textMuted },
   eventName: { ...Typography.eventName, color: Colors.white, marginBottom: 4 },
@@ -980,4 +1130,19 @@ const styles = StyleSheet.create({
   iosPickerCancelText: { color: '#555', fontSize: 15 },
   iosPickerConfirmBtn: { padding: 12, flex: 1, alignItems: 'center', backgroundColor: Colors.accent, borderRadius: 10 },
   iosPickerConfirmText: { color: Colors.background, fontSize: 15, fontWeight: '700' },
+  headerGear: { marginLeft: 'auto', padding: 4 },
+  headerGearIcon: { fontSize: 20 },
+  dropBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
+  dropdown: { backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 0.5, borderColor: '#333', overflow: 'hidden', minWidth: 160 },
+  dropRow: { paddingHorizontal: 16, paddingVertical: 14 },
+  dropText: { fontSize: 14, fontWeight: '600', color: Colors.white },
+  blockedRow: { opacity: 0.6 },
+  blockedText: { color: Colors.textMuted },
+  blockedBadge: { fontSize: 10, fontWeight: '800', color: '#E53935', marginTop: 4 },
+  unblockBtn: { backgroundColor: 'rgba(100,220,100,0.08)', borderColor: 'rgba(100,220,100,0.3)' },
+  unblockBtnText: { color: '#4CAF50' },
+  guestErrorBox: { alignItems: 'center', paddingVertical: 24 },
+  guestErrorText: { fontSize: 13, color: '#E53935', textAlign: 'center', marginBottom: 12 },
+  retryBtn: { borderWidth: 1, borderColor: '#444', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 8 },
+  retryBtnText: { fontSize: 13, fontWeight: '600', color: Colors.textMuted },
 });

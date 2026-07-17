@@ -52,6 +52,25 @@ export async function organiserResetPassword(phone: string, newPassword: string)
   return post('/api/native/organiser/reset-password', { phone, newPassword });
 }
 
+export async function checkWhitelist(phone: string): Promise<{ whitelisted: boolean }> {
+  return post('/api/native/whitelist/check', { phone });
+}
+
+export async function listWhitelist(phone: string, password: string): Promise<{ phones?: { phone: string; added_at: string }[]; error?: string }> {
+  return get('/api/native/whitelist', {
+    'x-organiser-phone': phone,
+    'x-organiser-password': password,
+  });
+}
+
+export async function addToWhitelist(callerPhone: string, password: string, newPhone: string): Promise<{ success?: boolean; error?: string }> {
+  return post('/api/native/whitelist', { callerPhone, password, newPhone });
+}
+
+export async function removeFromWhitelist(callerPhone: string, password: string, targetPhone: string): Promise<{ success?: boolean; error?: string }> {
+  return del(`/api/native/whitelist/${targetPhone}`, { callerPhone, password });
+}
+
 export async function listEvents(organiserPhone: string, organiserPassword: string) {
   return get('/api/native/events', {
     'x-organiser-phone': organiserPhone,
@@ -157,11 +176,24 @@ export async function removeAllowedGuest(slug: string, organiserPhone: string, o
   return del(`/api/native/events/${slug}/allowed-guests`, { organiserPhone, organiserPassword, phone });
 }
 
-export async function listJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { name: string; mobile: string }[]; error?: string }> {
+export async function listJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean }[]; error?: string }> {
   return get(`/api/native/events/${slug}/joined-guests`, {
     'x-organiser-phone': organiserPhone,
     'x-organiser-password': organiserPassword,
   });
+}
+
+export async function setGuestBlocked(slug: string, mobile: string, isBlocked: boolean, organiserPhone: string, organiserPassword: string): Promise<{ success?: boolean; error?: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/guests/${mobile}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-organiser-phone': organiserPhone,
+      'x-organiser-password': organiserPassword,
+    },
+    body: JSON.stringify({ is_blocked: isBlocked }),
+  });
+  return res.json();
 }
 
 export async function joinEvent(joinCode: string, phone?: string) {
@@ -175,4 +207,8 @@ export async function updateEventSettings(slug: string, organiserPhone: string, 
     body: JSON.stringify({ organiserPhone, organiserPassword, ...settings }),
   });
   return res.json();
+}
+
+export async function deleteAccount(phone: string): Promise<{ success?: boolean; error?: string }> {
+  return del('/api/native/users/delete', { phone });
 }

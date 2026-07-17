@@ -1,17 +1,12 @@
 const { withAppDelegate } = require('@expo/config-plugins');
 
-const EXCLUDE_FUNCTION = `
-  private func excludeDocumentsFromiCloudBackup() {
-    let fm = FileManager.default
-    let dirs = fm.urls(for: .documentDirectory, in: .userDomainMask)
-    guard var url = dirs.first else { return }
-    var values = URLResourceValues()
-    values.isExcludedFromBackup = true
-    try? url.setResourceValues(values)
-  }
-`;
-
-const EXCLUDE_CALL = '    excludeDocumentsFromiCloudBackup()\n';
+// Inlined directly — avoids having to find the right class closing brace
+const EXCLUDE_CODE = `    if var docsUrl = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+      var resValues = URLResourceValues()
+      resValues.isExcludedFromBackup = true
+      try? docsUrl.setResourceValues(resValues)
+    }
+    `;
 
 module.exports = function withExcludeFromBackup(config) {
   return withAppDelegate(config, (mod) => {
@@ -19,25 +14,18 @@ module.exports = function withExcludeFromBackup(config) {
 
     let contents = mod.modResults.contents;
 
-    if (contents.includes('excludeDocumentsFromiCloudBackup')) {
+    if (contents.includes('isExcludedFromBackup')) {
       return mod; // already applied
     }
 
-    // Insert the call before the return in application(_:didFinishLaunchingWithOptions:)
+    // Insert inline before the return in application(_:didFinishLaunchingWithOptions:)
     const returnPattern = /([ \t]*)(return super\.application\(application,\s*didFinishLaunchingWithOptions:\s*launchOptions\))/;
     if (!returnPattern.test(contents)) {
       console.warn('[withExcludeFromBackup] Could not find insertion point in AppDelegate.swift — skipping');
       return mod;
     }
-    contents = contents.replace(returnPattern, `${EXCLUDE_CALL}$1$2`);
 
-    // Insert the helper method before the last closing brace of the class
-    const lastBrace = contents.lastIndexOf('\n}');
-    if (lastBrace !== -1) {
-      contents = contents.slice(0, lastBrace) + EXCLUDE_FUNCTION + contents.slice(lastBrace);
-    }
-
-    mod.modResults.contents = contents;
+    mod.modResults.contents = contents.replace(returnPattern, `${EXCLUDE_CODE}$1$2`);
     return mod;
   });
 };

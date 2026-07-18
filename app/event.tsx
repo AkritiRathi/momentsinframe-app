@@ -16,7 +16,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 let BackgroundUpload: { startService: (t: string, d: string) => Promise<void>; updateService: (t: string, d: string, p: number, m: number) => Promise<void>; stopService: () => Promise<void>; isRunning: () => boolean } | null = null;
 try { BackgroundUpload = require('background-upload').default; } catch {}
-let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<void> } | null = null;
+let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -1295,7 +1295,18 @@ export default function EventScreen() {
       const dlResult = await FileSystem.downloadAsync(url, cacheUri);
       if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
       if (PhotoSaver) {
-        await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs ?? 0, params.name);
+        const result = await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs ?? 0, params.name);
+        if (result === 'limited_access') {
+          const alreadyShown = await SecureStore.getItemAsync('mif_limited_access_shown');
+          if (!alreadyShown) {
+            await SecureStore.setItemAsync('mif_limited_access_shown', '1');
+            Alert.alert(
+              'Photo Saved',
+              'To organise photos into your event album, allow Full Access in Settings → Privacy & Security → Photos → MomentsInFrame.',
+              [{ text: 'OK' }]
+            );
+          }
+        }
       } else {
         await MediaLibrary.saveToLibraryAsync(cacheUri);
       }

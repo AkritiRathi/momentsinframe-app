@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  ActivityIndicator, Dimensions, Alert,
+  ActivityIndicator, Dimensions, Alert, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -11,7 +11,7 @@ import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
-import { checkWhitelist } from '../../lib/api';
+import { checkWhitelist, deleteAccount, organiserLogin } from '../../lib/api';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -22,6 +22,10 @@ export default function HomeScreen() {
   const [userDetailsVisible, setUserDetailsVisible] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [dropPos, setDropPos] = useState({ top: 0, right: 0 });
+  const [deletePasswordVisible, setDeletePasswordVisible] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deletePasswordError, setDeletePasswordError] = useState('');
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const gearRef = useRef<TouchableOpacity>(null);
 
   useEffect(() => {
@@ -70,8 +74,97 @@ export default function HomeScreen() {
     }
   }
 
+  function handleDeleteAccountPress() {
+    setUserDetailsVisible(false);
+    setTimeout(() => {
+      if (isWhitelisted) {
+        setDeletePassword('');
+        setDeletePasswordError('');
+        setDeletePasswordVisible(true);
+      } else {
+        showDeleteConfirmation();
+      }
+    }, 300);
+  }
+
+  function showDeleteConfirmation() {
+    Alert.alert(
+      'Delete Account',
+      'Your photos will remain in events but will show as Unknown User. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive', onPress: async () => {
+            const p = await getUserProfile();
+            if (!p) return;
+            await deleteAccount(p.mobile);
+            await clearUserProfile();
+            await AsyncStorage.clear();
+            router.replace('/(auth)/name-entry');
+          },
+        },
+      ]
+    );
+  }
+
+  async function handleDeletePasswordConfirm() {
+    if (!deletePassword.trim()) {
+      setDeletePasswordError('Please enter your organiser password.');
+      return;
+    }
+    if (!profile) return;
+    setDeletingAccount(true);
+    setDeletePasswordError('');
+    const result = await organiserLogin(profile.mobile, deletePassword);
+    setDeletingAccount(false);
+    if (!result.success) {
+      setDeletePasswordError('Incorrect password. Please try again.');
+      return;
+    }
+    setDeletePasswordVisible(false);
+    setTimeout(() => showDeleteConfirmation(), 300);
+  }
+
   return (
     <SafeAreaView style={styles.container}>
+
+      {/* Password verification modal for organiser delete */}
+      <Modal
+        visible={deletePasswordVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeletePasswordVisible(false)}
+      >
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setDeletePasswordVisible(false)}>
+          <View style={styles.userDetailsSheet}>
+            <Text style={styles.userDetailsTitle}>Confirm Password</Text>
+            <Text style={styles.userDetailsText}>Enter your organiser password to delete your account.</Text>
+            <TextInput
+              style={[styles.passwordInput, deletePasswordError ? styles.passwordInputError : null]}
+              placeholder="Organiser password"
+              placeholderTextColor="#555"
+              secureTextEntry
+              value={deletePassword}
+              onChangeText={v => { setDeletePassword(v); setDeletePasswordError(''); }}
+              autoFocus
+            />
+            {!!deletePasswordError && (
+              <Text style={styles.passwordErrorText}>{deletePasswordError}</Text>
+            )}
+            <View style={styles.userDetailsButtons}>
+              <TouchableOpacity style={styles.logoutBtn} onPress={() => setDeletePasswordVisible(false)}>
+                <Text style={styles.logoutBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.okBtn} onPress={handleDeletePasswordConfirm} disabled={deletingAccount}>
+                {deletingAccount
+                  ? <ActivityIndicator size="small" color="#0F0F0F" />
+                  : <Text style={styles.okBtnText}>Confirm</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* User details modal */}
       <Modal
@@ -107,6 +200,9 @@ export default function HomeScreen() {
                 <Text style={styles.okBtnText}>OK</Text>
               </TouchableOpacity>
             </View>
+            <TouchableOpacity style={styles.deleteAccountBtn} onPress={handleDeleteAccountPress}>
+              <Text style={styles.deleteAccountBtnText}>Delete Account</Text>
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -296,4 +392,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   okBtnText: { fontSize: 15, fontWeight: '700', color: '#0F0F0F' },
+  deleteAccountBtn: { marginTop: 16, alignItems: 'center', paddingVertical: 10 },
+  deleteAccountBtnText: { fontSize: 13, color: '#FF4444', fontWeight: '600' },
+  passwordInput: {
+    backgroundColor: '#2A2A2A',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: Colors.white,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  passwordInputError: { borderColor: '#FF4444' },
+  passwordErrorText: { fontSize: 12, color: '#FF4444', marginTop: 6 },
 });

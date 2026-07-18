@@ -160,6 +160,14 @@ export async function lookupUsers(phones: string[]): Promise<{ registered: strin
   return post('/api/native/users/lookup', { phones });
 }
 
+export async function registerUser(phone: string, name: string): Promise<void> {
+  await post('/api/native/users/register', { phone, name });
+}
+
+export async function logoutUser(phone: string): Promise<void> {
+  await post('/api/native/users/logout', { phone });
+}
+
 // Allowed guests API
 export async function listAllowedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { phone: string; name: string | null; added_at: string }[]; error?: string }> {
   return get(`/api/native/events/${slug}/allowed-guests`, {

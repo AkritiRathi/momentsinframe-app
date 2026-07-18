@@ -11,7 +11,7 @@ import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
-import { checkWhitelist, deleteAccount, organiserLogin } from '../../lib/api';
+import { checkWhitelist, deleteAccount, organiserLogin, logoutUser } from '../../lib/api';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -182,16 +182,22 @@ export default function HomeScreen() {
               <TouchableOpacity style={styles.logoutBtn} onPress={() => {
                 setUserDetailsVisible(false);
                 setTimeout(() => {
-                  Alert.alert('Logout', 'Are you sure you want to log out?', [
-                    { text: 'Cancel', style: 'cancel' },
-                    {
-                      text: 'Logout', style: 'destructive', onPress: async () => {
-                        await clearUserProfile();
-                        await AsyncStorage.clear();
-                        router.replace('/(auth)/name-entry');
+                  Alert.alert(
+                    'Log out?',
+                    'You will be removed from all events you have joined, including any co-admin roles. You will need the event code to rejoin. This cannot be undone.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Log out', style: 'destructive', onPress: async () => {
+                          const profile = await getUserProfile();
+                          if (profile?.mobile) await logoutUser(profile.mobile).catch(() => {});
+                          await clearUserProfile();
+                          await AsyncStorage.clear();
+                          router.replace('/(auth)/name-entry');
+                        },
                       },
-                    },
-                  ]);
+                    ]
+                  );
                 }, 300);
               }}>
                 <Text style={styles.logoutBtnText}>Logout</Text>

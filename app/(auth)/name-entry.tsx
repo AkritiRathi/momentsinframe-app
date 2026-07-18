@@ -5,6 +5,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { saveUserProfile } from '../../lib/storage';
+import { registerUser } from '../../lib/api';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
@@ -34,7 +35,9 @@ export default function NameEntryScreen() {
           text: 'Confirm',
           onPress: async () => {
             setLoading(true);
+            const name = `${firstName.trim()} ${lastName.trim()}`;
             await saveUserProfile({ firstName: firstName.trim(), lastName: lastName.trim(), mobile: mobile.trim() });
+            await registerUser(mobile.trim(), name).catch(() => {});
             router.replace('/(auth)/home');
           },
         },

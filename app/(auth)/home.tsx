@@ -3,8 +3,8 @@ import {
   ActivityIndicator, Dimensions, Alert, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
-import { useEffect, useState, useRef } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useEffect, useCallback, useState, useRef } from 'react';
 import * as Updates from 'expo-updates';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage';
@@ -28,16 +28,18 @@ export default function HomeScreen() {
   const [deletingAccount, setDeletingAccount] = useState(false);
   const gearRef = useRef<TouchableOpacity>(null);
 
-  useEffect(() => {
-    (async () => {
-      const p = await getUserProfile();
-      setProfile(p);
-      if (p?.mobile) {
-        const result = await checkWhitelist(p.mobile).catch(() => ({ whitelisted: false }));
-        setIsWhitelisted(result.whitelisted);
-      }
-    })();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        const p = await getUserProfile();
+        setProfile(p);
+        if (p?.mobile) {
+          const result = await checkWhitelist(p.mobile).catch(() => ({ whitelisted: false }));
+          setIsWhitelisted(result.whitelisted);
+        }
+      })();
+    }, [])
+  );
 
   async function checkForUpdates() {
     setSettingsVisible(false);

@@ -51,7 +51,7 @@ export default function ProfileScreen() {
   async function handleDeleteAccount() {
     Alert.alert(
       'Delete Account',
-      'This will permanently delete your account and remove you from all events. This cannot be undone.',
+      'Your photos will remain in events but will show as Unknown User. This action cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {

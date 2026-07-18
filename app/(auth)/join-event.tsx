@@ -275,9 +275,12 @@ export default function JoinEventScreen() {
         </TouchableOpacity>
       </Modal>
 
-      <TouchableOpacity style={styles.back} onPress={() => router.back()}>
-        <Text style={styles.backText}>←</Text>
-      </TouchableOpacity>
+      <View style={styles.back}>
+        <TouchableOpacity onPress={() => router.back()}>
+          <Text style={styles.backText}>←</Text>
+        </TouchableOpacity>
+        <Text style={styles.appName}>MomentsInFrame</Text>
+      </View>
 
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>Guest login</Text>
@@ -335,8 +338,9 @@ export default function JoinEventScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  back: { paddingTop: 16, paddingHorizontal: 16, paddingBottom: 0 },
+  back: { paddingTop: 16, paddingHorizontal: 16, paddingBottom: 0, flexDirection: 'row', alignItems: 'center', gap: 8 },
   backText: { fontSize: 24, color: Colors.textMuted },
+  appName: { fontSize: 18, fontWeight: '800', color: Colors.white, letterSpacing: 0.3 },
   scroll: { padding: 24, paddingTop: 8 },
   title: { ...Typography.heading, color: Colors.white, marginBottom: 8 },
   subtitle: { ...Typography.body, color: Colors.textMuted, marginBottom: 28 },

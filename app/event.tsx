@@ -1680,6 +1680,7 @@ export default function EventScreen() {
         return (
           <View style={styles.eventHeader}>
             <View style={styles.eventHeaderTopRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <TouchableOpacity style={styles.backBtn} onPress={() => {
                 if (uploading) {
                   showAlert('Cancel upload?', 'Photos uploaded so far will be saved.', [
@@ -1700,6 +1701,8 @@ export default function EventScreen() {
               }}>
                 <Text style={styles.backText}>←</Text>
               </TouchableOpacity>
+              <Text style={styles.appNameText}>MomentsInFrame</Text>
+              </View>
               <View style={styles.adminRow}>
                 {isAdmin && (
                   <Text style={styles.adminBadge}>{adminLabel}</Text>
@@ -2521,6 +2524,7 @@ const styles = StyleSheet.create({
   cpBtnCancel: { borderRadius: 10, padding: 14, alignItems: 'center' },
   cpBtnCancelText: { fontSize: 15, fontWeight: '700', color: Colors.textMuted },
   backText: { fontSize: 24, color: Colors.textMuted },
+  appNameText: { fontSize: 18, fontWeight: '800', color: Colors.white, letterSpacing: 0.3 },
   eventHeaderBody: { alignItems: 'center' },
   eventName: { ...Typography.eventName, color: Colors.white, textAlign: 'center', marginBottom: 4 },
   eventCode: { fontSize: 12, color: '#888', textAlign: 'center', marginBottom: 2 },

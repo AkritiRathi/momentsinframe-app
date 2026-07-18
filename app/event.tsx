@@ -2313,7 +2313,7 @@ export default function EventScreen() {
                 />
               )}
 
-              <View style={styles.photoSelectFooter}>
+              <View style={[styles.photoSelectFooter, { paddingBottom: Math.max(insets.bottom + 16, 36) }]}>
                 <TouchableOpacity
                   style={[styles.photoSelectUploadBtn, selectedCount === 0 && styles.photoSelectUploadBtnDisabled]}
                   disabled={selectedCount === 0 || photoSelectLoading}
@@ -2701,7 +2701,7 @@ const styles = StyleSheet.create({
   photoSelectOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' },
   photoSelectCheck: { position: 'absolute', top: 4, right: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: Colors.accent, justifyContent: 'center', alignItems: 'center' },
   photoSelectCheckText: { color: '#fff', fontSize: 11, fontWeight: '700' },
-  photoSelectFooter: { padding: 16, paddingBottom: 36, borderTopWidth: 0.5, borderTopColor: '#e0e0e0' },
+  photoSelectFooter: { padding: 16, borderTopWidth: 0.5, borderTopColor: '#e0e0e0' },
   photoSelectUploadBtn: { backgroundColor: Colors.accent, borderRadius: 12, paddingVertical: 15, alignItems: 'center' },
   photoSelectUploadBtnDisabled: { backgroundColor: '#ccc' },
   photoSelectUploadText: { fontSize: 16, fontWeight: '700', color: Colors.background },

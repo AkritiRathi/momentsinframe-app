@@ -11,7 +11,8 @@ import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
-import { checkWhitelist, deleteAccount, organiserLogin, logoutUser } from '../../lib/api';
+import { checkWhitelist, deleteAccount, organiserLogin, logoutUser, listEvents } from '../../lib/api';
+import { getOrganiserPassword } from '../../lib/auth';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -76,8 +77,27 @@ export default function HomeScreen() {
     }
   }
 
-  function handleDeleteAccountPress() {
+  async function checkOrganiserHasEvents(): Promise<number> {
+    if (!isWhitelisted || !profile?.mobile) return 0;
+    const pw = await getOrganiserPassword();
+    if (!pw) return 0;
+    const result = await listEvents(profile.mobile, pw).catch(() => ({ events: [] }));
+    return (result.events ?? []).length;
+  }
+
+  async function handleDeleteAccountPress() {
     setUserDetailsVisible(false);
+    const eventCount = await checkOrganiserHasEvents();
+    if (eventCount > 0) {
+      setTimeout(() => {
+        Alert.alert(
+          'Cannot Delete Account',
+          `You have ${eventCount} active event${eventCount !== 1 ? 's' : ''}. Please delete all your events before deleting your account.`,
+          [{ text: 'OK' }]
+        );
+      }, 300);
+      return;
+    }
     setTimeout(() => {
       if (isWhitelisted) {
         setDeletePassword('');
@@ -181,8 +201,19 @@ export default function HomeScreen() {
             <Text style={styles.userDetailsText}>Name: {profile?.firstName ?? ''} {profile?.lastName ?? ''}</Text>
             <Text style={styles.userDetailsText}>Mobile: +91 {profile?.mobile ?? ''}</Text>
             <View style={styles.userDetailsButtons}>
-              <TouchableOpacity style={styles.logoutBtn} onPress={() => {
+              <TouchableOpacity style={styles.logoutBtn} onPress={async () => {
                 setUserDetailsVisible(false);
+                const eventCount = await checkOrganiserHasEvents();
+                if (eventCount > 0) {
+                  setTimeout(() => {
+                    Alert.alert(
+                      'Cannot Log Out',
+                      `You have ${eventCount} active event${eventCount !== 1 ? 's' : ''}. Please delete all your events before logging out.`,
+                      [{ text: 'OK' }]
+                    );
+                  }, 300);
+                  return;
+                }
                 setTimeout(() => {
                   Alert.alert(
                     'Log out?',

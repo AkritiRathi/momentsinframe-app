@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  ActivityIndicator, Dimensions, Alert, TextInput,
+  ActivityIndicator, Dimensions, Alert, TextInput, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -257,6 +257,15 @@ export default function HomeScreen() {
             }}>
               <View style={styles.settingsRowBody}>
                 <Text style={styles.settingsRowLabel}>See user details</Text>
+              </View>
+            </TouchableOpacity>
+            <View style={styles.settingsDivider} />
+            <TouchableOpacity style={styles.settingsRow} onPress={() => {
+              setSettingsVisible(false);
+              Linking.openURL('https://momentsinframe.com/privacy');
+            }}>
+              <View style={styles.settingsRowBody}>
+                <Text style={styles.settingsRowLabel}>Privacy Policy</Text>
               </View>
             </TouchableOpacity>
           </View>

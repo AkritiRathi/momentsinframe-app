@@ -1282,7 +1282,6 @@ export default function EventScreen() {
   }
 
   async function saveFileToDownloads(filename: string, url: string, mimeType: string, folderPath: string | null, mode: 'downloads' | 'gallery', notify = false, dateTakenMs?: number): Promise<void> {
-    if (Platform.OS !== 'android') Alert.alert('B16', `PhotoSaver=${PhotoSaver ? 'LOADED' : 'NULL'}\nError: ${PhotoSaverError}`, [{ text: 'OK' }]);
     if (Platform.OS === 'android') {
       const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
       const cacheUri = `${FileSystem.cacheDirectory}${filename}`;

@@ -89,13 +89,7 @@ export default function HomeScreen() {
     setUserDetailsVisible(false);
     const eventCount = await checkOrganiserHasEvents();
     if (eventCount > 0) {
-      setTimeout(() => {
-        Alert.alert(
-          'Cannot Delete Account',
-          `You have ${eventCount} active event${eventCount !== 1 ? 's' : ''}. Please delete all your events before deleting your account.`,
-          [{ text: 'OK' }]
-        );
-      }, 300);
+      showAlert('Cannot Delete Account', `You have ${eventCount} active event${eventCount !== 1 ? 's' : ''}. Please delete all your events before deleting your account.`);
       return;
     }
     setTimeout(() => {
@@ -205,13 +199,7 @@ export default function HomeScreen() {
                 setUserDetailsVisible(false);
                 const eventCount = await checkOrganiserHasEvents();
                 if (eventCount > 0) {
-                  setTimeout(() => {
-                    Alert.alert(
-                      'Cannot Log Out',
-                      `You have ${eventCount} active event${eventCount !== 1 ? 's' : ''}. Please delete all your events before logging out.`,
-                      [{ text: 'OK' }]
-                    );
-                  }, 300);
+                  showAlert('Cannot Log Out', `You have ${eventCount} active event${eventCount !== 1 ? 's' : ''}. Please delete all your events before logging out.`);
                   return;
                 }
                 setTimeout(() => {

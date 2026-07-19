@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  ActivityIndicator, Dimensions, Alert, TextInput, Linking,
+  ActivityIndicator, Dimensions, Alert, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -11,7 +11,7 @@ import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
-import { checkWhitelist, deleteAccount, organiserLogin, logoutUser, listEvents } from '../../lib/api';
+import { checkWhitelist, checkUserStatus, deleteAccount, organiserLogin, logoutUser, listEvents } from '../../lib/api';
 import { getOrganiserPassword } from '../../lib/auth';
 
 export default function HomeScreen() {
@@ -33,11 +33,19 @@ export default function HomeScreen() {
     useCallback(() => {
       (async () => {
         const p = await getUserProfile();
-        setProfile(p);
-        if (p?.mobile) {
-          const result = await checkWhitelist(p.mobile).catch(() => ({ whitelisted: false }));
-          setIsWhitelisted(result.whitelisted);
+        if (!p?.mobile) { setProfile(p); return; }
+
+        // If account was logged out or deleted on another device, force logout here
+        const status = await checkUserStatus(p.mobile).catch(() => ({ active: true }));
+        if (!status.active) {
+          await clearUserProfile();
+          router.replace('/(auth)/login');
+          return;
         }
+
+        setProfile(p);
+        const result = await checkWhitelist(p.mobile).catch(() => ({ whitelisted: false }));
+        setIsWhitelisted(result.whitelisted);
       })();
     }, [])
   );
@@ -257,15 +265,6 @@ export default function HomeScreen() {
             }}>
               <View style={styles.settingsRowBody}>
                 <Text style={styles.settingsRowLabel}>See user details</Text>
-              </View>
-            </TouchableOpacity>
-            <View style={styles.settingsDivider} />
-            <TouchableOpacity style={styles.settingsRow} onPress={() => {
-              setSettingsVisible(false);
-              Linking.openURL('https://momentsinframe.com/privacy');
-            }}>
-              <View style={styles.settingsRowBody}>
-                <Text style={styles.settingsRowLabel}>Privacy Policy</Text>
               </View>
             </TouchableOpacity>
           </View>

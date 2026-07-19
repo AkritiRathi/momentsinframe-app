@@ -17,7 +17,8 @@ import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/d
 let BackgroundUpload: { startService: (t: string, d: string) => Promise<void>; updateService: (t: string, d: string, p: number, m: number) => Promise<void>; stopService: () => Promise<void>; isRunning: () => boolean } | null = null;
 try { BackgroundUpload = require('background-upload').default; } catch {}
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
-try { PhotoSaver = require('photo-saver').default; } catch {}
+let PhotoSaverError: string = 'not attempted';
+try { PhotoSaver = require('photo-saver').default; PhotoSaverError = 'ok'; } catch (e: any) { PhotoSaverError = String(e?.message ?? e); }
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
@@ -1281,6 +1282,7 @@ export default function EventScreen() {
   }
 
   async function saveFileToDownloads(filename: string, url: string, mimeType: string, folderPath: string | null, mode: 'downloads' | 'gallery', notify = false, dateTakenMs?: number): Promise<void> {
+    if (Platform.OS !== 'android') Alert.alert('B11', `PhotoSaver=${PhotoSaver ? 'LOADED' : 'NULL'}\nError: ${PhotoSaverError}`, [{ text: 'OK' }]);
     if (Platform.OS === 'android') {
       const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
       const cacheUri = `${FileSystem.cacheDirectory}${filename}`;

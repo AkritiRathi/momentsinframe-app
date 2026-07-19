@@ -995,7 +995,7 @@ export default function EventDetailScreen() {
                       <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{guest.mobile}</Text>
                       {guest.is_blocked && <Text style={styles.blockedBadge}>BLOCKED</Text>}
                     </View>
-                    {togglingGuest === guest.mobile ? (
+                    {guest.mobile === params.organiserPhone ? null : togglingGuest === guest.mobile ? (
                       <ActivityIndicator size="small" color={Colors.accent} />
                     ) : (
                       <TouchableOpacity

@@ -56,6 +56,10 @@ export async function checkWhitelist(phone: string): Promise<{ whitelisted: bool
   return post('/api/native/whitelist/check', { phone });
 }
 
+export async function checkUserStatus(phone: string): Promise<{ active: boolean }> {
+  return get(`/api/native/users/status?phone=${encodeURIComponent(phone)}`);
+}
+
 export async function listWhitelist(phone: string, password: string): Promise<{ phones?: { phone: string; added_at: string }[]; error?: string }> {
   return get('/api/native/whitelist', {
     'x-organiser-phone': phone,

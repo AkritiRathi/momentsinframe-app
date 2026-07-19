@@ -191,14 +191,9 @@ export default function DashboardScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Text style={styles.backArrow}>←</Text>
-          </TouchableOpacity>
-          <View>
-            <Text style={styles.headerTitle}>My Events</Text>
-            <Text style={styles.headerSub}>{events.length} event{events.length !== 1 ? 's' : ''}</Text>
-          </View>
+        <View>
+          <Text style={styles.headerTitle}>My Events</Text>
+          <Text style={styles.headerSub}>{events.length} event{events.length !== 1 ? 's' : ''}</Text>
         </View>
         <View style={styles.headerRight}>
           <TouchableOpacity style={styles.newBtn} onPress={() => router.push('/(master)/create-event')}>
@@ -313,10 +308,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 0.5, borderBottomColor: '#222',
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  backBtn: { padding: 4 },
-  backArrow: { fontSize: 22, color: Colors.white, lineHeight: 26 },
-  headerTitle: { ...Typography.sectionHeading, color: Colors.white },
+headerTitle: { ...Typography.sectionHeading, color: Colors.white },
   headerSub: { fontSize: 13, color: Colors.textMuted, marginTop: 2 },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   newBtn: { backgroundColor: Colors.accent, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },

@@ -1,6 +1,7 @@
 {
   "platforms": ["ios"],
   "ios": {
-    "modules": ["PhotoSaverModule"]
+    "modules": ["PhotoSaverModule"],
+    "podspecPath": "./photo-saver.podspec"
   }
 }

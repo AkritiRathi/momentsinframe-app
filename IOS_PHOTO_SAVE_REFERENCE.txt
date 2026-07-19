@@ -1,0 +1,383 @@
+================================================================================
+  IOS PHOTO SAVE REFERENCE — MomentsInFrame
+  Solved in Build 16 (v1.7.0) on 2026-07-20
+  Use this file to brief Claude in future projects needing iOS photo saving.
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. THE ROOT CAUSE — WHY THE NATIVE MODULE WAS NULL FOR 16 BUILDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Expo's autolinking (`expo-modules-autolinking`) uses a function called
+`listFilesInDirectories` to find .podspec files inside a local module.
+
+This function scans SUBDIRECTORIES ONLY. It NEVER reads files at the root
+of the module directory. So if the podspec is at:
+
+    modules/photo-saver/photo-saver.podspec   ← ROOT LEVEL — NOT FOUND
+
+...autolinking silently skips the module. The JS side loads fine but the native
+module is never compiled, causing:
+
+    Error: Cannot find native module 'PhotoSaver'
+
+THE FIX: Add "podspecPath" to expo-module.config.json under the "ios" key.
+This bypasses the directory scan and tells autolinking exactly where the
+podspec is:
+
+    expo-module.config.json:
+    {
+      "platforms": ["ios"],
+      "ios": {
+        "modules": ["PhotoSaverModule"],
+        "podspecPath": "./photo-saver.podspec"   ← THIS IS THE FIX
+      }
+    }
+
+Without podspecPath → module returns null → not linked → native code never runs.
+With podspecPath → autolinking uses it directly → Swift compiled → module works.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. TWO THINGS BOTH REQUIRED — JS SIDE AND NATIVE SIDE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+There are TWO separate systems that must both be configured:
+
+  A) Metro bundler (JS resolution) — needs a "file:" entry in root package.json:
+       "photo-saver": "file:./modules/photo-saver"
+     Without this: require('photo-saver') throws "Cannot find module"
+
+  B) CocoaPods (native compilation) — needs the podspec + podspecPath:
+       modules/photo-saver/photo-saver.podspec
+       + "podspecPath" in expo-module.config.json
+     Without this: JS loads but native module is null
+
+Missing A → JS error ("Cannot find module 'photo-saver'")
+Missing B → Native error ("Cannot find native module 'PhotoSaver'")
+Both required for the module to work end to end.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. COMPLETE MODULE FILE STRUCTURE (all 5 files required)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+modules/
+└── photo-saver/
+    ├── expo-module.config.json    ← tells autolinking what to link
+    ├── photo-saver.podspec        ← CocoaPods spec for native compilation
+    ├── package.json               ← module identity for npm/Metro
+    ├── index.ts                   ← JS entry point, exports the native module
+    └── ios/
+        └── PhotoSaverModule.swift ← the actual native Swift code
+
+--- FILE: expo-module.config.json ---
+{
+  "platforms": ["ios"],
+  "ios": {
+    "modules": ["PhotoSaverModule"],
+    "podspecPath": "./photo-saver.podspec"
+  }
+}
+
+--- FILE: photo-saver.podspec ---
+require 'json'
+
+package = JSON.parse(File.read(File.join(__dir__, 'package.json')))
+
+Pod::Spec.new do |s|
+  s.name           = 'photo-saver'
+  s.version        = package['version']
+  s.summary        = 'Saves photos to iOS Photos with correct EXIF date and album'
+  s.author         = 'YourAppName'
+  s.homepage       = 'https://yourapp.com'
+  s.platforms      = { :ios => '15.1' }
+  s.source         = { :path => '.' }
+  s.source_files   = 'ios/**/*.{swift}'
+  s.dependency 'ExpoModulesCore'
+end
+
+--- FILE: package.json ---
+{
+  "name": "photo-saver",
+  "version": "1.0.0",
+  "main": "index.ts"
+}
+
+--- FILE: index.ts ---
+import { requireNativeModule } from 'expo-modules-core';
+import { Platform } from 'react-native';
+
+interface PhotoSaverModule {
+  saveToPhotos(fileUri: string, dateTakenMs: number, albumName: string): Promise<string | null>;
+}
+
+// iOS only — Android uses MediaStore directly
+const PhotoSaver = Platform.OS === 'ios'
+  ? requireNativeModule<PhotoSaverModule>('PhotoSaver')
+  : null;
+
+export default PhotoSaver;
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. WHY PHAssetCreationRequest.creationDate DOES NOT WORK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You might try:
+    creationRequest.creationDate = dateTaken
+
+iOS Photos COMPLETELY IGNORES this for JPEG files. It reads the date from
+the EXIF metadata embedded in the file itself, not from the creation request.
+
+THE ONLY RELIABLE FIX: Embed DateTimeOriginal into the JPEG EXIF before
+saving using CGImageDestination. See the Swift code in Section 6.
+
+The embedExifDate() function:
+  1. Reads the image file into a CGImageSource
+  2. Copies existing EXIF properties
+  3. Overwrites DateTimeOriginal, DateTimeDigitized (EXIF) and DateTime (TIFF)
+  4. Writes a new JPEG to a temp file via CGImageDestination
+  5. Saves the new temp file (with correct EXIF) to Photos
+  6. Deletes the temp file after saving
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. iOS PHOTOS PERMISSION LEVELS AND ALBUM CREATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+iOS has two Photos permission levels:
+
+  FULL ACCESS (.authorized):
+    - Can create a named album
+    - Can add photo to a specific album
+    - Photo appears in "Albums → [Event Name]"
+
+  LIMITED ACCESS (.limited):
+    - CANNOT create or modify albums
+    - Photo saves to main library only (Camera Roll)
+    - Must handle this case gracefully — don't reject, resolve with "limited_access"
+
+Always request .readWrite permission, not just .addOnly.
+Check status before attempting album operations.
+
+In Swift:
+    PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+        let hasFullAccess = (status == .authorized)
+        // use hasFullAccess to decide whether to attempt album creation
+    }
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. FULL SWIFT CODE — PhotoSaverModule.swift
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+import ExpoModulesCore
+import Photos
+import ImageIO
+
+public class PhotoSaverModule: Module {
+  public func definition() -> ModuleDefinition {
+    Name("PhotoSaver")
+
+    AsyncFunction("saveToPhotos") { (fileUri: String, dateTakenMs: Double, albumName: String, promise: Promise) in
+      guard let url = URL(string: fileUri) else {
+        promise.reject("ERR_INVALID_URI", "Invalid file URI: \(fileUri)")
+        return
+      }
+
+      let dateTaken: Date? = dateTakenMs > 0 ? Date(timeIntervalSince1970: dateTakenMs / 1000.0) : nil
+
+      PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+        guard status == .authorized || status == .limited else {
+          promise.reject("ERR_NO_PERMISSION", "Photos permission not granted")
+          return
+        }
+
+        let hasFullAccess = (status == .authorized)
+
+        // Embed correct EXIF date into file before saving (creationDate is ignored by iOS Photos)
+        let saveUrl: URL
+        if let dateTaken = dateTaken, let exifUrl = self.embedExifDate(sourceUrl: url, dateTaken: dateTaken) {
+          saveUrl = exifUrl
+        } else {
+          saveUrl = url
+        }
+
+        let cleanup = { try? FileManager.default.removeItem(at: saveUrl) }
+
+        if hasFullAccess {
+          self.findOrCreateAlbum(named: albumName) { collection in
+            guard let collection = collection else {
+              cleanup()
+              promise.reject("ERR_ALBUM_FAILED", "Could not find or create album '\(albumName)'")
+              return
+            }
+            PHPhotoLibrary.shared().performChanges({
+              if let creationRequest = PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: saveUrl) {
+                if let date = dateTaken { creationRequest.creationDate = date }
+                if let placeholder = creationRequest.placeholderForCreatedAsset {
+                  PHAssetCollectionChangeRequest(for: collection)?.addAssets([placeholder] as NSArray)
+                }
+              }
+            }) { success, error in
+              cleanup()
+              if success {
+                promise.resolve("ok")
+              } else {
+                promise.reject("ERR_SAVE_FAILED", error?.localizedDescription ?? "Failed to save photo")
+              }
+            }
+          }
+        } else {
+          // Limited access — save to main library only, no album
+          PHPhotoLibrary.shared().performChanges({
+            if let creationRequest = PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: saveUrl) {
+              if let date = dateTaken { creationRequest.creationDate = date }
+            }
+          }) { success, error in
+            cleanup()
+            if success {
+              promise.resolve("limited_access")
+            } else {
+              promise.reject("ERR_SAVE_FAILED", error?.localizedDescription ?? "Failed to save photo")
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Embeds DateTimeOriginal into JPEG EXIF — the ONLY way iOS Photos respects the date
+  private func embedExifDate(sourceUrl: URL, dateTaken: Date) -> URL? {
+    guard let imageData = try? Data(contentsOf: sourceUrl),
+          let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+          let uti = CGImageSourceGetType(source) else { return nil }
+
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+    let dateString = formatter.string(from: dateTaken)
+
+    var properties = (CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]) ?? [:]
+
+    var exifDict = (properties[kCGImagePropertyExifDictionary as String] as? [String: Any]) ?? [:]
+    exifDict[kCGImagePropertyExifDateTimeOriginal as String] = dateString
+    exifDict[kCGImagePropertyExifDateTimeDigitized as String] = dateString
+    properties[kCGImagePropertyExifDictionary as String] = exifDict
+
+    var tiffDict = (properties[kCGImagePropertyTIFFDictionary as String] as? [String: Any]) ?? [:]
+    tiffDict[kCGImagePropertyTIFFDateTime as String] = dateString
+    if tiffDict[kCGImagePropertyTIFFMake as String] == nil {
+      tiffDict[kCGImagePropertyTIFFMake as String] = "Apple"
+    }
+    if tiffDict[kCGImagePropertyTIFFModel as String] == nil {
+      tiffDict[kCGImagePropertyTIFFModel as String] = "iPhone"
+    }
+    properties[kCGImagePropertyTIFFDictionary as String] = tiffDict
+
+    let tempUrl = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".jpg")
+    guard let destination = CGImageDestinationCreateWithURL(tempUrl as CFURL, uti, 1, nil) else { return nil }
+    CGImageDestinationAddImageFromSource(destination, source, 0, properties as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { return nil }
+
+    return tempUrl
+  }
+
+  // Finds an existing album by name or creates a new one
+  private func findOrCreateAlbum(named title: String, completion: @escaping (PHAssetCollection?) -> Void) {
+    let fetchOptions = PHFetchOptions()
+    fetchOptions.predicate = NSPredicate(format: "title = %@", title)
+    let existing = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: fetchOptions)
+
+    if let collection = existing.firstObject {
+      completion(collection)
+      return
+    }
+
+    var placeholderIdentifier: String?
+    PHPhotoLibrary.shared().performChanges({
+      let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: title)
+      placeholderIdentifier = request.placeholderForCreatedAssetCollection.localIdentifier
+    }) { success, _ in
+      guard success, let identifier = placeholderIdentifier else {
+        completion(nil)
+        return
+      }
+      let created = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [identifier], options: nil)
+      completion(created.firstObject)
+    }
+  }
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. JPEG vs JPEG — FILENAME NORMALISATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When photos are uploaded, normalise .jpeg extension to .jpg before storing
+the filename in the database. Both are the same format — .jpg is the
+universally preferred extension.
+
+Example (TypeScript, at upload time):
+    const normalisedName = filename.replace(/\.jpeg$/i, '.jpg');
+
+NOTE: iOS Photos info panel always displays "JPEG" as the format label
+regardless of whether the file extension is .jpg or .jpeg. This is Apple's
+display name for the format type — it is NOT the file extension and cannot
+be changed. There is nothing wrong if you see "JPEG" there.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. HEIC/HEIF PHOTOS SAVED TO "OTHER" INSTEAD OF PHOTOS LIBRARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When a HEIC/HEIF file contains Live Photo metadata (a reference to a paired
+.mov video file) but the .mov is absent, iOS classifies the image as an
+INCOMPLETE LIVE PHOTO and places it in the "Other" category in Photos instead
+of the main library. The user cannot see it in their normal photo grid.
+
+This happens when:
+  - A user uploads a Live Photo from their iPhone (HEIC + .mov pair)
+  - Only the HEIC is stored/downloaded (the .mov is not included)
+  - The HEIC retains the Live Photo UUID metadata pointing to a missing .mov
+
+FIX OPTIONS:
+  A) Convert HEIC to JPEG at upload time (recommended — MomentsInFrame approach)
+     — strips all Live Photo metadata automatically
+     — consistent format across all devices
+     — no special handling needed at download time
+
+  B) Strip Live Photo metadata before saving:
+     Remove kCGImagePropertyMakerAppleDictionary key 17 (Live Photo identifier)
+     from the image properties before writing via CGImageDestination
+
+  C) Also save the paired .mov alongside the HEIC (complex, large files)
+
+MomentsInFrame converts all uploads to JPEG on the server side, so this
+issue does not occur at download time.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. HOW TO USE PhotoSaver IN THE APP (event.tsx pattern)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Load with try/catch so the app doesn't crash if the module fails to load:
+
+    let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
+    try { PhotoSaver = require('photo-saver').default; } catch (e: any) { /* handle */ }
+
+Usage at download time:
+    if (PhotoSaver && Platform.OS === 'ios') {
+      await PhotoSaver.saveToPhotos(localFileUri, dateTakenMs, eventName);
+    }
+
+    // dateTakenMs: Unix timestamp in milliseconds from the photo's EXIF/metadata
+    // localFileUri: local file:// URI after downloading the photo
+    // eventName: used as the album name in iOS Photos
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+END OF REFERENCE
+Built with Expo SDK 54 · React Native 0.81 · iOS 15.1+
+================================================================================

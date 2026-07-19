@@ -56,6 +56,14 @@ export default function EventDetailScreen() {
   const [gearMenuVisible, setGearMenuVisible] = useState(false);
   const [gearDropPos, setGearDropPos] = useState({ top: 0, right: 0 });
 
+  const [organiserDisplayName, setOrganiserDisplayName] = useState<string>('Organiser');
+
+  useEffect(() => {
+    getUserProfile().then(p => {
+      if (p) setOrganiserDisplayName(`${p.firstName} ${p.lastName}`.trim());
+    });
+  }, []);
+
   type JoinedGuest = { name: string; mobile: string; is_blocked: boolean };
   const [showManageGuestsPanel, setShowManageGuestsPanel] = useState(false);
   const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
@@ -122,6 +130,7 @@ export default function EventDetailScreen() {
         const organiserPhone = params.organiserPhone!;
         const profile = await getUserProfile();
         const organiserName = profile ? `${profile.firstName} ${profile.lastName}`.trim() : 'Organiser';
+        setOrganiserDisplayName(organiserName);
         const others = result.guests.filter(g => g.mobile !== organiserPhone);
         const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false };
         setJoinedGuests([organiserEntry, ...others]);
@@ -191,10 +200,11 @@ export default function EventDetailScreen() {
         setClosedUpdating(false);
       }
 
-      if (joinedGuests.length > 0) {
+      const nonOrgGuests = joinedGuests.filter(g => g.mobile !== params.organiserPhone);
+      if (nonOrgGuests.length > 0) {
         showAlert(
           'Close this event?',
-          `${joinedGuests.length} guest${joinedGuests.length !== 1 ? 's' : ''} have already joined. They will lose access unless added to the allowed list.\n\nAdd them all now?`,
+          `${nonOrgGuests.length} guest${nonOrgGuests.length !== 1 ? 's' : ''} have already joined. They will lose access unless added to the allowed list.\n\nAdd them all now?`,
           [
             {
               text: 'Yes, add them',
@@ -202,7 +212,7 @@ export default function EventDetailScreen() {
                 setClosedUpdating(true);
                 await updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: true });
                 await addAllowedGuests(params.slug, params.organiserPhone!, pw,
-                  joinedGuests.map(g => ({ phone: g.mobile, name: g.name }))
+                  joinedGuests.filter(g => g.mobile !== params.organiserPhone).map(g => ({ phone: g.mobile, name: g.name }))
                 );
                 setIsClosed(true);
                 await loadAllowedGuests();
@@ -397,6 +407,10 @@ export default function EventDetailScreen() {
   }
 
   async function confirmAddCoadmin(phone: string, name: string | null) {
+    if (phone === params.organiserPhone) {
+      showAlert('Not allowed', 'You cannot add yourself as a co-admin.');
+      return;
+    }
     if (coadmins.some(c => c.phone === phone)) {
       showAlert('Already added', `${name ?? phone} is already a co-admin.`);
       return;
@@ -425,6 +439,10 @@ export default function EventDetailScreen() {
   }
 
   async function confirmAddGuest(phone: string, name?: string) {
+    if (phone === params.organiserPhone) {
+      showAlert('Already in event', 'You are the organiser of this event and always have access.');
+      return;
+    }
     if (allowedGuests.some(g => g.phone === phone)) {
       showAlert('Already added', `${name ?? phone} is already in the allowed guests list.`);
       return;
@@ -829,20 +847,30 @@ export default function EventDetailScreen() {
             <ScrollView contentContainerStyle={styles.panelScroll}>
               {allowedGuestsLoading ? (
                 <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
-              ) : allowedGuests.length === 0 ? (
-                <Text style={styles.emptyText}>No guests added yet. Add guests to let them in.</Text>
               ) : (
-                allowedGuests.map(g => (
-                  <View key={g.phone} style={styles.coadminRow}>
+                <>
+                  {/* Organiser always pinned first, no Remove button */}
+                  <View style={styles.coadminRow}>
                     <View style={styles.coadminInfo}>
-                      <Text style={styles.coadminName}>{g.name ?? g.phone}</Text>
-                      {g.name ? <Text style={styles.coadminPhone}>{g.phone}</Text> : null}
+                      <Text style={styles.coadminName}>{organiserDisplayName}</Text>
+                      <Text style={styles.coadminPhone}>{params.organiserPhone}</Text>
                     </View>
-                    <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveGuest(g.phone, g.name)}>
-                      <Text style={styles.removeBtnText}>Remove</Text>
-                    </TouchableOpacity>
                   </View>
-                ))
+                  {allowedGuests.length === 0
+                    ? <Text style={[styles.emptyText, { marginTop: 12 }]}>No guests added yet. Add guests to let them in.</Text>
+                    : allowedGuests.map(g => (
+                        <View key={g.phone} style={styles.coadminRow}>
+                          <View style={styles.coadminInfo}>
+                            <Text style={styles.coadminName}>{g.name ?? g.phone}</Text>
+                            {g.name ? <Text style={styles.coadminPhone}>{g.phone}</Text> : null}
+                          </View>
+                          <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveGuest(g.phone, g.name)}>
+                            <Text style={styles.removeBtnText}>Remove</Text>
+                          </TouchableOpacity>
+                        </View>
+                      ))
+                  }
+                </>
               )}
               <TouchableOpacity
                 style={[styles.btn, { marginTop: 12, borderColor: Colors.accent, opacity: addingGuest ? 0.5 : 1 }]}

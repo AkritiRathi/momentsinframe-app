@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useEffect, useCallback, useState, useRef } from 'react';
 import * as Updates from 'expo-updates';
+import * as Application from 'expo-application';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage';
 import { Colors } from '../../constants/colors';
@@ -254,7 +255,7 @@ export default function HomeScreen() {
             <TouchableOpacity style={styles.settingsRow} onPress={checkForUpdates} disabled={checkingUpdate}>
               <View style={styles.settingsRowBody}>
                 <Text style={styles.settingsRowLabel}>Check for Updates</Text>
-                <Text style={styles.settingsRowSub}>Version {Updates.runtimeVersion ?? '1.0.0'}</Text>
+                <Text style={styles.settingsRowSub}>Version {Updates.runtimeVersion ?? '1.0.0'} ({Application.nativeBuildVersion})</Text>
               </View>
               {checkingUpdate && <ActivityIndicator size="small" color={Colors.accent} />}
             </TouchableOpacity>

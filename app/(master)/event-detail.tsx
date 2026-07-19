@@ -118,7 +118,13 @@ export default function EventDetailScreen() {
     try {
       const result = await listJoinedGuests(params.slug, params.organiserPhone, pw);
       if (result.guests) {
-        setJoinedGuests(result.guests);
+        // Pin organiser to top of the list, even if they haven't joined
+        const organiserPhone = params.organiserPhone!;
+        const profile = await getUserProfile();
+        const organiserName = profile ? `${profile.firstName} ${profile.lastName}`.trim() : 'Organiser';
+        const others = result.guests.filter(g => g.mobile !== organiserPhone);
+        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false };
+        setJoinedGuests([organiserEntry, ...others]);
         // Look up each mobile in the organiser's contacts
         try {
           const { status } = await Contacts.requestPermissionsAsync();
@@ -964,7 +970,7 @@ export default function EventDetailScreen() {
       <Modal visible={showManageGuestsPanel} animationType="slide" onRequestClose={() => setShowManageGuestsPanel(false)}>
         <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           <View style={styles.panelHeader}>
-            <Text style={styles.panelTitle}>Manage Guests{joinedGuests.length > 0 ? ` (${joinedGuests.length})` : ''}</Text>
+            <Text style={styles.panelTitle}>Manage Guests{joinedGuests.length > 1 ? ` (${joinedGuests.length - 1})` : ''}</Text>
             <TouchableOpacity onPress={() => setShowManageGuestsPanel(false)}>
               <Text style={styles.panelClose}>×</Text>
             </TouchableOpacity>
@@ -980,8 +986,22 @@ export default function EventDetailScreen() {
                   <Text style={styles.retryBtnText}>Retry</Text>
                 </TouchableOpacity>
               </View>
-            ) : joinedGuests.length === 0 ? (
-              <Text style={styles.emptyText}>No guests have joined this event yet.</Text>
+            ) : joinedGuests.length <= 1 ? (
+              <>
+                {joinedGuests.map(guest => {
+                  const contactName = guestContactMap[guest.mobile];
+                  const displayName = contactName || guest.name || guest.mobile;
+                  return (
+                    <View key={guest.mobile} style={styles.coadminRow}>
+                      <View style={styles.coadminInfo}>
+                        <Text style={styles.coadminName}>{displayName}</Text>
+                        <Text style={styles.coadminPhone}>{guest.mobile}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+                <Text style={[styles.emptyText, { marginTop: 12 }]}>No guests have joined this event yet.</Text>
+              </>
             ) : (
               joinedGuests.map(guest => {
                 const contactName = guestContactMap[guest.mobile];

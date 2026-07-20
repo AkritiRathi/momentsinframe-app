@@ -424,6 +424,96 @@ VIDEO UPLOADS:
   - Currently blocked server-side ("Video uploads not available at this time")
   - Videos pass through unconverted in the trial build — pHash is image-only
 
+--- CODE: /api/upload-url/route.ts (Phase 1 — get presigned URL) ---
+// App calls this first. Returns a presigned S3 URL + stagingKey.
+// App then PUTs the file directly to S3 — never through Vercel.
+export async function POST(request: NextRequest) {
+  const { eventSlug, filename, contentType } = await request.json();
+
+  // Validate event exists and is not expired
+  const { data: event } = await supabaseAdmin
+    .from("events")
+    .select("id, expires_at")
+    .eq("slug", eventSlug)
+    .single();
+
+  const extension = filename.split(".").pop()?.toLowerCase() ?? "";
+  const stagingKey = `staging/${event.id}/${randomUUID()}.${extension}`;
+
+  const uploadUrl = await getPresignedUploadUrl(
+    stagingKey,
+    contentType || "application/octet-stream"
+  );
+
+  return NextResponse.json({ uploadUrl, stagingKey });
+}
+
+--- CODE: /api/upload/route.ts (Phase 2 — server processes staged file) ---
+export async function POST(request: NextRequest) {
+  const { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId } = await request.json();
+
+  // Normalise filename: .heic/.jpeg/.png → .jpg
+  const originalExtension = getExtension(originalFilename);
+  const isVideo = VIDEO_EXTENSIONS.has(originalExtension);
+  const storedFilename = isVideo
+    ? originalFilename
+    : originalFilename.replace(/\.[^.]+$/, ".jpg");
+
+  // Fetch staged file from S3 (no size limit server-to-S3)
+  const getResult = await s3Client.send(
+    new GetObjectCommand({ Bucket: S3_BUCKET, Key: stagingKey })
+  );
+  let inputBuffer = await streamToBuffer(getResult.Body as NodeJS.ReadableStream);
+
+  // 1. Extract EXIF date BEFORE any conversion
+  const { takenAt, dateSource } = await extractBestDate(tempInputPath);
+
+  // 2a. Pre-decode HEIC (iPhone HEICs have 48+ iref refs; sharp limit is 16)
+  const decodedBuffer = await preDecodeIfHeic(inputBuffer, originalExtension);
+  const isHeic = ["heic", "heif"].includes(originalExtension);
+
+  // 2b. Convert HEIC to JPEG NOW (before duplicate check) so sizes are comparable
+  const convertedBuffer = isHeic ? await convertToJpg(decodedBuffer) : decodedBuffer;
+  const newPhash = await computePhash(convertedBuffer);
+
+  // 3. Duplicate detection against all existing photos in this event
+  const { data: existingPhotos } = await supabaseAdmin
+    .from("photos")
+    .select("id, phash, file_size_bytes, taken_at, date_source")
+    .eq("event_id", event.id)
+    .eq("media_type", "photo")
+    .is("deleted_at", null)
+    .not("phash", "is", null);
+
+  for (const existing of existingPhotos ?? []) {
+    if (!isDuplicate(existing.phash, newPhash, existing.file_size_bytes, uploadBuffer.length,
+        existing.taken_at ? new Date(existing.taken_at) : null, takenAt,
+        existing.date_source, dateSource)) continue;
+
+    const resolution = resolveDuplicate({ ...existing }, { phash: newPhash, fileSizeBytes: uploadBuffer.length, takenAt, dateSource });
+
+    if (resolution.action === "merge_self_duplicate" || resolution.action === "keep_existing") {
+      return NextResponse.json({ success: true, duplicate: true, ... });
+    }
+
+    if (resolution.action === "keep_new") {
+      // Generate new thumbnail + display, upload 3 versions to S3, UPDATE existing DB row in-place
+      await supabaseAdmin.from("photos").update({ storage_path, thumbnail_path, display_path, phash: newPhash, ... }).eq("id", existing.id);
+      return NextResponse.json({ success: true, upgraded: true, ... });
+    }
+  }
+
+  // 4. No duplicate — convert if needed, generate thumbnail + display, INSERT new row
+  const [thumbBuffer, displayBuffer] = await Promise.all([
+    sharp(uploadBuffer).rotate().resize(300).jpeg({ quality: 75 }).toBuffer(),
+    sharp(uploadBuffer).rotate().resize(1200).jpeg({ quality: 85 }).toBuffer(),
+  ]);
+  await supabaseAdmin.from("photos").insert({ event_id, storage_path, thumbnail_path, display_path, phash: newPhash, taken_at, date_source, file_size_bytes, original_filename: storedFilename, original_format: originalExtension, ... });
+
+  // Cleanup: delete temp file + staging S3 key (always, success or failure)
+  // ...in finally block
+}
+
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 11. ANDROID DOWNLOAD LOGIC
@@ -460,6 +550,92 @@ iOS ZIP:
   - iOS has no Downloads folder accessible to apps
   - ZIP files are shared via iOS Share Sheet (Sharing.shareAsync) instead
   - User saves to Files app, AirDrop, etc. — their choice
+
+--- CODE: app/event.tsx — Android & iOS download functions ---
+
+// Load MediaStore native module (Android only)
+const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
+
+// --- Step 1: Get or create the download folder (Android only) ---
+async function getDownloadFolder(): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
+  const storeKey = `downloads_folder_name_${slug}`;
+  let folderName = await SecureStore.getItemAsync(storeKey);
+  if (!folderName) {
+    // First time: prompt user to name the folder (defaults to event name)
+    folderName = await new Promise<string | null>(resolve => {
+      setFolderNameDraft(params.name);
+      folderSetupResolveRef.current = resolve;
+      setFolderSetupVisible(true);
+    });
+    if (!folderName) return null;
+    await SecureStore.setItemAsync(storeKey, folderName); // save for next time
+  }
+  const folderPath = `${RNFetchBlob.fs.dirs.DownloadDir}/${folderName}`;
+  const exists = await RNFetchBlob.fs.exists(folderPath);
+  if (!exists) await RNFetchBlob.fs.mkdir(folderPath); // create if missing
+  return folderPath;
+}
+
+// --- Step 2: Download a single photo ---
+async function saveFileToDownloads(
+  filename: string, url: string, mimeType: string,
+  folderPath: string | null, mode: 'downloads' | 'gallery',
+  notify = false, dateTakenMs?: number
+): Promise<void> {
+  if (Platform.OS === 'android') {
+    const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+    if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+    const localPath = dlResult.uri.replace('file://', '');
+    // dateTakenMs sets "date taken" in Android media database — no EXIF needed
+    await MediaStore.saveToDownloads(localPath, filename, folderName, mimeType, dateTakenMs);
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true }); // clean up cache
+  } else {
+    // iOS: download to cache, save to Photos with EXIF (see Section 6)
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+    if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+    if (PhotoSaver) {
+      const result = await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs ?? 0, params.name);
+      if (result === 'limited_access') {
+        // Only show this alert once — user has Limited Photos permission
+        const alreadyShown = await SecureStore.getItemAsync('mif_limited_access_shown');
+        if (!alreadyShown) {
+          await SecureStore.setItemAsync('mif_limited_access_shown', '1');
+          Alert.alert('Photo Saved',
+            'To organise photos into your event album, allow Full Access in Settings → Privacy & Security → Photos.',
+            [{ text: 'OK' }]);
+        }
+      }
+    } else {
+      await MediaLibrary.saveToLibraryAsync(cacheUri); // fallback if PhotoSaver unavailable
+    }
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+  }
+}
+
+// --- Step 3: Download a ZIP file ---
+async function saveZipToDownloads(filename: string, url: string): Promise<void> {
+  if (Platform.OS === 'android') {
+    const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+    if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+    const localPath = dlResult.uri.replace('file://', '');
+    await MediaStore.saveToDownloads(localPath, filename, folderName, 'application/zip');
+    // No dateTakenMs for ZIPs — not needed
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+  } else {
+    // iOS has no Downloads folder — share via Share Sheet instead
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+    if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+    await Sharing.shareAsync(cacheUri, { mimeType: 'application/zip', dialogTitle: 'Save ZIP' });
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+  }
+}
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -503,6 +679,69 @@ RESULT STATUSES returned to app:
 IMPORTANT: Duplicate detection is photos-only. Videos are not deduplicated.
 pHash is computed AFTER HEIC→JPEG conversion so sizes are comparable.
 
+--- CODE: src/lib/duplicate-detection.ts ---
+
+import phash from "sharp-phash";
+
+const HASH_THRESHOLD = 18;        // outer limit — beyond this, different photos
+const HASH_THRESHOLD_STRICT = 8;  // tight match — almost certainly same photo
+const SIZE_SIMILARITY_RATIO = 0.15; // within 15% size = same quality copy
+
+// Hamming distance: number of differing bits between two hex pHash strings
+function hammingDistance(hashA: string, hashB: string): number {
+  const a = BigInt("0x" + hashA);
+  const b = BigInt("0x" + hashB);
+  let xor = a ^ b;
+  let distance = 0;
+  while (xor > 0n) {
+    distance += Number(xor & 1n);
+    xor >>= 1n;
+  }
+  return distance;
+}
+
+export function isDuplicate(
+  hashA: string, hashB: string,
+  sizeA: number, sizeB: number,
+  takenAtA?: Date | null, takenAtB?: Date | null,
+  dateSourceA?: string | null, dateSourceB?: string | null,
+): boolean {
+  const distance = hammingDistance(hashA, hashB);
+  if (distance > HASH_THRESHOLD) return false; // rule 1: clearly different
+
+  const oneHasExif = (dateSourceA === "exif") !== (dateSourceB === "exif");
+  const bothHaveExif = dateSourceA === "exif" && dateSourceB === "exif";
+  const timestampsClose = takenAtA != null && takenAtB != null &&
+    Math.abs(takenAtA.getTime() - takenAtB.getTime()) <= 2000;
+  const sizeDiffRatio = Math.abs(sizeA - sizeB) / Math.max(sizeA, sizeB);
+  const sizeDiffSignificant = sizeDiffRatio > SIZE_SIMILARITY_RATIO;
+
+  // Rule 2: loose band (9–18 bits) — only match WhatsApp scenarios
+  if (distance > HASH_THRESHOLD_STRICT) {
+    const isWhatsappHd = bothHaveExif && timestampsClose && sizeDiffSignificant;
+    if (!oneHasExif && !isWhatsappHd) return false;
+  }
+
+  // Rule 3: both have EXIF but timestamps differ >2s → different photos
+  // Exception: tight hash + big size diff = WhatsApp changed the timestamp
+  const whatsappTimestampShift = distance <= HASH_THRESHOLD_STRICT && sizeDiffSignificant;
+  if (bothHaveExif && !timestampsClose && takenAtA != null && takenAtB != null && !whatsappTimestampShift) {
+    return false;
+  }
+
+  // Rule 4: hash collision guard — >90% size diff + loose hash = false positive
+  if (oneHasExif && sizeDiffRatio > 0.90 && distance > HASH_THRESHOLD_STRICT) return false;
+
+  if (oneHasExif) return true;
+  if (bothHaveExif && timestampsClose && sizeDiffSignificant) return true; // WhatsApp HD
+  if (whatsappTimestampShift) return true;
+
+  // Burst shot protection: same camera, within 2s, similar size, but visually different (distance > 0)
+  if (bothHaveExif && timestampsClose && !sizeDiffSignificant && distance > 0) return false;
+
+  return sizeDiffRatio <= SIZE_SIMILARITY_RATIO;
+}
+
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 13. QUALITY UPGRADE LOGIC (part of duplicate detection)
@@ -538,6 +777,88 @@ WHAT USER SEES IN APP:
 
 QUALITY UPGRADE IS CRITICAL — DO NOT MODIFY without explicit permission.
 This logic lives in: onealbum-trial/src/lib/duplicate-detection.ts
+
+--- CODE: src/lib/duplicate-detection.ts — resolveDuplicate() ---
+
+export type DuplicateResolution =
+  | { action: "keep_new"; reason: string }
+  | { action: "keep_existing"; reason: string }
+  | { action: "merge_self_duplicate"; reason: string };
+
+export function resolveDuplicate(
+  existing: PhotoCandidate,  // { id, phash, fileSizeBytes, takenAt, dateSource }
+  incoming: NewUpload        // { phash, fileSizeBytes, takenAt, dateSource }
+): DuplicateResolution {
+  const sizeDiff = incoming.fileSizeBytes - existing.fileSizeBytes;
+  const sameQuality = Math.abs(sizeDiff) < existing.fileSizeBytes * 0.02; // within 2% = same
+  const sameDateSource = incoming.dateSource === existing.dateSource;
+  const sameTimestamp = Math.abs(incoming.takenAt.getTime() - existing.takenAt.getTime()) < 1000;
+
+  // Self-duplicate: same guest re-uploading their own original by mistake.
+  // All three must match: quality, date source, timestamp. Merge silently.
+  if (sameQuality && sameDateSource && sameTimestamp) {
+    return { action: "merge_self_duplicate", reason: "Identical quality and timestamp — accidental repeat upload. Merged silently." };
+  }
+
+  const incomingHigherQuality = sizeDiff > 0 && !sameQuality;
+  const incomingMoreTrustworthyDate = incoming.dateSource === "exif" && existing.dateSource !== "exif";
+
+  // Upgrade: new upload is better quality OR has a more trustworthy date
+  if (incomingHigherQuality || incomingMoreTrustworthyDate) {
+    return {
+      action: "keep_new",
+      reason: incomingHigherQuality
+        ? "New upload is higher quality (larger file, less compression)."
+        : "New upload has genuine EXIF date; existing only has fallback timestamp.",
+    };
+  }
+
+  // Skip: existing is equal or better
+  return { action: "keep_existing", reason: "Existing photo is equal or higher quality." };
+}
+
+--- CODE: /api/upload/route.ts — keep_new branch (upgrade path) ---
+
+if (resolution.action === "keep_new") {
+  // Convert to JPG, generate new thumbnail + display version
+  const finalBuffer = toPlainBuffer(alreadyJpg ? uploadBuffer : await convertToJpg(uploadBuffer));
+  const [keepThumbBuffer, keepDisplayBuffer] = await Promise.all([
+    sharp(finalBuffer).rotate().resize(300).jpeg({ quality: 75 }).toBuffer().then(toPlainBuffer),
+    sharp(finalBuffer).rotate().resize(1200).jpeg({ quality: 85 }).toBuffer().then(toPlainBuffer),
+  ]);
+
+  const storagePath = `${event.id}/${randomUUID()}.jpg`;
+  const thumbnailPath = `${event.id}/thumbs/${randomUUID()}.jpg`;
+  const displayPath = `${event.id}/display/${randomUUID()}.jpg`;
+
+  // Upload 3 new versions to S3
+  await Promise.all([
+    s3Client.send(new PutObjectCommand({ Bucket: S3_BUCKET, Key: storagePath, Body: finalBuffer, ContentType: "image/jpeg" })),
+    s3Client.send(new PutObjectCommand({ Bucket: S3_BUCKET, Key: thumbnailPath, Body: keepThumbBuffer, ContentType: "image/jpeg" })),
+    s3Client.send(new PutObjectCommand({ Bucket: S3_BUCKET, Key: displayPath, Body: keepDisplayBuffer, ContentType: "image/jpeg" })),
+  ]);
+
+  // UPDATE the existing DB row in-place — same photo ID, same timeline position
+  await supabaseAdmin
+    .from("photos")
+    .update({
+      storage_path: storagePath,
+      thumbnail_path: thumbnailPath,
+      display_path: displayPath,
+      phash: newPhash,
+      taken_at: takenAt.toISOString(),
+      date_source: dateSource,
+      file_size_bytes: finalBuffer.length,
+      original_filename: storedFilename,
+      original_format: originalExtension,
+      uploaded_by_mobile: uploaderMobile ?? null,
+      uploaded_by_name: uploaderName ?? null,
+      event_user_id: eventUserId ?? null,
+    })
+    .eq("id", existing.id); // same row — WhatsApp copy "becomes" the original
+
+  return NextResponse.json({ success: true, upgraded: true, photo: { id: existing.id }, filename: originalFilename });
+}
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

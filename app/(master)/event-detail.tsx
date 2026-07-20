@@ -9,7 +9,7 @@ import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/d
 import * as Contacts from 'expo-contacts';
 import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
-import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, clearAllowedGuests, listJoinedGuests, setGuestBlocked } from '../../lib/api';
+import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, clearAllowedGuests, clearJoinedGuests, listJoinedGuests, setGuestBlocked } from '../../lib/api';
 import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -20,7 +20,7 @@ function formatDate(iso: string) {
 }
 
 type Coadmin = { phone: string; name: string | null; added_at: string };
-type AllowedGuest = { phone: string; name: string | null; added_at: string };
+type AllowedGuest = { phone: string; name: string | null; appName?: string | null; added_at: string };
 
 export default function EventDetailScreen() {
   const router = useRouter();
@@ -239,14 +239,31 @@ export default function EventDetailScreen() {
             {
               text: 'No, close without adding',
               style: 'destructive',
-              onPress: async () => {
-                setClosedUpdating(true);
-                await updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: true });
-                await clearAllowedGuests(params.slug, params.organiserPhone!, pw);
-                setAllowedGuests([]);
-                setIsClosed(true);
-                setClosedUpdating(false);
-                setShowGuestsPanel(true);
+              onPress: () => {
+                showAlert(
+                  'Remove all guests?',
+                  `All ${nonOrgGuests.length} guest${nonOrgGuests.length !== 1 ? 's' : ''} will be removed from this event. Their photos will stay. They can rejoin if you reopen the event later. This cannot be undone.`,
+                  [
+                    {
+                      text: 'Yes, remove all',
+                      style: 'destructive',
+                      onPress: async () => {
+                        setClosedUpdating(true);
+                        await Promise.all([
+                          updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: true }),
+                          clearJoinedGuests(params.slug, params.organiserPhone!, pw),
+                          clearAllowedGuests(params.slug, params.organiserPhone!, pw),
+                        ]);
+                        setJoinedGuests(prev => prev.filter(g => g.mobile === params.organiserPhone));
+                        setAllowedGuests([]);
+                        setIsClosed(true);
+                        setClosedUpdating(false);
+                        setShowGuestsPanel(true);
+                      },
+                    },
+                    { text: 'Cancel', style: 'cancel' },
+                  ]
+                );
               },
             },
             { text: 'Cancel', style: 'cancel' },
@@ -877,14 +894,13 @@ export default function EventDetailScreen() {
                   {allowedGuests.length === 0
                     ? <Text style={[styles.emptyText, { marginTop: 12 }]}>No guests added yet. Add guests to let them in.</Text>
                     : allowedGuests.map(g => {
-                        const contactName = guestContactMap[g.phone];
-                        const displayName = contactName || g.name || g.phone;
-                        const subName = contactName && g.name && g.name !== contactName ? g.name : null;
+                        const appName = g.appName ?? null;
+                        const contactName = guestContactMap[g.phone] ?? null;
                         return (
                           <View key={g.phone} style={styles.coadminRow}>
                             <View style={styles.coadminInfo}>
-                              <Text style={styles.coadminName}>{displayName}</Text>
-                              {subName ? <Text style={styles.coadminPhone}>{subName}</Text> : null}
+                              {appName ? <Text style={styles.coadminName}>{appName}</Text> : null}
+                              {contactName ? <Text style={styles.coadminPhone}>{contactName}</Text> : null}
                               <Text style={styles.coadminPhone}>{g.phone}</Text>
                             </View>
                             <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveGuest(g.phone, g.name)}>

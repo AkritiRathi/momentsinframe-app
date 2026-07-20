@@ -378,6 +378,169 @@ Usage at download time:
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. UPLOAD LOGIC — BOTH PLATFORMS (2-PHASE FLOW)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Upload is split into 2 phases to bypass Vercel's 4.5MB serverless body limit.
+
+PHASE 1 — Get presigned URL (/api/upload-url):
+  - App sends filename + event slug to server
+  - Server generates a presigned S3 URL pointing to a staging/ prefix
+  - App receives the URL + stagingKey
+
+PHASE 2 — App PUTs file directly to S3 (bypasses Vercel entirely):
+  - App uploads the raw file bytes straight to S3 using the presigned URL
+  - No file bytes go through the Next.js function — only small JSON payloads
+
+PHASE 3 — Process (/api/upload):
+  - App sends { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName }
+  - Server fetches the staged file from S3 (server-to-S3 has no size limit)
+  - Server runs: EXIF extraction → HEIC pre-decode → JPEG conversion → pHash → duplicate check → store
+  - Staging file deleted from S3 after processing (success or failure)
+
+FILENAME NORMALISATION AT UPLOAD:
+  - All photos stored with .jpg extension regardless of original format
+  - originalFilename stored in DB as .jpg: `filename.replace(/\.[^.]+$/, ".jpg")`
+  - original_format column stores the original extension (heic, png, jpeg, etc.)
+
+PRE-UPLOAD DEDUPLICATION (client side — before API call):
+  - App fetches all existing filenames for the event before starting
+  - Any asset whose filename already exists is skipped immediately
+  - Prevents re-uploading the same file in the same session without any API calls
+
+WHAT GETS STORED IN S3 PER PHOTO (3 versions):
+  - Full original: stored as-is (JPEG) at event_id/uuid.jpg
+  - Thumbnail: 300px wide, JPEG quality 75, for grid view
+  - Display: 1200px wide, JPEG quality 85, for full-screen view
+
+HEIC HANDLING:
+  - iPhone HEIC files (Live Photos, burst) have 48+ iref box references
+  - sharp/libvips has a 16-reference security limit → crashes on these files
+  - Fix: pre-decode HEIC using heic-convert (WASM, no limit) BEFORE passing to sharp
+  - HEIC is converted to JPEG before duplicate check so file sizes are comparable
+  - Without this, every re-upload of a HEIC looks like a quality upgrade (wrong size)
+
+VIDEO UPLOADS:
+  - Currently blocked server-side ("Video uploads not available at this time")
+  - Videos pass through unconverted in the trial build — pHash is image-only
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. ANDROID DOWNLOAD LOGIC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Android uses a custom local native module (modules/media-store) that wraps
+Android's MediaStore API. iOS uses PhotoSaver (see sections 1–9).
+
+SINGLE PHOTO DOWNLOAD:
+  1. Download photo from server to Expo cache directory (temp file)
+  2. Pass local path to MediaStore.saveToDownloads(path, filename, folderName, mimeType, dateTakenMs)
+  3. MediaStore saves it to Downloads/[EventFolderName]/filename.jpg
+  4. dateTakenMs sets the correct "date taken" in Android's media database
+  5. Delete temp cache file after saving
+
+ZIP DOWNLOAD (bulk):
+  - Same flow but mimeType is 'application/zip' and no dateTakenMs needed
+  - File saved to Downloads/[EventFolderName]/slug-photos.zip
+  - For >25 photos, split into batches: slug-photos-part1of3.zip etc.
+
+FOLDER NAMING:
+  - On first download, user is asked to name the folder (defaults to event name)
+  - Folder name stored in SecureStore keyed by event slug
+  - Not asked again for the same event — reuses saved folder name
+  - Folder created if it doesn't exist before saving
+
+KEY DIFFERENCE FROM iOS:
+  - Android reads date from dateTakenMs passed to MediaStore — no EXIF embedding needed
+  - iOS completely ignores creation date passed in code — must embed EXIF into file
+  - Android saves to Downloads folder (file manager accessible)
+  - iOS saves to Photos app (camera roll / named album)
+
+iOS ZIP:
+  - iOS has no Downloads folder accessible to apps
+  - ZIP files are shared via iOS Share Sheet (Sharing.shareAsync) instead
+  - User saves to Files app, AirDrop, etc. — their choice
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. DUPLICATE DETECTION LOGIC (server-side, /api/upload)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Uses perceptual hashing (pHash) via sharp-phash. Detects visually identical
+photos even when one has been recompressed (e.g. WhatsApp copies).
+
+THRESHOLDS:
+  - HASH_THRESHOLD = 18 bits — outer limit, beyond this never a duplicate
+  - HASH_THRESHOLD_STRICT = 8 bits — tight match, almost certainly same photo
+  - SIZE_SIMILARITY_RATIO = 15% — files within 15% size are "same quality"
+
+isDuplicate() RULES (checked in order):
+  1. If hash distance > 18 → NOT a duplicate (different photos)
+  2. If distance 9–18 (loose band):
+     - Match ONLY if exactly one side has EXIF (WhatsApp copy scenario)
+     - OR both have EXIF + timestamps within 2s + sizes differ >15% (WhatsApp HD)
+     - Otherwise → NOT a duplicate (burst shots look similar but aren't the same)
+  3. If both have EXIF and timestamps differ by >2s → NOT a duplicate
+     - Exception: if distance ≤8 AND sizes differ >15% → WhatsApp shifted the
+       timestamp to receive time; trust the visual hash over the timestamp
+  4. If one side has EXIF and size differs >90% AND distance >8 → NOT a duplicate
+     (hash collision guard — 40-70% is normal for WhatsApp, 90%+ is suspicious)
+  5. Otherwise → IS a duplicate
+
+resolveDuplicate() — what to do when a duplicate IS found:
+  - Self-duplicate (same quality, same date source, same timestamp): merge silently,
+    no error shown to user. Prevents double-upload of same original.
+  - New upload has larger file OR has EXIF and existing doesn't → keep_new (UPGRADE)
+  - Existing is equal or better quality → keep_existing (SKIP)
+
+RESULT STATUSES returned to app:
+  - 'success'   — new photo added
+  - 'duplicate' — existing photo kept, new upload skipped
+  - 'upgraded'  — existing photo replaced with higher-quality version
+  - 'failed'    — error during processing
+  - 'cancelled' — user cancelled mid-upload
+
+IMPORTANT: Duplicate detection is photos-only. Videos are not deduplicated.
+pHash is computed AFTER HEIC→JPEG conversion so sizes are comparable.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+13. QUALITY UPGRADE LOGIC (part of duplicate detection)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+An upgrade happens when a duplicate IS detected but the NEW upload is better
+than what's already stored. File size is used as the quality proxy.
+
+WHEN AN UPGRADE HAPPENS:
+  - New file is larger (less compressed) than existing → new wins
+  - New file has genuine EXIF date and existing only has a fallback timestamp → new wins
+  - Common real-world scenario: someone uploads a WhatsApp copy first (compressed,
+    no EXIF), then the original owner uploads their original (larger, has EXIF)
+
+WHAT HAPPENS ON UPGRADE (server-side):
+  1. Convert new file to JPEG if not already
+  2. Generate new thumbnail (300px) and display version (1200px)
+  3. Upload all 3 versions to S3 (new paths, old paths abandoned)
+  4. UPDATE the existing photo DB row in-place (same photo ID, same position in timeline)
+  5. Update: storage_path, thumbnail_path, display_path, phash, taken_at, date_source,
+     file_size_bytes, original_filename, original_format, uploader info
+
+WHY UPDATE IN-PLACE (not insert):
+  - Preserves the photo's position in the event timeline
+  - Keeps the same photo ID (no broken references)
+  - The WhatsApp copy "becomes" the original — no duplicates in the gallery
+
+WHAT USER SEES IN APP:
+  - Upload summary shows "X better quality photos uploaded"
+  - Upgrade appears in the duplicate viewer alongside skipped duplicates
+  - Message shown: "Replaced a lower quality WhatsApp copy already in Other Photos Gallery"
+  - Notification panel shows upgradesFound count in upload history
+
+QUALITY UPGRADE IS CRITICAL — DO NOT MODIFY without explicit permission.
+This logic lives in: onealbum-trial/src/lib/duplicate-detection.ts
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 END OF REFERENCE
-Built with Expo SDK 54 · React Native 0.81 · iOS 15.1+
+Built with Expo SDK 54 · React Native 0.81 · iOS 15.1+ · Next.js 15 · Supabase · S3
 ================================================================================

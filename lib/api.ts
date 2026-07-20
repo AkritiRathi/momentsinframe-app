@@ -188,6 +188,10 @@ export async function removeAllowedGuest(slug: string, organiserPhone: string, o
   return del(`/api/native/events/${slug}/allowed-guests`, { organiserPhone, organiserPassword, phone });
 }
 
+export async function clearAllowedGuests(slug: string, organiserPhone: string, organiserPassword: string) {
+  return del(`/api/native/events/${slug}/allowed-guests`, { organiserPhone, organiserPassword });
+}
+
 export async function listJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean }[]; error?: string }> {
   return get(`/api/native/events/${slug}/joined-guests`, {
     'x-organiser-phone': organiserPhone,

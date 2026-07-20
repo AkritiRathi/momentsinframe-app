@@ -9,7 +9,7 @@ import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/d
 import * as Contacts from 'expo-contacts';
 import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
-import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, listJoinedGuests, setGuestBlocked } from '../../lib/api';
+import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, clearAllowedGuests, listJoinedGuests, setGuestBlocked } from '../../lib/api';
 import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -226,6 +226,8 @@ export default function EventDetailScreen() {
               onPress: async () => {
                 setClosedUpdating(true);
                 await updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: true });
+                await clearAllowedGuests(params.slug, params.organiserPhone!, pw);
+                setAllowedGuests([]);
                 setIsClosed(true);
                 setClosedUpdating(false);
                 setShowGuestsPanel(true);
@@ -595,7 +597,7 @@ export default function EventDetailScreen() {
             {isClosed && (
               <TouchableOpacity onPress={() => { loadAllowedGuests(); setShowGuestsPanel(true); }}>
                 <Text style={styles.manageGuestsInline}>
-                  Manage Guests{allowedGuests.length > 0 ? ` (${allowedGuests.length})` : ''} →
+                  Allowed Guests{allowedGuests.length > 0 ? ` (${allowedGuests.length})` : ''} →
                 </Text>
               </TouchableOpacity>
             )}
@@ -984,6 +986,10 @@ export default function EventDetailScreen() {
             <View style={[styles.dropdown, { position: 'absolute', top: gearDropPos.top, right: gearDropPos.right }]}>
               <TouchableOpacity style={styles.dropRow} onPress={() => {
                 setGearMenuVisible(false);
+                if (isClosed) {
+                  showAlert('Invite-Only Event', 'This event is invite-only. To manage who can join, use the Allowed Guests list in the Invite-Only section below.');
+                  return;
+                }
                 loadJoinedGuests();
                 setShowManageGuestsPanel(true);
               }}>

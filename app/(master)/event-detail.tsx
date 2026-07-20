@@ -110,7 +110,23 @@ export default function EventDetailScreen() {
     setAllowedGuestsLoading(true);
     try {
       const result = await listAllowedGuests(params.slug, params.organiserPhone, pw);
-      if (result.guests) setAllowedGuests(result.guests);
+      if (result.guests) {
+        setAllowedGuests(result.guests);
+        try {
+          const { status } = await Contacts.requestPermissionsAsync();
+          if (status === 'granted') {
+            const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
+            const map: Record<string, string> = {};
+            for (const guest of result.guests) {
+              const match = allContacts.find(c =>
+                (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === guest.phone)
+              );
+              if (match?.name) map[guest.phone] = match.name;
+            }
+            setGuestContactMap(prev => ({ ...prev, ...map }));
+          }
+        } catch {}
+      }
     } finally {
       setAllowedGuestsLoading(false);
     }
@@ -860,17 +876,23 @@ export default function EventDetailScreen() {
                   </View>
                   {allowedGuests.length === 0
                     ? <Text style={[styles.emptyText, { marginTop: 12 }]}>No guests added yet. Add guests to let them in.</Text>
-                    : allowedGuests.map(g => (
-                        <View key={g.phone} style={styles.coadminRow}>
-                          <View style={styles.coadminInfo}>
-                            <Text style={styles.coadminName}>{g.name ?? g.phone}</Text>
-                            {g.name ? <Text style={styles.coadminPhone}>{g.phone}</Text> : null}
+                    : allowedGuests.map(g => {
+                        const contactName = guestContactMap[g.phone];
+                        const displayName = contactName || g.name || g.phone;
+                        const subName = contactName && g.name && g.name !== contactName ? g.name : null;
+                        return (
+                          <View key={g.phone} style={styles.coadminRow}>
+                            <View style={styles.coadminInfo}>
+                              <Text style={styles.coadminName}>{displayName}</Text>
+                              {subName ? <Text style={styles.coadminPhone}>{subName}</Text> : null}
+                              <Text style={styles.coadminPhone}>{g.phone}</Text>
+                            </View>
+                            <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveGuest(g.phone, g.name)}>
+                              <Text style={styles.removeBtnText}>Remove</Text>
+                            </TouchableOpacity>
                           </View>
-                          <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveGuest(g.phone, g.name)}>
-                            <Text style={styles.removeBtnText}>Remove</Text>
-                          </TouchableOpacity>
-                        </View>
-                      ))
+                        );
+                      })
                   }
                 </>
               )}

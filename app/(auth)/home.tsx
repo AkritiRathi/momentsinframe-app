@@ -36,8 +36,12 @@ export default function HomeScreen() {
         const p = await getUserProfile();
         if (!p?.mobile) { setProfile(p); return; }
 
-        // If account was logged out or deleted on another device, force logout here
-        const status = await checkUserStatus(p.mobile).catch(() => ({ active: true }));
+        // Run account status check and whitelist check in parallel
+        const [status, whitelistResult] = await Promise.all([
+          checkUserStatus(p.mobile).catch(() => ({ active: true })),
+          checkWhitelist(p.mobile).catch(() => ({ whitelisted: false })),
+        ]);
+
         if (!status.active) {
           await clearUserProfile();
           router.replace('/(auth)/login');
@@ -45,8 +49,7 @@ export default function HomeScreen() {
         }
 
         setProfile(p);
-        const result = await checkWhitelist(p.mobile).catch(() => ({ whitelisted: false }));
-        setIsWhitelisted(result.whitelisted);
+        setIsWhitelisted(whitelistResult.whitelisted);
       })();
     }, [])
   );

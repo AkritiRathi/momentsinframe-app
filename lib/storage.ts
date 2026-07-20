@@ -39,9 +39,11 @@ export async function saveUserProfile(profile: UserProfile): Promise<void> {
 }
 
 export async function getUserProfile(): Promise<UserProfile | null> {
-  const firstName = await SecureStore.getItemAsync(KEYS.FIRST_NAME);
-  const lastName = await SecureStore.getItemAsync(KEYS.LAST_NAME);
-  const mobile = await SecureStore.getItemAsync(KEYS.MOBILE);
+  const [firstName, lastName, mobile] = await Promise.all([
+    SecureStore.getItemAsync(KEYS.FIRST_NAME),
+    SecureStore.getItemAsync(KEYS.LAST_NAME),
+    SecureStore.getItemAsync(KEYS.MOBILE),
+  ]);
 
   if (!firstName || !lastName || !mobile) return null;
   return { firstName, lastName, mobile };

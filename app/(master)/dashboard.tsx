@@ -1,13 +1,13 @@
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal,
-  FlatList, RefreshControl, ActivityIndicator, BackHandler, TextInput, Dimensions,
+  View, Text, TouchableOpacity, StyleSheet, Modal, Keyboard,
+  FlatList, RefreshControl, ActivityIndicator, BackHandler, TextInput, Dimensions, TouchableWithoutFeedback,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { getOrganiserPassword, saveOrganiserSession } from '../../lib/auth';
-import { getUserProfile } from '../../lib/storage';
-import { listEvents, organiserChangePassword } from '../../lib/api';
+import { getUserProfile, saveJoinedEvent } from '../../lib/storage';
+import { listEvents, organiserChangePassword, joinEvent } from '../../lib/api';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
@@ -159,20 +159,40 @@ export default function DashboardScreen() {
         </View>
         <View style={styles.cardFooter}>
           <Text style={styles.manageText}>Tap to manage →</Text>
-          <TouchableOpacity onPress={() => router.push({
-            pathname: '/event',
-            params: {
-              slug: item.slug,
-              name: item.name,
-              expiresAt: item.expires_at,
-              createdAt: item.created_at,
-              isAdmin: 'true',
-              adminPhone: organiserPhone ?? '',
-              role: 'organiser',
-              allowGuestDelete: item.allow_guest_delete ? 'true' : 'false',
-              joinCode: item.join_code,
-            },
-          })}>
+          <TouchableOpacity onPress={async () => {
+            let ownerPhone = organiserPhone ?? '';
+            try {
+              const fresh = await joinEvent(item.join_code, organiserPhone ?? undefined);
+              if (!fresh.error && fresh.event?.owner_phone) {
+                ownerPhone = fresh.event.owner_phone;
+                await saveJoinedEvent({
+                  slug: item.slug,
+                  name: item.name,
+                  expiresAt: item.expires_at,
+                  joinCode: item.join_code,
+                  createdAt: item.created_at,
+                  allowGuestDelete: item.allow_guest_delete ?? false,
+                  isOrganiser: true,
+                  ownerPhone,
+                });
+              }
+            } catch {}
+            router.push({
+              pathname: '/event',
+              params: {
+                slug: item.slug,
+                name: item.name,
+                expiresAt: item.expires_at,
+                createdAt: item.created_at,
+                isAdmin: 'true',
+                adminPhone: organiserPhone ?? '',
+                role: 'organiser',
+                allowGuestDelete: item.allow_guest_delete ? 'true' : 'false',
+                joinCode: item.join_code,
+                ownerPhone,
+              },
+            });
+          }}>
             <Text style={styles.openEventText}>Open Event →</Text>
           </TouchableOpacity>
         </View>
@@ -255,6 +275,7 @@ export default function DashboardScreen() {
       {/* Change password modal */}
       {cpVisible && (
         <Modal transparent animationType="fade" onRequestClose={() => setCpVisible(false)}>
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.cpOverlay}>
             <View style={styles.cpBox}>
               <Text style={styles.cpTitle}>Change Organiser Password</Text>
@@ -296,6 +317,7 @@ export default function DashboardScreen() {
               </TouchableOpacity>
             </View>
           </View>
+          </TouchableWithoutFeedback>
         </Modal>
       )}
 

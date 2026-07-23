@@ -129,6 +129,7 @@ export default function JoinEventScreen() {
         joinCode,
         createdAt: result.event.created_at ?? new Date().toISOString(),
         allowGuestDelete: result.event.allow_guest_delete ?? false,
+        ownerPhone: result.event.owner_phone ?? '',
       });
       router.replace({
         pathname: '/event',
@@ -142,6 +143,7 @@ export default function JoinEventScreen() {
           allowGuestDelete: result.event.allow_guest_delete ? 'true' : 'false',
           joinCode,
           role: adminRole,
+          ownerPhone: result.event.owner_phone ?? '',
         },
       });
     } catch {
@@ -163,6 +165,28 @@ export default function JoinEventScreen() {
         isAdmin = adminCheck.isAdmin ?? false;
         adminRole = adminCheck.role ?? '';
       }
+
+      // Refresh event data from server to get latest ownerPhone
+      let ownerPhone = entry.ownerPhone ?? '';
+      if (entry.joinCode) {
+        try {
+          const fresh = await joinEvent(entry.joinCode, profile?.mobile);
+          if (!fresh.error && fresh.event) {
+            ownerPhone = fresh.event.owner_phone ?? ownerPhone;
+            await saveJoinedEvent({
+              slug: entry.slug,
+              name: entry.name,
+              expiresAt: entry.expiresAt,
+              joinCode: entry.joinCode,
+              createdAt: entry.createdAt,
+              allowGuestDelete: entry.allowGuestDelete,
+              isOrganiser: entry.isOrganiser,
+              ownerPhone,
+            });
+          }
+        } catch {}
+      }
+
       // Ensure guest is registered in event_users (handles cases where initial join was skipped)
       if (profile && !isAdmin) {
         try {
@@ -187,6 +211,7 @@ export default function JoinEventScreen() {
           allowGuestDelete: entry.allowGuestDelete ? 'true' : 'false',
           joinCode: entry.joinCode,
           role: adminRole,
+          ownerPhone,
         },
       });
     } catch {

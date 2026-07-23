@@ -1379,23 +1379,22 @@ export default function EventScreen() {
   }
 
   async function saveAsJpgs(ids: string[], folderPath: string | null, mode: 'downloads' | 'gallery') {
-    const CHUNK = 10;
     const allPhotos = [...photos, ...otherPhotos];
     downloadCancelledRef.current = false;
     setDownloadMode('jpg');
     setDownloadingBulk(true);
     setDownloadProgress({ current: 0, total: ids.length });
     let saved = 0;
+    let completed = 0;
     const failedIds: string[] = [];
 
+    const CHUNK = 10;
     for (let chunkStart = 0; chunkStart < ids.length; chunkStart += CHUNK) {
       if (downloadCancelledRef.current) break;
       const chunkIds = ids.slice(chunkStart, chunkStart + CHUNK);
-
       for (let j = 0; j < chunkIds.length; j++) {
         if (downloadCancelledRef.current) break;
         const id = chunkIds[j];
-        const globalIndex = chunkStart + j;
         try {
           const photo = allPhotos.find(p => p.id === id);
           const rawName = photo?.original_filename ?? `photo_${id}.jpg`;
@@ -1408,7 +1407,8 @@ export default function EventScreen() {
           await saveFileToDownloads(filename, downloadUrl, 'image/jpeg', folderPath, mode, false, dateTakenMs);
           saved++;
         } catch { failedIds.push(id); }
-        setDownloadProgress({ current: globalIndex + 1, total: ids.length });
+        completed++;
+        setDownloadProgress({ current: completed, total: ids.length });
       }
     }
 

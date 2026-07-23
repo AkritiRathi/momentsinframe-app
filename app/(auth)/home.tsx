@@ -36,7 +36,9 @@ export default function HomeScreen() {
         const p = await getUserProfile();
         if (!p?.mobile) { setProfile(p); return; }
 
-        // Run account status check and whitelist check in parallel
+        // Show name immediately from local storage, then verify in background
+        setProfile(p);
+
         const [status, whitelistResult] = await Promise.all([
           checkUserStatus(p.mobile).catch(() => ({ active: true })),
           checkWhitelist(p.mobile).catch(() => ({ whitelisted: false })),
@@ -48,7 +50,6 @@ export default function HomeScreen() {
           return;
         }
 
-        setProfile(p);
         setIsWhitelisted(whitelistResult.whitelisted);
       })();
     }, [])

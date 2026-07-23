@@ -189,15 +189,8 @@ export default function NameEntryScreen() {
               </>
             )}
 
-            {/* Button */}
-            {isPhoneStep ? (
-              <TouchableOpacity style={styles.button} onPress={handleContinue} disabled={loading}>
-                {loading
-                  ? <ActivityIndicator color={Colors.background} />
-                  : <Text style={styles.buttonText}>Continue →</Text>
-                }
-              </TouchableOpacity>
-            ) : (
+            {/* Button — only shown after Go is pressed */}
+            {!isPhoneStep && (
               <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={submitting}>
                 {submitting
                   ? <ActivityIndicator color={Colors.background} />

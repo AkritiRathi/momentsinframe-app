@@ -446,6 +446,7 @@ export default function EventScreen() {
   const [photoUrls, setPhotoUrls] = useState<Record<string, PhotoUrls>>({});
   const [loading, setLoading] = useState(true);
   const [userMobile, setUserMobile] = useState<string | null>(null);
+  const userMobileRef = useRef<string | null>(null);
   const [userName, setUserName] = useState<string | null>(null);
   const [eventUserId, setEventUserId] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
@@ -551,6 +552,7 @@ export default function EventScreen() {
     getUserProfile().then(p => {
       if (p) {
         setUserMobile(p.mobile);
+        userMobileRef.current = p.mobile;
         setUserName(`${p.firstName} ${p.lastName}`.trim());
         refreshNotifications(p.mobile);
       } else {
@@ -568,7 +570,7 @@ export default function EventScreen() {
     });
 
     const appStateSub = AppState.addEventListener('change', state => {
-      if (state === 'active') refreshNotifications();
+      if (state === 'active') refreshNotifications(userMobileRef.current);
     });
     return () => appStateSub.remove();
   }, []);
@@ -1730,16 +1732,15 @@ export default function EventScreen() {
                   <Text style={styles.adminBadge}>{adminLabel}</Text>
                 )}
                 <TouchableOpacity style={styles.notifGearBtn} onPress={async () => {
-                  const notifs = await getUploadNotifications(slug);
-                  setNotifications(notifs);
+                  const mobile = userMobileRef.current;
+                  await refreshNotifications(mobile);
                   await markNotificationsRead(slug);
-                  if (userMobile) {
-                    await markServerNotificationsRead(userMobile);
+                  if (mobile) {
+                    await markServerNotificationsRead(mobile);
                     setServerNotifications(prev => prev.map(n => ({ ...n, read: true })));
                   }
                   setHasUnread(false);
                   setNotificationsVisible(true);
-                  // Red dot clears on open; notifications themselves persist until dismissed via X or Clear All
                 }}>
                   <Text style={styles.adminGearIcon}>🔔</Text>
                   {hasUnread && <View style={styles.notifDot} />}

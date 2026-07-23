@@ -24,14 +24,14 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
-  prepareZip,
+  prepareZip, fetchServerNotifications, markServerNotificationsRead, ServerNotification,
 } from '../lib/api';
 import { API_BASE_URL } from '../constants/config';
 import {
   getUserProfile, getEventUserId, getDeviceId,
   saveUploadNotification, getUploadNotifications, markNotificationsRead,
   deleteUploadNotification, mergeUploadNotification, clearAllUploadNotifications,
-  pruneUploadNotifications,
+  pruneUploadNotifications, UploadNotification,
   saveLastEvent, clearLastEvent,
   type UploadNotification,
 } from '../lib/storage';
@@ -512,6 +512,7 @@ export default function EventScreen() {
   // Notifications panel
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [notifications, setNotifications] = useState<UploadNotification[]>([]);
+  const [serverNotifications, setServerNotifications] = useState<ServerNotification[]>([]);
   const [hasUnread, setHasUnread] = useState(false);
 
   const [downloadingBulk, setDownloadingBulk] = useState(false);
@@ -530,11 +531,18 @@ export default function EventScreen() {
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
 
-  async function refreshNotifications() {
+  async function refreshNotifications(mobile?: string | null) {
     await pruneUploadNotifications(slug, params.expiresAt ?? null);
     const notifs = await getUploadNotifications(slug);
     setNotifications(notifs);
-    setHasUnread(notifs.some(n => !n.read));
+    const resolvedMobile = mobile ?? userMobile;
+    if (resolvedMobile) {
+      const serverNotifs = await fetchServerNotifications(resolvedMobile);
+      setServerNotifications(serverNotifs);
+      setHasUnread(notifs.some(n => !n.read) || serverNotifs.some(n => !n.read));
+    } else {
+      setHasUnread(notifs.some(n => !n.read));
+    }
   }
 
   useEffect(() => {
@@ -544,11 +552,13 @@ export default function EventScreen() {
       if (p) {
         setUserMobile(p.mobile);
         setUserName(`${p.firstName} ${p.lastName}`.trim());
+        refreshNotifications(p.mobile);
+      } else {
+        refreshNotifications();
       }
     });
     getEventUserId().then(id => { if (id) setEventUserId(id); });
     getDeviceId().then(id => { if (id) setDeviceId(id); });
-    refreshNotifications();
     saveLastEvent({
       slug: params.slug,
       name: params.name ?? '',
@@ -1723,6 +1733,10 @@ export default function EventScreen() {
                   const notifs = await getUploadNotifications(slug);
                   setNotifications(notifs);
                   await markNotificationsRead(slug);
+                  if (userMobile) {
+                    await markServerNotificationsRead(userMobile);
+                    setServerNotifications(prev => prev.map(n => ({ ...n, read: true })));
+                  }
                   setHasUnread(false);
                   setNotificationsVisible(true);
                 }}>
@@ -2392,7 +2406,7 @@ export default function EventScreen() {
       <Modal visible={notificationsVisible} animationType="slide" onRequestClose={() => setNotificationsVisible(false)}>
         <View style={styles.container}>
           <View style={[styles.skippedHeader, { paddingTop: insets.top + 12 }]}>
-            <Text style={styles.notifPanelTitle}>Upload History</Text>
+            <Text style={styles.notifPanelTitle}>Notifications</Text>
             {notifications.length > 0 && (
               <TouchableOpacity onPress={async () => {
                 await clearAllUploadNotifications(slug);
@@ -2406,15 +2420,28 @@ export default function EventScreen() {
               <Text style={styles.skippedClose}>×</Text>
             </TouchableOpacity>
           </View>
-          {notifications.length === 0 ? (
+          {notifications.length === 0 && serverNotifications.length === 0 ? (
             <View style={[styles.notifEmpty, { paddingBottom: insets.bottom + 16 }]}>
-              <Text style={styles.notifEmptyTitle}>No upload history yet.</Text>
-              <Text style={styles.notifEmptySub}>Your upload results will appear here after each upload, whether you were on the screen or not.</Text>
+              <Text style={styles.notifEmptyTitle}>No notifications yet.</Text>
+              <Text style={styles.notifEmptySub}>Upload results and event updates will appear here.</Text>
             </View>
           ) : (
             <FlatList
               data={notifications}
               keyExtractor={n => n.id}
+              ListHeaderComponent={serverNotifications.length > 0 ? (
+                <>
+                  {serverNotifications.map(n => (
+                    <View key={n.id} style={{ backgroundColor: '#1C1C1C', borderRadius: 12, marginHorizontal: 16, marginBottom: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#F5C842' }}>
+                      <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 4 }}>{n.message}</Text>
+                      <Text style={{ color: '#888780', fontSize: 12 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
+                    </View>
+                  ))}
+                  {notifications.length > 0 && (
+                    <Text style={{ color: '#888780', fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase', marginHorizontal: 16, marginBottom: 8, marginTop: 4 }}>Upload History</Text>
+                  )}
+                </>
+              ) : null}
               contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 16 }}
               renderItem={({ item }) => {
                 const d = new Date(item.timestamp);

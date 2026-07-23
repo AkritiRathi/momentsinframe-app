@@ -232,3 +232,36 @@ export async function updateEventSettings(slug: string, organiserPhone: string, 
 export async function deleteAccount(phone: string): Promise<{ success?: boolean; error?: string }> {
   return del('/api/native/users/delete', { phone });
 }
+
+// Notifications API
+export type ServerNotification = {
+  id: string;
+  type: string;
+  message: string;
+  event_slug: string;
+  event_name: string;
+  created_at: string;
+  read: boolean;
+};
+
+export async function fetchServerNotifications(phone: string): Promise<ServerNotification[]> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/native/notifications?phone=${encodeURIComponent(phone)}`);
+    const data = await res.json();
+    return data.notifications ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function markServerNotificationsRead(phone: string): Promise<void> {
+  try {
+    await fetch(`${API_BASE_URL}/api/native/notifications`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone }),
+    });
+  } catch {
+    // best-effort
+  }
+}

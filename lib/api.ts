@@ -173,11 +173,13 @@ export async function logoutUser(phone: string): Promise<void> {
 }
 
 export async function sendOtp(phone: string): Promise<void> {
-  await post('/api/native/otp/send', { phone });
+  const data = await post('/api/native/otp/send', { phone });
+  if (data?.error) throw new Error(data.error);
 }
 
 export async function verifyOtp(phone: string, code: string): Promise<void> {
-  await post('/api/native/otp/verify', { phone, code });
+  const data = await post('/api/native/otp/verify', { phone, code });
+  if (data?.error) throw new Error(data.error);
 }
 
 // Allowed guests API

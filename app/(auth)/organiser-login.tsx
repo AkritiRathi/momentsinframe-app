@@ -3,9 +3,9 @@ import {
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useState, useEffect } from 'react';
-import { organiserExists, organiserSetup, organiserLogin, organiserResetPassword } from '../../lib/api';
+import { organiserExists, organiserSetup, organiserLogin, organiserResetPassword, sendOtp, verifyOtp } from '../../lib/api';
 import { saveOrganiserSession, getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
 import { Colors } from '../../constants/colors';
@@ -16,14 +16,21 @@ type Mode = 'checking' | 'setup' | 'login' | 'forgot';
 
 export default function OrganiserLoginScreen() {
   const router = useRouter();
+  const { mode: modeParam } = useLocalSearchParams<{ mode?: string }>();
   const { showAlert, alertOverlay } = useAlert();
   const [mode, setMode] = useState<Mode>('checking');
+  const [forgotStep, setForgotStep] = useState<'send' | 'verify' | 'reset'>('send');
+  const [otp, setOtp] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (modeParam === 'forgot') {
+      setMode('forgot');
+      return;
+    }
     (async () => {
       const profile = await getUserProfile();
       if (!profile) {
@@ -95,6 +102,43 @@ export default function OrganiserLoginScreen() {
     }
   }
 
+  async function handleSendOtp() {
+    const profile = await getUserProfile();
+    if (!profile) return;
+    setLoading(true);
+    try {
+      await sendOtp(`91${profile.mobile}`);
+      setForgotStep('verify');
+    } catch {
+      showAlert('Error', 'Could not send OTP. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerifyOtp() {
+    if (otp.length !== 6) {
+      showAlert('Invalid code', 'Please enter the 6-digit code sent to your WhatsApp.');
+      return;
+    }
+    const profile = await getUserProfile();
+    if (!profile) return;
+    setLoading(true);
+    try {
+      await verifyOtp(`91${profile.mobile}`, otp.trim());
+      setForgotStep('reset');
+    } catch (err: any) {
+      const msg: string = err?.message ?? '';
+      if (msg.toLowerCase().includes('expired')) {
+        showAlert('Code expired', 'This OTP has expired. Tap Resend to get a new one.');
+      } else {
+        showAlert('Incorrect code', 'The OTP you entered is incorrect. Please enter correct OTP.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleReset() {
     if (password.length < 6) {
       showAlert('Password too short', 'Your new password must be at least 6 characters.');
@@ -140,24 +184,114 @@ export default function OrganiserLoginScreen() {
     : mode === 'forgot' ? 'Reset Password'
     : 'Organiser Login';
 
-  const subtitle = mode === 'setup'
-    ? "Create a password to protect your organiser account. You'll use this every time you manage your events."
-    : mode === 'forgot'
-    ? 'Enter a new password for your organiser account. OTP verification will be added soon.'
-    : 'Enter your organiser password to access your events.';
-
-  const showConfirm = mode === 'setup' || mode === 'forgot';
-
   function handleSubmit() {
     if (mode === 'setup') handleSetup();
     else if (mode === 'login') handleLogin();
-    else if (mode === 'forgot') handleReset();
   }
 
   const btnLabel = loading ? 'Please wait…'
     : mode === 'setup' ? 'Create Account'
-    : mode === 'forgot' ? 'Reset Password'
     : 'Continue →';
+
+  if (mode === 'forgot') {
+    const forgotTitle = forgotStep === 'send' ? 'Verify Identity'
+      : forgotStep === 'verify' ? 'Enter OTP'
+      : 'Set New Password';
+    const forgotSubtitle = forgotStep === 'send'
+      ? "We'll send a one-time code to your registered WhatsApp number to verify it's you."
+      : forgotStep === 'verify'
+      ? 'Enter the 6-digit code sent to your WhatsApp number.'
+      : 'Choose a new password for your organiser account.';
+
+    return (
+      <SafeAreaView style={styles.container}>
+        <TouchableOpacity style={styles.back} onPress={() => { resetFields(); setForgotStep('send'); setOtp(''); setMode('login'); }}>
+          <Text style={styles.backText}>←</Text>
+        </TouchableOpacity>
+        <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+            <Text style={styles.title}>{forgotTitle}</Text>
+            <Text style={styles.subtitle}>{forgotSubtitle}</Text>
+
+            {forgotStep === 'send' && (
+              <TouchableOpacity
+                style={[styles.btn, loading && { opacity: 0.5 }]}
+                onPress={handleSendOtp}
+                disabled={loading}
+              >
+                <Text style={styles.btnText}>{loading ? 'Sending…' : 'Send OTP →'}</Text>
+              </TouchableOpacity>
+            )}
+
+            {forgotStep === 'verify' && (
+              <>
+                <Text style={styles.label}>VERIFICATION CODE</Text>
+                <TextInput
+                  style={styles.input}
+                  value={otp}
+                  onChangeText={setOtp}
+                  placeholder="6-digit code"
+                  placeholderTextColor="#555"
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  autoFocus
+                />
+                <TouchableOpacity
+                  style={[styles.btn, loading && { opacity: 0.5 }]}
+                  onPress={handleVerifyOtp}
+                  disabled={loading}
+                >
+                  <Text style={styles.btnText}>{loading ? 'Verifying…' : 'Verify →'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.forgotBtn} onPress={() => { setOtp(''); setForgotStep('send'); }}>
+                  <Text style={styles.forgotText}>Resend OTP</Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {forgotStep === 'reset' && (
+              <>
+                <Text style={styles.label}>NEW PASSWORD</Text>
+                <View style={styles.passwordRow}>
+                  <TextInput
+                    style={styles.passwordInput}
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                    placeholder="Create a new password"
+                    placeholderTextColor="#555"
+                    autoFocus
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPassword(v => !v)}>
+                    <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁️'}</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={styles.label}>CONFIRM PASSWORD</Text>
+                <TextInput
+                  style={styles.input}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  secureTextEntry={!showPassword}
+                  placeholder="Re-enter your password"
+                  placeholderTextColor="#555"
+                  autoCapitalize="none"
+                />
+                <TouchableOpacity
+                  style={[styles.btn, loading && { opacity: 0.5 }]}
+                  onPress={handleReset}
+                  disabled={loading}
+                >
+                  <Text style={styles.btnText}>{loading ? 'Saving…' : 'Reset Password →'}</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </ScrollView>
+        </KeyboardAvoidingView>
+        {alertOverlay}
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -168,7 +302,11 @@ export default function OrganiserLoginScreen() {
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <Text style={styles.title}>{title}</Text>
-          <Text style={styles.subtitle}>{subtitle}</Text>
+          <Text style={styles.subtitle}>
+            {mode === 'setup'
+              ? "Create a password to protect your organiser account. You'll use this every time you manage your events."
+              : 'Enter your organiser password to access your events.'}
+          </Text>
 
           <Text style={styles.label}>PASSWORD</Text>
           <View style={styles.passwordRow}>
@@ -187,7 +325,7 @@ export default function OrganiserLoginScreen() {
             </TouchableOpacity>
           </View>
 
-          {showConfirm && (
+          {mode === 'setup' && (
             <>
               <Text style={styles.label}>CONFIRM PASSWORD</Text>
               <TextInput
@@ -211,14 +349,8 @@ export default function OrganiserLoginScreen() {
           </TouchableOpacity>
 
           {mode === 'login' && (
-            <TouchableOpacity style={styles.forgotBtn} onPress={() => { resetFields(); setMode('forgot'); }}>
+            <TouchableOpacity style={styles.forgotBtn} onPress={() => { resetFields(); setForgotStep('send'); setOtp(''); setMode('forgot'); }}>
               <Text style={styles.forgotText}>Forgot password?</Text>
-            </TouchableOpacity>
-          )}
-
-          {mode === 'forgot' && (
-            <TouchableOpacity style={styles.forgotBtn} onPress={() => { resetFields(); setMode('login'); }}>
-              <Text style={styles.forgotText}>Back to login</Text>
             </TouchableOpacity>
           )}
         </ScrollView>

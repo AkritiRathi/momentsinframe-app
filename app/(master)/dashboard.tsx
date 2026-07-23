@@ -291,6 +291,9 @@ export default function DashboardScreen() {
                   <Text style={styles.cpBtnPrimaryText}>Save</Text>
                 </TouchableOpacity>
               </View>
+              <TouchableOpacity style={styles.cpForgot} onPress={() => { setCpVisible(false); router.push('/(auth)/organiser-login?mode=forgot'); }}>
+                <Text style={styles.cpForgotText}>Forgot password?</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>
@@ -353,4 +356,6 @@ headerTitle: { ...Typography.sectionHeading, color: Colors.white },
   cpBtnPrimaryText: { fontSize: 15, fontWeight: '700', color: Colors.background },
   cpBtnCancel: { flex: 1, borderRadius: 10, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: '#333' },
   cpBtnCancelText: { fontSize: 15, fontWeight: '700', color: Colors.textMuted },
+  cpForgot: { alignItems: 'center', marginTop: 16 },
+  cpForgotText: { fontSize: 13, fontWeight: '600', color: Colors.textMuted },
 });

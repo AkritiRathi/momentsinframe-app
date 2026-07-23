@@ -73,8 +73,13 @@ export default function NameEntryScreen() {
     setSubmitting(true);
     try {
       await verifyOtp(`91${mobile.trim()}`, otp.trim());
-    } catch {
-      showAlert('Incorrect code', 'The code you entered is wrong or has expired. Tap Resend to get a new one.');
+    } catch (err: any) {
+      const msg: string = err?.message ?? '';
+      if (msg.toLowerCase().includes('expired')) {
+        showAlert('Code expired', 'This OTP has expired. Tap Resend to get a new one.');
+      } else {
+        showAlert('Incorrect code', 'The OTP you entered is incorrect. Please enter correct OTP.');
+      }
       setSubmitting(false);
       return;
     }
@@ -115,19 +120,18 @@ export default function NameEntryScreen() {
         >
           <Text style={styles.appName}>MomentsInFrame</Text>
           <Text style={styles.title}>Let's get started</Text>
-          <Text style={styles.subtitle}>Tell us a little about yourself so we can personalise your experience.</Text>
           {!isExisting && <Text style={styles.warning}>Details once entered cannot be changed.</Text>}
 
           <View style={styles.form}>
             {/* Mobile number */}
-            <Text style={styles.label}>MOBILE NUMBER</Text>
+            <Text style={styles.label}>ENTER WHATSAPP NUMBER FOR OTP VERIFICATION</Text>
             <View style={[styles.phoneRow, !isPhoneStep && styles.disabled]}>
               <View style={styles.countryCode}>
                 <Text style={styles.countryCodeText}>🇮🇳 +91</Text>
               </View>
               <TextInput
                 style={styles.phoneInput}
-                placeholder="10-digit WhatsApp number"
+                placeholder=""
                 placeholderTextColor="#777"
                 value={mobile}
                 onChangeText={setMobile}
@@ -144,7 +148,6 @@ export default function NameEntryScreen() {
                 </TouchableOpacity>
               )}
             </View>
-            <Text style={styles.mobileHint}>Your mobile number identifies your uploads so only you can delete photos you've added.</Text>
 
             {/* First name */}
             <Text style={[styles.label, isPhoneStep && styles.labelMuted]}>FIRST NAME</Text>

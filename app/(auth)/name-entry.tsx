@@ -1,7 +1,6 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ScrollView, StatusBar, ActivityIndicator,
-  InputAccessoryView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
@@ -135,8 +134,15 @@ export default function NameEntryScreen() {
                 keyboardType="phone-pad"
                 maxLength={10}
                 editable={isPhoneStep}
-                inputAccessoryViewID={isPhoneStep ? 'phone-toolbar' : undefined}
               />
+              {isPhoneStep && (
+                <TouchableOpacity style={styles.goButton} onPress={handleContinue} disabled={loading}>
+                  {loading
+                    ? <ActivityIndicator color={Colors.background} size="small" />
+                    : <Text style={styles.goButtonText}>Go</Text>
+                  }
+                </TouchableOpacity>
+              )}
             </View>
             <Text style={styles.mobileHint}>Your mobile number identifies your uploads so only you can delete photos you've added.</Text>
 
@@ -203,18 +209,6 @@ export default function NameEntryScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
       {alertOverlay}
-      {Platform.OS === 'ios' && (
-        <InputAccessoryView nativeID="phone-toolbar">
-          <View style={styles.toolbar}>
-            <TouchableOpacity onPress={handleContinue} disabled={loading} style={styles.toolbarButton}>
-              {loading
-                ? <ActivityIndicator color={Colors.background} size="small" />
-                : <Text style={styles.toolbarButtonText}>Continue →</Text>
-              }
-            </TouchableOpacity>
-          </View>
-        </InputAccessoryView>
-      )}
     </View>
   );
 }
@@ -273,20 +267,13 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   buttonText: { ...Typography.buttonText, color: Colors.background },
-  toolbar: {
-    backgroundColor: '#1a1a1a',
-    borderTopWidth: 1,
-    borderTopColor: '#333',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-  },
-  toolbarButton: {
+  goButton: {
     backgroundColor: Colors.accent,
     borderRadius: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    minWidth: 48,
   },
-  toolbarButtonText: { ...Typography.buttonText, color: Colors.background, fontSize: 15 },
+  goButtonText: { ...Typography.buttonText, color: Colors.background, fontSize: 15 },
 });

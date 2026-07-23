@@ -84,9 +84,7 @@ export default function NameEntryScreen() {
       const last = lastName.trim();
       const name = `${first} ${last}`;
       await saveUserProfile({ firstName: first, lastName: last, mobile: mobile.trim() });
-      if (!isExisting) {
-        await registerUser(mobile.trim(), name).catch(() => {});
-      }
+      await registerUser(mobile.trim(), name).catch(() => {});
       router.replace('/(auth)/home');
     } catch {
       showAlert('Error', 'Something went wrong. Please try again.');

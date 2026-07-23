@@ -160,7 +160,7 @@ export async function removeCoadmin(slug: string, organiserPhone: string, organi
   return del(`/api/native/events/${slug}/coadmins`, { organiserPhone, organiserPassword, phone });
 }
 
-export async function lookupUsers(phones: string[]): Promise<{ registered: string[] }> {
+export async function lookupUsers(phones: string[]): Promise<{ registered: string[]; users: { phone: string; name: string }[] }> {
   return post('/api/native/users/lookup', { phones });
 }
 
@@ -170,6 +170,14 @@ export async function registerUser(phone: string, name: string): Promise<void> {
 
 export async function logoutUser(phone: string): Promise<void> {
   await post('/api/native/users/logout', { phone });
+}
+
+export async function sendOtp(phone: string): Promise<void> {
+  await post('/api/native/otp/send', { phone });
+}
+
+export async function verifyOtp(phone: string, code: string): Promise<void> {
+  await post('/api/native/otp/verify', { phone, code });
 }
 
 // Allowed guests API

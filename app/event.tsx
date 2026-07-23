@@ -2409,7 +2409,7 @@ export default function EventScreen() {
         <View style={styles.container}>
           <View style={[styles.skippedHeader, { paddingTop: insets.top + 12 }]}>
             <Text style={styles.notifPanelTitle}>Notifications</Text>
-            {notifications.length > 0 && (
+            {(notifications.length > 0 || serverNotifications.length > 0) && (
               <TouchableOpacity onPress={async () => {
                 await clearAllUploadNotifications(slug);
                 setNotifications([]);
@@ -2444,8 +2444,8 @@ export default function EventScreen() {
                         <TouchableOpacity onPress={async () => {
                           if (userMobile) await deleteServerNotification(userMobile, n.id);
                           setServerNotifications(prev => prev.filter(x => x.id !== n.id));
-                        }} style={{ marginLeft: 8, padding: 2 }}>
-                          <Text style={{ color: '#888780', fontSize: 18, lineHeight: 18 }}>×</Text>
+                        }} style={{ marginLeft: 10, padding: 4 }}>
+                          <Text style={{ color: '#888780', fontSize: 22, lineHeight: 22 }}>×</Text>
                         </TouchableOpacity>
                       </View>
                       <Text style={{ color: '#888780', fontSize: 12, marginBottom: n.photo_id ? 10 : 0 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>

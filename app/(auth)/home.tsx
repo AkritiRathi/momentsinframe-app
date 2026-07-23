@@ -215,13 +215,13 @@ export default function HomeScreen() {
                   return;
                 }
                 setTimeout(() => {
-                  Alert.alert(
+                  showAlert(
                     'Log out?',
                     'You will be removed from all events you have joined, including any co-admin roles. Your uploaded photos will remain with your name. If you log in again with the same number, you can rejoin open events and manage your photos.',
                     [
-                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Cancel' },
                       {
-                        text: 'Log out', style: 'destructive', onPress: async () => {
+                        text: 'Log out', onPress: async () => {
                           const profile = await getUserProfile();
                           if (profile?.mobile) await logoutUser(profile.mobile).catch(() => {});
                           await clearUserProfile();

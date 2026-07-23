@@ -2444,8 +2444,8 @@ export default function EventScreen() {
                         <TouchableOpacity onPress={async () => {
                           if (userMobile) await deleteServerNotification(userMobile, n.id);
                           setServerNotifications(prev => prev.filter(x => x.id !== n.id));
-                        }} style={{ marginLeft: 10, padding: 4 }}>
-                          <Text style={{ color: '#888780', fontSize: 22, lineHeight: 22 }}>×</Text>
+                        }} style={{ marginLeft: 8, paddingLeft: 16 }}>
+                          <Text style={styles.skippedClose}>×</Text>
                         </TouchableOpacity>
                       </View>
                       <Text style={{ color: '#888780', fontSize: 12, marginBottom: n.photo_id ? 10 : 0 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>

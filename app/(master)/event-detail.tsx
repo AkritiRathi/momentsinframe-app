@@ -19,7 +19,7 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-type Coadmin = { phone: string; name: string | null; added_at: string };
+type Coadmin = { phone: string; name: string | null; appName?: string | null; added_at: string };
 type AllowedGuest = { phone: string; name: string | null; appName?: string | null; added_at: string };
 
 export default function EventDetailScreen() {
@@ -88,7 +88,23 @@ export default function EventDetailScreen() {
     setCoadminsLoading(true);
     try {
       const result = await listCoadmins(params.slug, params.organiserPhone, pw);
-      if (result.coadmins) setCoadmins(result.coadmins);
+      if (result.coadmins) {
+        setCoadmins(result.coadmins);
+        try {
+          const { status } = await Contacts.requestPermissionsAsync();
+          if (status === 'granted') {
+            const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
+            const map: Record<string, string> = {};
+            for (const ca of result.coadmins) {
+              const match = allContacts.find(c =>
+                (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === ca.phone)
+              );
+              if (match?.name) map[ca.phone] = match.name;
+            }
+            setGuestContactMap(prev => ({ ...prev, ...map }));
+          }
+        } catch {}
+      }
     } finally {
       setCoadminsLoading(false);
     }
@@ -162,7 +178,7 @@ export default function EventDetailScreen() {
               );
               if (match?.name) map[guest.mobile] = match.name;
             }
-            setGuestContactMap(map);
+            setGuestContactMap(prev => ({ ...prev, ...map }));
           }
         } catch {}
       } else {
@@ -600,7 +616,7 @@ export default function EventDetailScreen() {
           <TouchableOpacity style={styles.btn} onPress={handleExtend}>
             <Text style={styles.btnText}>Extend expiry</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, { borderColor: Colors.accent }]} onPress={() => setShowCoadminPanel(true)}>
+          <TouchableOpacity style={[styles.btn, { borderColor: Colors.accent }]} onPress={() => { loadCoadmins(); setShowCoadminPanel(true); }}>
             <Text style={[styles.btnText, { color: Colors.accent }]}>+ Co-Admins</Text>
           </TouchableOpacity>
         </View>
@@ -753,17 +769,24 @@ export default function EventDetailScreen() {
             ) : coadmins.length === 0 ? (
               <Text style={styles.emptyText}>No co-admins added yet.</Text>
             ) : (
-              coadmins.map(ca => (
-                <View key={ca.phone} style={styles.coadminRow}>
-                  <View style={styles.coadminInfo}>
-                    <Text style={styles.coadminName}>{ca.name || ca.phone}</Text>
-                    {ca.name ? <Text style={styles.coadminPhone}>{ca.phone}</Text> : null}
+              coadmins.map(ca => {
+                const contactName = guestContactMap[ca.phone];
+                const appName = ca.appName ?? null;
+                const displayName = contactName || appName || ca.name || ca.phone;
+                const subName = contactName && appName && appName !== contactName ? appName : null;
+                return (
+                  <View key={ca.phone} style={styles.coadminRow}>
+                    <View style={styles.coadminInfo}>
+                      <Text style={styles.coadminName}>{displayName}</Text>
+                      {subName ? <Text style={styles.coadminPhone}>{subName}</Text> : null}
+                      <Text style={styles.coadminPhone}>{ca.phone}</Text>
+                    </View>
+                    <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveCoadmin(ca.phone, ca.name)}>
+                      <Text style={styles.removeBtnText}>Remove</Text>
+                    </TouchableOpacity>
                   </View>
-                  <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveCoadmin(ca.phone, ca.name)}>
-                    <Text style={styles.removeBtnText}>Remove</Text>
-                  </TouchableOpacity>
-                </View>
-              ))
+                );
+              })
             )}
             <TouchableOpacity
               style={[styles.btn, { marginTop: 12, borderColor: Colors.accent, opacity: addingCoadmin ? 0.5 : 1 }]}
@@ -899,9 +922,9 @@ export default function EventDetailScreen() {
                         return (
                           <View key={g.phone} style={styles.coadminRow}>
                             <View style={styles.coadminInfo}>
-                              {appName ? <Text style={styles.coadminName}>{appName}</Text> : null}
-                              {contactName ? <Text style={styles.coadminPhone}>{contactName}</Text> : null}
-                              <Text style={styles.coadminPhone}>{g.phone}</Text>
+                              <Text style={styles.coadminName}>{contactName || appName || g.phone}</Text>
+                              {contactName && appName && appName !== contactName ? <Text style={styles.coadminPhone}>{appName}</Text> : null}
+                              {(contactName || appName) ? <Text style={styles.coadminPhone}>{g.phone}</Text> : null}
                             </View>
                             <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveGuest(g.phone, g.name)}>
                               <Text style={styles.removeBtnText}>Remove</Text>
@@ -1063,10 +1086,12 @@ export default function EventDetailScreen() {
                 {joinedGuests.map(guest => {
                   const contactName = guestContactMap[guest.mobile];
                   const displayName = contactName || guest.name || guest.mobile;
+                  const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
                   return (
                     <View key={guest.mobile} style={styles.coadminRow}>
                       <View style={styles.coadminInfo}>
                         <Text style={styles.coadminName}>{displayName}</Text>
+                        {subName ? <Text style={styles.coadminPhone}>{subName}</Text> : null}
                         <Text style={styles.coadminPhone}>{guest.mobile}</Text>
                       </View>
                     </View>

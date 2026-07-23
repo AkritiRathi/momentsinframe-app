@@ -33,7 +33,6 @@ import {
   deleteUploadNotification, mergeUploadNotification, clearAllUploadNotifications,
   pruneUploadNotifications, UploadNotification,
   saveLastEvent, clearLastEvent,
-  type UploadNotification,
 } from '../lib/storage';
 import { setupNotifications, showUploadCompleteNotification, showDownloadCompleteNotification } from '../lib/notifications';
 import { Colors } from '../constants/colors';

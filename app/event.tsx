@@ -24,7 +24,8 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
-  prepareZip, fetchServerNotifications, markServerNotificationsRead, ServerNotification,
+  prepareZip, fetchServerNotifications, markServerNotificationsRead,
+  deleteServerNotification, deleteAllServerNotifications, ServerNotification,
 } from '../lib/api';
 import { API_BASE_URL } from '../constants/config';
 import {
@@ -1738,6 +1739,7 @@ export default function EventScreen() {
                   }
                   setHasUnread(false);
                   setNotificationsVisible(true);
+                  // Red dot clears on open; notifications themselves persist until dismissed via X or Clear All
                 }}>
                   <Text style={styles.adminGearIcon}>🔔</Text>
                   {hasUnread && <View style={styles.notifDot} />}
@@ -2410,6 +2412,10 @@ export default function EventScreen() {
               <TouchableOpacity onPress={async () => {
                 await clearAllUploadNotifications(slug);
                 setNotifications([]);
+                if (userMobile) {
+                  await deleteAllServerNotifications(userMobile);
+                  setServerNotifications([]);
+                }
                 setHasUnread(false);
               }} style={{ marginRight: 12 }}>
                 <Text style={styles.notifClearAll}>Clear all</Text>
@@ -2432,8 +2438,29 @@ export default function EventScreen() {
                 <>
                   {serverNotifications.map(n => (
                     <View key={n.id} style={{ backgroundColor: '#1C1C1C', borderRadius: 12, marginHorizontal: 16, marginBottom: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#F5C842' }}>
-                      <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 4 }}>{n.message}</Text>
-                      <Text style={{ color: '#888780', fontSize: 12 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 4, flex: 1 }}>{n.message}</Text>
+                        <TouchableOpacity onPress={async () => {
+                          if (userMobile) await deleteServerNotification(userMobile, n.id);
+                          setServerNotifications(prev => prev.filter(x => x.id !== n.id));
+                        }} style={{ marginLeft: 8, padding: 2 }}>
+                          <Text style={{ color: '#888780', fontSize: 18, lineHeight: 18 }}>×</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <Text style={{ color: '#888780', fontSize: 12, marginBottom: n.photo_id ? 10 : 0 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
+                      {n.photo_id && (
+                        <TouchableOpacity onPress={async () => {
+                          setNotificationsVisible(false);
+                          const result = await getPhotoUrls(slug, [n.photo_id!]);
+                          const urlMap = result.urls ?? {};
+                          const displayUrl = urlMap[n.photo_id!]?.displayUrl ?? urlMap[n.photo_id!]?.thumbUrl ?? '';
+                          setDuplicateResults([{ status: 'upgraded', uri: displayUrl, filename: '', section: null, existingPhotoId: undefined }]);
+                          setDuplicateViewerIndex(0);
+                          setDuplicateViewerVisible(true);
+                        }}>
+                          <Text style={styles.notifViewDupsText}>View photos</Text>
+                        </TouchableOpacity>
+                      )}
                     </View>
                   ))}
                   {notifications.length > 0 && (

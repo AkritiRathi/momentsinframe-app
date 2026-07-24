@@ -20,7 +20,7 @@ function formatDate(iso: string) {
 }
 
 type Coadmin = { phone: string; name: string | null; appName?: string | null; added_at: string };
-type AllowedGuest = { phone: string; name: string | null; appName?: string | null; added_at: string };
+type AllowedGuest = { phone: string; name: string | null; appName?: string | null; added_at: string; photo_count?: number };
 
 export default function EventDetailScreen() {
   const router = useRouter();
@@ -64,7 +64,7 @@ export default function EventDetailScreen() {
     });
   }, []);
 
-  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean };
+  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number };
   const [showManageGuestsPanel, setShowManageGuestsPanel] = useState(false);
   const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
   const [joinedGuestsLoading, setJoinedGuestsLoading] = useState(false);
@@ -679,6 +679,7 @@ export default function EventDetailScreen() {
               allowGuestDelete: allowGuestDelete ? 'true' : 'false',
               role: 'organiser',
               joinCode: params.join_code,
+              ownerPhone: params.organiserPhone ?? '',
             },
           })}
         >
@@ -922,7 +923,10 @@ export default function EventDetailScreen() {
                         return (
                           <View key={g.phone} style={styles.coadminRow}>
                             <View style={styles.coadminInfo}>
-                              <Text style={styles.coadminName}>{contactName || appName || g.phone}</Text>
+                              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <Text style={styles.coadminName}>{contactName || appName || g.phone}</Text>
+                                <Text style={[styles.coadminPhone, { marginLeft: 6 }]}>· {g.photo_count ?? 0} photos uploaded</Text>
+                              </View>
                               {contactName && appName && appName !== contactName ? <Text style={styles.coadminPhone}>{appName}</Text> : null}
                               {(contactName || appName) ? <Text style={styles.coadminPhone}>{g.phone}</Text> : null}
                             </View>
@@ -1090,7 +1094,10 @@ export default function EventDetailScreen() {
                   return (
                     <View key={guest.mobile} style={styles.coadminRow}>
                       <View style={styles.coadminInfo}>
-                        <Text style={styles.coadminName}>{displayName}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Text style={styles.coadminName}>{displayName}</Text>
+                          <Text style={[styles.coadminPhone, { marginLeft: 6 }]}>· {guest.photo_count ?? 0} photos uploaded</Text>
+                        </View>
                         {subName ? <Text style={styles.coadminPhone}>{subName}</Text> : null}
                         <Text style={styles.coadminPhone}>{guest.mobile}</Text>
                       </View>
@@ -1107,7 +1114,10 @@ export default function EventDetailScreen() {
                 return (
                   <View key={guest.mobile} style={[styles.coadminRow, guest.is_blocked && styles.blockedRow]}>
                     <View style={styles.coadminInfo}>
-                      <Text style={[styles.coadminName, guest.is_blocked && styles.blockedText]}>{displayName}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.coadminName, guest.is_blocked && styles.blockedText]}>{displayName}</Text>
+                        <Text style={[styles.coadminPhone, { marginLeft: 6 }, guest.is_blocked && styles.blockedText]}>· {guest.photo_count ?? 0} photos uploaded</Text>
+                      </View>
                       {subName ? <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{subName}</Text> : null}
                       <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{guest.mobile}</Text>
                       {guest.is_blocked && <Text style={styles.blockedBadge}>BLOCKED</Text>}

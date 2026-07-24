@@ -183,7 +183,7 @@ export async function verifyOtp(phone: string, code: string): Promise<void> {
 }
 
 // Allowed guests API
-export async function listAllowedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { phone: string; name: string | null; appName: string | null; added_at: string }[]; error?: string }> {
+export async function listAllowedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { phone: string; name: string | null; appName: string | null; added_at: string; photo_count: number }[]; error?: string }> {
   return get(`/api/native/events/${slug}/allowed-guests`, {
     'x-organiser-phone': organiserPhone,
     'x-organiser-password': organiserPassword,
@@ -206,7 +206,7 @@ export async function clearJoinedGuests(slug: string, organiserPhone: string, or
   return del(`/api/native/events/${slug}/joined-guests`, { organiserPhone, organiserPassword });
 }
 
-export async function listJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean }[]; error?: string }> {
+export async function listJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean; photo_count: number }[]; error?: string }> {
   return get(`/api/native/events/${slug}/joined-guests`, {
     'x-organiser-phone': organiserPhone,
     'x-organiser-password': organiserPassword,

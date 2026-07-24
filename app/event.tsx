@@ -389,7 +389,7 @@ async function backgroundUploadTask(): Promise<void> {
         if (!uploadOk) {
           result = { status: 'failed', section: null, uri: asset.uri, filename };
         } else {
-          const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined, eventUserId ?? undefined);
+          const proc = await processUpload(slug, stagingKey, filename, userMobile ?? params.adminPhone ?? undefined, userName ?? undefined, eventUserId ?? undefined);
           if (proc.error) {
             result = { status: 'failed', section: null, uri: asset.uri, filename };
           } else if (proc.duplicate) {
@@ -973,7 +973,7 @@ export default function EventScreen() {
             if (!uploadOk) {
               result = { status: 'failed', section: null, uri: asset.uri, filename };
             } else {
-              const proc = await processUpload(slug, stagingKey, filename, userMobile ?? undefined, userName ?? undefined, eventUserId ?? undefined);
+              const proc = await processUpload(slug, stagingKey, filename, userMobile ?? params.adminPhone ?? undefined, userName ?? undefined, eventUserId ?? undefined);
               if (proc.error) {
                 result = { status: 'failed', section: null, uri: asset.uri, filename };
               } else if (proc.duplicate) {

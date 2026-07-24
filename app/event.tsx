@@ -119,7 +119,7 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -127,6 +127,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   selected: Set<string>;
   onGroupToggle: (photos: Photo[], on: boolean) => void;
   isCoadmin?: boolean;
+  isAdmin?: boolean;
 }) {
   const [rangeFrom, setRangeFrom] = useState('');
   const [rangeTo, setRangeTo] = useState('');
@@ -1876,6 +1877,7 @@ export default function EventScreen() {
               selected={selected}
               onGroupToggle={selectGroup}
               isCoadmin={isCoadmin}
+              isAdmin={isAdmin}
             />
           </View>
         );
@@ -2266,6 +2268,7 @@ export default function EventScreen() {
               selected={selected}
               onGroupToggle={selectGroup}
               isCoadmin={isCoadmin}
+              isAdmin={isAdmin}
             />
           </View>
         )}

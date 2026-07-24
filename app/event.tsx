@@ -214,12 +214,11 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
                 </Pressable>
               </View>
             )}
-            {deleteMode && (
-              <Text style={styles.deleteNote}>
-                {isCoadmin
-                  ? "You can delete any guest's photos, but not photos uploaded by the Organiser."
-                  : "You can only delete photos that you have uploaded."}
-              </Text>
+            {deleteMode && !isAdmin && (
+              <Text style={styles.deleteNote}>You can only delete photos that you have uploaded.</Text>
+            )}
+            {deleteMode && isCoadmin && (
+              <Text style={styles.deleteNote}>You can delete any guest's photos, but not photos uploaded by the Organiser.</Text>
             )}
           </View>
         )}

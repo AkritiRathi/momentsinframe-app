@@ -251,6 +251,7 @@ export type ServerNotification = {
   event_slug: string;
   event_name: string;
   photo_id: string | null;
+  photo_ids: string[] | null;
   created_at: string;
   read: boolean;
 };

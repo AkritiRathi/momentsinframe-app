@@ -2480,13 +2480,21 @@ export default function EventScreen() {
                         </TouchableOpacity>
                       </View>
                       <Text style={{ color: '#888780', fontSize: 12, marginBottom: n.photo_id ? 10 : 0 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
-                      {n.photo_id && (
+                      {((n.photo_ids && n.photo_ids.length > 0) || n.photo_id) && (
                         <TouchableOpacity onPress={async () => {
                           setNotificationsVisible(false);
-                          const result = await getPhotoUrls(slug, [n.photo_id!]);
+                          const ids = (n.photo_ids && n.photo_ids.length > 0) ? n.photo_ids : [n.photo_id!];
+                          const result = await getPhotoUrls(slug, ids);
                           const urlMap = result.urls ?? {};
-                          const displayUrl = urlMap[n.photo_id!]?.displayUrl ?? urlMap[n.photo_id!]?.thumbUrl ?? '';
-                          setDuplicateResults([{ status: 'upgraded', uri: displayUrl, filename: '', section: null, existingPhotoId: undefined }]);
+                          const entries = ids
+                            .map(id => {
+                              const urls = urlMap[id];
+                              const uri = urls?.displayUrl ?? urls?.thumbUrl ?? null;
+                              return uri ? { status: 'upgraded' as const, uri, filename: '', section: null, existingPhotoId: undefined } : null;
+                            })
+                            .filter(Boolean) as { status: 'upgraded'; uri: string; filename: string; section: null; existingPhotoId: undefined }[];
+                          if (entries.length === 0) return;
+                          setDuplicateResults(entries);
                           setDuplicateViewerIndex(0);
                           setDuplicateViewerVisible(true);
                         }}>

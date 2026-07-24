@@ -119,13 +119,14 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
   deleteMode: boolean;
   selected: Set<string>;
   onGroupToggle: (photos: Photo[], on: boolean) => void;
+  isCoadmin?: boolean;
 }) {
   const [rangeFrom, setRangeFrom] = useState('');
   const [rangeTo, setRangeTo] = useState('');
@@ -214,7 +215,11 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
               </View>
             )}
             {deleteMode && (
-              <Text style={styles.deleteNote}>You can only delete photos that you have uploaded</Text>
+              <Text style={styles.deleteNote}>
+                {isCoadmin
+                  ? "You can delete any guest's photos, but not photos uploaded by the Organiser."
+                  : "You can only delete photos that you have uploaded."}
+              </Text>
             )}
           </View>
         )}
@@ -433,12 +438,13 @@ export default function EventScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     slug: string; name: string; expiresAt: string; createdAt: string;
-    isAdmin: string; adminPhone: string; allowGuestDelete: string; joinCode: string; role?: string;
+    isAdmin: string; adminPhone: string; allowGuestDelete: string; joinCode: string; role?: string; ownerPhone?: string;
   }>();
 
   const isAdmin = params.isAdmin === 'true';
   const adminLabel = params.role === 'organiser' ? 'Organiser' : params.role === 'coadmin' ? 'Co-Admin' : 'Admin';
   const allowGuestDelete = params.allowGuestDelete === 'true';
+  const ownerPhone = params.ownerPhone ?? '';
   const slug = params.slug;
 
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -854,6 +860,7 @@ export default function EventScreen() {
     setBgUploadProgress({ current: 0, total: assets.length });
     setNewlyUploadedIds(new Set());
     setUploadSummary(null);
+    activateKeepAwakeAsync();
 
     // Pre-fetch all localURIs in parallel.
     const localUris = await Promise.all(assets.map(async (asset) => {
@@ -1002,6 +1009,7 @@ export default function EventScreen() {
 
     const finalResults = results.filter(Boolean) as UploadFileResult[];
 
+    deactivateKeepAwake();
     setBgUploading(false);
     setBgUploadProgress({ current: 0, total: 0 });
     setBgCancelRequested(false);
@@ -1384,6 +1392,7 @@ export default function EventScreen() {
     setDownloadMode('jpg');
     setDownloadingBulk(true);
     setDownloadProgress({ current: 0, total: ids.length });
+    activateKeepAwakeAsync();
     let saved = 0;
     let completed = 0;
     const failedIds: string[] = [];
@@ -1412,6 +1421,7 @@ export default function EventScreen() {
       }
     }
 
+    deactivateKeepAwake();
     setDownloadingBulk(false);
     exitSelectMode();
     const parts: string[] = [];
@@ -1536,7 +1546,13 @@ export default function EventScreen() {
 
   const daysLeft = params.expiresAt ? daysUntil(params.expiresAt) : 999;
   const totalPhotos = photos.length + otherPhotos.length;
-  const allSelected = totalPhotos > 0 && [...photos, ...otherPhotos].every(p => selected.has(p.id));
+  const isCoadmin = isAdmin && params.role === 'coadmin';
+  const deletablePhotos = deleteMode && !isAdmin && userMobile
+    ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
+    : deleteMode && isCoadmin && ownerPhone
+    ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile !== ownerPhone)
+    : [...photos, ...otherPhotos];
+  const allSelected = deletablePhotos.length > 0 && deletablePhotos.every(p => selected.has(p.id));
 
   const userPhotoIds = useMemo(() => {
     if (!userMobile) return new Set<string>();
@@ -1564,12 +1580,16 @@ export default function EventScreen() {
       items.push({ type: 'select_bar', key: 'select_bar' });
     }
 
-    // In delete mode, only show photos uploaded by the current user (admin sees all)
+    // In delete mode, only show photos uploaded by the current user (admin sees all except co-admin can't delete organiser's photos)
     const deleteFilteredPhotos = deleteMode && !isAdmin && userMobile
       ? photos.filter(p => p.uploaded_by_mobile === userMobile)
+      : deleteMode && isCoadmin && ownerPhone
+      ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone)
       : photos;
     const deleteFilteredOther = deleteMode && !isAdmin && userMobile
       ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile)
+      : deleteMode && isCoadmin && ownerPhone
+      ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone)
       : otherPhotos;
 
     const mainPhotos = deleteMode ? deleteFilteredPhotos : photos;
@@ -1593,7 +1613,7 @@ export default function EventScreen() {
       items.push({ type: 'empty', key: 'empty' });
     }
 
-    if (deleteMode && !isAdmin && mainPhotos.length === 0 && otherList.length === 0 && totalPhotos > 0 && !loading) {
+    if (deleteMode && ((!isAdmin) || isCoadmin) && mainPhotos.length === 0 && otherList.length === 0 && totalPhotos > 0 && !loading) {
       items.push({ type: 'delete_empty', key: 'delete_empty' });
     }
 
@@ -1614,7 +1634,7 @@ export default function EventScreen() {
             <Text style={styles.selectCountLabel}>selected</Text>
           </View>
           <View style={styles.selectBarBtns}>
-            <Pressable style={styles.selBtn} onPress={() => selectGroup([...photos, ...otherPhotos], !allSelected)}>
+            <Pressable style={styles.selBtn} onPress={() => selectGroup(deletablePhotos, !allSelected)}>
               <Text style={styles.selBtnText}>Select all</Text>
             </Pressable>
             <Pressable style={styles.selBtn} onPress={exitSelectMode}>
@@ -1850,12 +1870,13 @@ export default function EventScreen() {
             <SectionHeader
               section={item.section}
               items={item.section === 'main'
-                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos)
-                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
+                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : photos)
+                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : otherPhotos)}
               selectMode={selectMode}
               deleteMode={deleteMode}
               selected={selected}
               onGroupToggle={selectGroup}
+              isCoadmin={isCoadmin}
             />
           </View>
         );
@@ -1882,7 +1903,11 @@ export default function EventScreen() {
         return (
           <View style={styles.empty}>
             <Text style={styles.emptyText}>No photos to delete.</Text>
-            <Text style={styles.emptySub}>You can only delete photos you uploaded. You haven't uploaded any photos to this event yet.</Text>
+            <Text style={styles.emptySub}>
+              {isCoadmin
+                ? "All photos here were uploaded by the Organiser, which Co-Admins cannot delete."
+                : "You can only delete photos you uploaded. You haven't uploaded any photos to this event yet."}
+            </Text>
           </View>
         );
 
@@ -2126,7 +2151,10 @@ export default function EventScreen() {
               </TouchableOpacity>
               <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
               <View style={styles.lbActions}>
-                {(isAdmin || (allowGuestDelete && currentPhoto != null && userPhotoIds.has(currentPhoto.id))) && (
+                {(
+                  (isAdmin && !(params.role === 'coadmin' && currentPhoto?.uploaded_by_mobile === ownerPhone)) ||
+                  (allowGuestDelete && currentPhoto != null && userPhotoIds.has(currentPhoto.id))
+                ) && (
                   <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>
                     <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
                   </TouchableOpacity>
@@ -2231,11 +2259,14 @@ export default function EventScreen() {
           }]}>
             <SectionHeader
               section={stickySection}
-              items={stickySection === 'main' ? photos : otherPhotos}
+              items={stickySection === 'main'
+                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : photos)
+                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : otherPhotos)}
               selectMode={selectMode}
               deleteMode={deleteMode}
               selected={selected}
               onGroupToggle={selectGroup}
+              isCoadmin={isCoadmin}
             />
           </View>
         )}

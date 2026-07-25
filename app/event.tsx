@@ -485,6 +485,14 @@ export default function EventScreen() {
   const flatListRef = useRef<FlatList>(null);
   const accumulatedHeights = useRef<Record<string, number>>({});
   const listDataRef = useRef<ListItem[]>([]);
+  // Drag-to-select
+  const scrollOffsetRef = useRef(0);
+  const flatListLayoutRef = useRef({ x: 0, y: 0 });
+  const flatListContainerRef = useRef<any>(null);
+  const dragAnchorIndexRef = useRef<number | null>(null);
+  const dragModeRef = useRef<'select' | 'deselect' | null>(null);
+  const committedSelectionRef = useRef<Set<string>>(new Set());
+  const [dragScrollEnabled, setDragScrollEnabled] = useState(true);
 
   // Upload
   const [uploading, setUploading] = useState(false);
@@ -780,6 +788,82 @@ export default function EventScreen() {
     });
   }
 
+  function getPhotoIndexAtPosition(absX: number, absY: number): number | null {
+    const contentY = absY - flatListLayoutRef.current.y + scrollOffsetRef.current;
+    const contentX = absX - flatListLayoutRef.current.x;
+    let accY = 0;
+    let flatIndex = 0;
+    for (const item of listDataRef.current) {
+      const h = accumulatedHeights.current[item.key] ?? 0;
+      if (item.type === 'photo_row') {
+        if (contentY >= accY && contentY < accY + h) {
+          const col = Math.min(Math.max(Math.floor(contentX / (THUMB_SIZE + GAP)), 0), item.photos.length - 1);
+          return flatIndex + col;
+        }
+        flatIndex += item.photos.length;
+      }
+      accY += h;
+    }
+    return null;
+  }
+
+  function getPhotoIdAtFlatIndex(index: number): string | null {
+    let flatIndex = 0;
+    for (const item of listDataRef.current) {
+      if (item.type === 'photo_row') {
+        if (index < flatIndex + item.photos.length) {
+          return item.photos[index - flatIndex].id;
+        }
+        flatIndex += item.photos.length;
+      }
+    }
+    return null;
+  }
+
+  function applyDragRange(anchorIndex: number, currentIndex: number, mode: 'select' | 'deselect') {
+    const lo = Math.min(anchorIndex, currentIndex);
+    const hi = Math.max(anchorIndex, currentIndex);
+    const next = new Set(committedSelectionRef.current);
+    for (let i = lo; i <= hi; i++) {
+      const id = getPhotoIdAtFlatIndex(i);
+      if (id) { if (mode === 'select') next.add(id); else next.delete(id); }
+    }
+    setSelected(next);
+  }
+
+  const onDragStart = useCallback((absX: number, absY: number) => {
+    const index = getPhotoIndexAtPosition(absX, absY);
+    if (index === null) return;
+    committedSelectionRef.current = new Set(selected);
+    const anchorId = getPhotoIdAtFlatIndex(index);
+    const mode = anchorId && committedSelectionRef.current.has(anchorId) ? 'deselect' : 'select';
+    dragAnchorIndexRef.current = index;
+    dragModeRef.current = mode;
+    setDragScrollEnabled(false);
+    applyDragRange(index, index, mode);
+  }, [selected]);
+
+  const onDragUpdate = useCallback((absX: number, absY: number) => {
+    if (dragAnchorIndexRef.current === null || !dragModeRef.current) return;
+    const currentIndex = getPhotoIndexAtPosition(absX, absY);
+    if (currentIndex === null) return;
+    applyDragRange(dragAnchorIndexRef.current, currentIndex, dragModeRef.current);
+  }, []);
+
+  const onDragEnd = useCallback(() => {
+    dragAnchorIndexRef.current = null;
+    dragModeRef.current = null;
+    setDragScrollEnabled(true);
+  }, []);
+
+  const dragGesture = useMemo(() => Gesture.Pan()
+    .enabled(selectMode || deleteMode)
+    .minDistance(8)
+    .onStart((e) => { 'worklet'; runOnJS(onDragStart)(e.absoluteX, e.absoluteY); })
+    .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
+    .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
+  , [selectMode, deleteMode, onDragStart, onDragUpdate, onDragEnd]);
+
   function selectGroup(items: Photo[], on: boolean) {
     setSelected(prev => {
       const next = new Set(prev);
@@ -812,6 +896,7 @@ export default function EventScreen() {
   }
 
   const handleScroll = useCallback((e: any) => {
+    scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
     if (!selectMode && !deleteMode) return;
     const y = e.nativeEvent.contentOffset.y;
 
@@ -2266,33 +2351,44 @@ export default function EventScreen() {
         </GestureHandlerRootView>
       </Modal>
 
-      <View style={{ flex: 1 }}>
-        <FlatList
-          ref={flatListRef}
-          key={selectMode ? 'select' : 'normal'}
-          data={listData}
-          keyExtractor={item => item.key}
-          renderItem={renderItem}
-          extraData={[selected, stickySection, selectBarSticky, deleteMode]}
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
-          contentContainerStyle={{ paddingBottom: 48 }}
-          removeClippedSubviews={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={async () => {
-                exitSelectMode();
-                setRefreshing(true);
-                setNewlyUploadedIds(new Set());
-                setUploadSummary(null);
-                await loadPhotos();
-                setRefreshing(false);
-              }}
-              tintColor={Colors.accent}
-            />
-          }
-        />
+      <View
+        style={{ flex: 1 }}
+        ref={flatListContainerRef}
+        onLayout={() => {
+          flatListContainerRef.current?.measureInWindow((x: number, y: number) => {
+            flatListLayoutRef.current = { x, y };
+          });
+        }}
+      >
+        <GestureDetector gesture={dragGesture}>
+          <FlatList
+            ref={flatListRef}
+            key={selectMode ? 'select' : 'normal'}
+            data={listData}
+            keyExtractor={item => item.key}
+            renderItem={renderItem}
+            extraData={[selected, stickySection, selectBarSticky, deleteMode]}
+            onScroll={handleScroll}
+            scrollEventThrottle={16}
+            scrollEnabled={dragScrollEnabled}
+            contentContainerStyle={{ paddingBottom: 48 }}
+            removeClippedSubviews={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={async () => {
+                  exitSelectMode();
+                  setRefreshing(true);
+                  setNewlyUploadedIds(new Set());
+                  setUploadSummary(null);
+                  await loadPhotos();
+                  setRefreshing(false);
+                }}
+                tintColor={Colors.accent}
+              />
+            }
+          />
+        </GestureDetector>
         {(selectMode || deleteMode) && selectBarSticky && (
           <View style={styles.stickySelectBar}>
             {renderSelectBar()}

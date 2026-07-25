@@ -1,7 +1,7 @@
 import {
   View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
   Modal, ActivityIndicator, Dimensions, TextInput,
-  Platform, BackHandler, AppState, RefreshControl, Alert,
+  Platform, BackHandler, AppState, RefreshControl, Alert, InteractionManager,
 } from 'react-native';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -2496,9 +2496,11 @@ export default function EventScreen() {
                             })
                             .filter(Boolean) as { status: 'upgraded'; uri: string; filename: string; section: null; existingPhotoId: undefined }[];
                           if (entries.length === 0) return;
-                          setDuplicateResults(entries);
-                          setDuplicateViewerIndex(0);
-                          setDuplicateViewerVisible(true);
+                          InteractionManager.runAfterInteractions(() => {
+                            setDuplicateResults(entries);
+                            setDuplicateViewerIndex(0);
+                            setDuplicateViewerVisible(true);
+                          });
                         }}>
                           <Text style={styles.notifViewDupsText}>View photos</Text>
                         </TouchableOpacity>

@@ -2652,7 +2652,7 @@ export default function EventScreen() {
         visible={photosPrimingVisible}
         icon="🖼️"
         title="Access Your Photos"
-        description="To upload and save photos, Moments in Frame needs access to your photo library."
+        description="Please grant Full Access to your photo library. Without full access, your event album will not be created."
         onContinue={async () => {
           setPhotosPrimingVisible(false);
           const phone = userMobile ?? params.adminPhone ?? null;

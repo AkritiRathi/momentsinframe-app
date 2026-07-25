@@ -485,14 +485,6 @@ export default function EventScreen() {
   const flatListRef = useRef<FlatList>(null);
   const accumulatedHeights = useRef<Record<string, number>>({});
   const listDataRef = useRef<ListItem[]>([]);
-  const scrollOffsetRef = useRef(0);
-  const flatListLayoutRef = useRef({ x: 0, y: 0 });
-  const flatListContainerRef = useRef<any>(null);
-  const dragSelectModeRef = useRef<'select' | 'deselect' | null>(null);
-  const lastDraggedIdRef = useRef<string | null>(null);
-  const selectedRef = useRef<Set<string>>(new Set());
-  const dragStartPositionRef = useRef<{ x: number; y: number } | null>(null);
-  const [dragScrollEnabled, setDragScrollEnabled] = useState(true);
 
   // Upload
   const [uploading, setUploading] = useState(false);
@@ -788,79 +780,6 @@ export default function EventScreen() {
     });
   }
 
-  function getPhotoAtAbsolutePosition(absoluteX: number, absoluteY: number): { id: string } | null {
-    const contentY = absoluteY - flatListLayoutRef.current.y + scrollOffsetRef.current;
-    const contentX = absoluteX - flatListLayoutRef.current.x;
-    let accY = 0;
-    for (const item of listDataRef.current) {
-      const h = accumulatedHeights.current[item.key] ?? 0;
-      if (contentY >= accY && contentY < accY + h) {
-        if (item.type === 'photo_row') {
-          const col = Math.floor(contentX / (THUMB_SIZE + GAP));
-          if (col >= 0 && col < item.photos.length) {
-            return { id: item.photos[col].id };
-          }
-        }
-        return null;
-      }
-      accY += h;
-    }
-    return null;
-  }
-
-  const dragSelectApply = useCallback((id: string, mode: 'select' | 'deselect') => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (mode === 'select') next.add(id); else next.delete(id);
-      return next;
-    });
-  }, []);
-
-  const onDragBegin = useCallback((absX: number, absY: number) => {
-    dragStartPositionRef.current = { x: absX, y: absY };
-  }, []);
-
-  const onDragStart = useCallback((absX: number, absY: number) => {
-    setDragScrollEnabled(false);
-    const startPos = dragStartPositionRef.current ?? { x: absX, y: absY };
-    const firstPhoto = getPhotoAtAbsolutePosition(startPos.x, startPos.y);
-    if (firstPhoto) {
-      const mode = selectedRef.current.has(firstPhoto.id) ? 'deselect' : 'select';
-      dragSelectModeRef.current = mode;
-      lastDraggedIdRef.current = firstPhoto.id;
-      dragSelectApply(firstPhoto.id, mode);
-    }
-    const currentPhoto = getPhotoAtAbsolutePosition(absX, absY);
-    if (currentPhoto && currentPhoto.id !== lastDraggedIdRef.current && dragSelectModeRef.current) {
-      lastDraggedIdRef.current = currentPhoto.id;
-      dragSelectApply(currentPhoto.id, dragSelectModeRef.current);
-    }
-  }, [dragSelectApply]);
-
-  const onDragUpdate = useCallback((absX: number, absY: number) => {
-    if (!dragSelectModeRef.current) return;
-    const photo = getPhotoAtAbsolutePosition(absX, absY);
-    if (!photo || photo.id === lastDraggedIdRef.current) return;
-    lastDraggedIdRef.current = photo.id;
-    dragSelectApply(photo.id, dragSelectModeRef.current);
-  }, [dragSelectApply]);
-
-  const onDragEnd = useCallback(() => {
-    dragSelectModeRef.current = null;
-    lastDraggedIdRef.current = null;
-    dragStartPositionRef.current = null;
-    setDragScrollEnabled(true);
-  }, []);
-
-  const dragGesture = useMemo(() => Gesture.Pan()
-    .enabled(selectMode || deleteMode)
-    .minDistance(5)
-    .onBegin((e) => { 'worklet'; runOnJS(onDragBegin)(e.absoluteX, e.absoluteY); })
-    .onStart((e) => { 'worklet'; runOnJS(onDragStart)(e.absoluteX, e.absoluteY); })
-    .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
-    .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
-  , [selectMode, deleteMode, onDragBegin, onDragStart, onDragUpdate, onDragEnd]);
-
   function selectGroup(items: Photo[], on: boolean) {
     setSelected(prev => {
       const next = new Set(prev);
@@ -892,10 +811,7 @@ export default function EventScreen() {
     }
   }
 
-  useEffect(() => { selectedRef.current = selected; }, [selected]);
-
   const handleScroll = useCallback((e: any) => {
-    scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
     if (!selectMode && !deleteMode) return;
     const y = e.nativeEvent.contentOffset.y;
 
@@ -2350,44 +2266,33 @@ export default function EventScreen() {
         </GestureHandlerRootView>
       </Modal>
 
-      <View
-        style={{ flex: 1 }}
-        ref={flatListContainerRef}
-        onLayout={() => {
-          flatListContainerRef.current?.measureInWindow((x: number, y: number) => {
-            flatListLayoutRef.current = { x, y };
-          });
-        }}
-      >
-        <GestureDetector gesture={dragGesture}>
-          <FlatList
-            ref={flatListRef}
-            key={selectMode ? 'select' : 'normal'}
-            data={listData}
-            keyExtractor={item => item.key}
-            renderItem={renderItem}
-            extraData={[selected, stickySection, selectBarSticky, deleteMode]}
-            onScroll={handleScroll}
-            scrollEventThrottle={16}
-            scrollEnabled={dragScrollEnabled}
-            contentContainerStyle={{ paddingBottom: 48 }}
-            removeClippedSubviews={false}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={async () => {
-                  exitSelectMode();
-                  setRefreshing(true);
-                  setNewlyUploadedIds(new Set());
-                  setUploadSummary(null);
-                  await loadPhotos();
-                  setRefreshing(false);
-                }}
-                tintColor={Colors.accent}
-              />
-            }
-          />
-        </GestureDetector>
+      <View style={{ flex: 1 }}>
+        <FlatList
+          ref={flatListRef}
+          key={selectMode ? 'select' : 'normal'}
+          data={listData}
+          keyExtractor={item => item.key}
+          renderItem={renderItem}
+          extraData={[selected, stickySection, selectBarSticky, deleteMode]}
+          onScroll={handleScroll}
+          scrollEventThrottle={16}
+          contentContainerStyle={{ paddingBottom: 48 }}
+          removeClippedSubviews={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={async () => {
+                exitSelectMode();
+                setRefreshing(true);
+                setNewlyUploadedIds(new Set());
+                setUploadSummary(null);
+                await loadPhotos();
+                setRefreshing(false);
+              }}
+              tintColor={Colors.accent}
+            />
+          }
+        />
         {(selectMode || deleteMode) && selectBarSticky && (
           <View style={styles.stickySelectBar}>
             {renderSelectBar()}

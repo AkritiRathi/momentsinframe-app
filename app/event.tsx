@@ -11,7 +11,7 @@ import * as Sharing from 'expo-sharing';
 import * as MediaLibrary from 'expo-media-library';
 import * as SecureStore from 'expo-secure-store';
 import RNFetchBlob from 'react-native-blob-util';
-import { GestureDetector, Gesture, GestureHandlerRootView, NativeViewGestureHandler, Swipeable } from 'react-native-gesture-handler';
+import { GestureDetector, Gesture, GestureHandlerRootView, Swipeable } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 let BackgroundUpload: { startService: (t: string, d: string) => Promise<void>; updateService: (t: string, d: string, p: number, m: number) => Promise<void>; stopService: () => Promise<void>; isRunning: () => boolean } | null = null;
@@ -491,7 +491,8 @@ export default function EventScreen() {
   const dragSelectModeRef = useRef<'select' | 'deselect' | null>(null);
   const lastDraggedIdRef = useRef<string | null>(null);
   const selectedRef = useRef<Set<string>>(new Set());
-  const nativeViewRef = useRef(null);
+  const dragStartPositionRef = useRef<{ x: number; y: number } | null>(null);
+  const [dragScrollEnabled, setDragScrollEnabled] = useState(true);
 
   // Upload
   const [uploading, setUploading] = useState(false);
@@ -816,12 +817,24 @@ export default function EventScreen() {
   }, []);
 
   const onDragBegin = useCallback((absX: number, absY: number) => {
-    const photo = getPhotoAtAbsolutePosition(absX, absY);
-    if (!photo) return;
-    const mode = selectedRef.current.has(photo.id) ? 'deselect' : 'select';
-    dragSelectModeRef.current = mode;
-    lastDraggedIdRef.current = photo.id;
-    dragSelectApply(photo.id, mode);
+    dragStartPositionRef.current = { x: absX, y: absY };
+  }, []);
+
+  const onDragStart = useCallback((absX: number, absY: number) => {
+    setDragScrollEnabled(false);
+    const startPos = dragStartPositionRef.current ?? { x: absX, y: absY };
+    const firstPhoto = getPhotoAtAbsolutePosition(startPos.x, startPos.y);
+    if (firstPhoto) {
+      const mode = selectedRef.current.has(firstPhoto.id) ? 'deselect' : 'select';
+      dragSelectModeRef.current = mode;
+      lastDraggedIdRef.current = firstPhoto.id;
+      dragSelectApply(firstPhoto.id, mode);
+    }
+    const currentPhoto = getPhotoAtAbsolutePosition(absX, absY);
+    if (currentPhoto && currentPhoto.id !== lastDraggedIdRef.current && dragSelectModeRef.current) {
+      lastDraggedIdRef.current = currentPhoto.id;
+      dragSelectApply(currentPhoto.id, dragSelectModeRef.current);
+    }
   }, [dragSelectApply]);
 
   const onDragUpdate = useCallback((absX: number, absY: number) => {
@@ -835,16 +848,18 @@ export default function EventScreen() {
   const onDragEnd = useCallback(() => {
     dragSelectModeRef.current = null;
     lastDraggedIdRef.current = null;
+    dragStartPositionRef.current = null;
+    setDragScrollEnabled(true);
   }, []);
 
   const dragGesture = useMemo(() => Gesture.Pan()
     .enabled(selectMode || deleteMode)
     .minDistance(5)
-    .simultaneousWithExternalGesture(nativeViewRef)
     .onBegin((e) => { 'worklet'; runOnJS(onDragBegin)(e.absoluteX, e.absoluteY); })
+    .onStart((e) => { 'worklet'; runOnJS(onDragStart)(e.absoluteX, e.absoluteY); })
     .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
     .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
-  , [selectMode, deleteMode, onDragBegin, onDragUpdate, onDragEnd]);
+  , [selectMode, deleteMode, onDragBegin, onDragStart, onDragUpdate, onDragEnd]);
 
   function selectGroup(items: Photo[], on: boolean) {
     setSelected(prev => {
@@ -2345,34 +2360,33 @@ export default function EventScreen() {
         }}
       >
         <GestureDetector gesture={dragGesture}>
-          <NativeViewGestureHandler ref={nativeViewRef}>
-            <FlatList
-              ref={flatListRef}
-              key={selectMode ? 'select' : 'normal'}
-              data={listData}
-              keyExtractor={item => item.key}
-              renderItem={renderItem}
-              extraData={[selected, stickySection, selectBarSticky, deleteMode]}
-              onScroll={handleScroll}
-              scrollEventThrottle={16}
-              contentContainerStyle={{ paddingBottom: 48 }}
-              removeClippedSubviews={false}
-              refreshControl={
-                <RefreshControl
-                  refreshing={refreshing}
-                  onRefresh={async () => {
-                    exitSelectMode();
-                    setRefreshing(true);
-                    setNewlyUploadedIds(new Set());
-                    setUploadSummary(null);
-                    await loadPhotos();
-                    setRefreshing(false);
-                  }}
-                  tintColor={Colors.accent}
-                />
-              }
-            />
-          </NativeViewGestureHandler>
+          <FlatList
+            ref={flatListRef}
+            key={selectMode ? 'select' : 'normal'}
+            data={listData}
+            keyExtractor={item => item.key}
+            renderItem={renderItem}
+            extraData={[selected, stickySection, selectBarSticky, deleteMode]}
+            onScroll={handleScroll}
+            scrollEventThrottle={16}
+            scrollEnabled={dragScrollEnabled}
+            contentContainerStyle={{ paddingBottom: 48 }}
+            removeClippedSubviews={false}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={async () => {
+                  exitSelectMode();
+                  setRefreshing(true);
+                  setNewlyUploadedIds(new Set());
+                  setUploadSummary(null);
+                  await loadPhotos();
+                  setRefreshing(false);
+                }}
+                tintColor={Colors.accent}
+              />
+            }
+          />
         </GestureDetector>
         {(selectMode || deleteMode) && selectBarSticky && (
           <View style={styles.stickySelectBar}>
@@ -2610,12 +2624,6 @@ export default function EventScreen() {
                           <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Delete</Text>
                         </TouchableOpacity>
                       )}
-                      onSwipeableOpen={async (direction) => {
-                        if (direction === 'right') {
-                          if (userMobile) await deleteServerNotification(userMobile, n.id, slug);
-                          setServerNotifications(prev => prev.filter(x => x.id !== n.id));
-                        }
-                      }}
                     >
                       <View style={{ backgroundColor: '#1C1C1C', borderRadius: 12, marginHorizontal: 16, marginBottom: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#F5C842' }}>
                         <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
@@ -2693,13 +2701,6 @@ export default function EventScreen() {
                         <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Delete</Text>
                       </TouchableOpacity>
                     )}
-                    onSwipeableOpen={async (direction) => {
-                      if (direction === 'right') {
-                        await deleteUploadNotification(slug, item.id);
-                        const updated = await getUploadNotifications(slug);
-                        setNotifications(updated);
-                      }
-                    }}
                   >
                   <View style={styles.notifCard}>
                     <View style={styles.notifCardHeader}>

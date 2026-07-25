@@ -136,7 +136,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
   const allSelected = items.length > 0 && items.every(p => selected.has(p.id));
-  const sortLabel = sortOrder === 'desc' ? '↓ Newest first' : '↑ Oldest first';
+  const sortLabel = sortOrder === 'asc' ? '↓ Newest first' : '↑ Oldest first';
   const subText = isMain
     ? `(sorted by date taken · ${sortOrder === 'desc' ? 'newest first' : 'oldest first'})`
     : '(no date info — sorted by upload time)';
@@ -2835,8 +2835,8 @@ const styles = StyleSheet.create({
   sectionTitle: { ...Typography.sectionHeading, color: Colors.white },
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },
-  sortToggleBtn: { marginLeft: 'auto', borderWidth: 1, borderColor: '#444', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 3 },
-  sortToggleText: { fontSize: 12, color: '#aaa' },
+  sortToggleBtn: { marginLeft: 'auto' },
+  sortToggleText: { fontSize: 12, color: '#888' },
   sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
   sectionSelectRow: { marginTop: 6, gap: 6 },
   deleteNote: { fontSize: 12, color: '#888', fontStyle: 'italic', marginTop: 2 },

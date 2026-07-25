@@ -544,7 +544,7 @@ export default function EventScreen() {
     setNotifications(notifs);
     const resolvedMobile = mobile ?? userMobile;
     if (resolvedMobile) {
-      const serverNotifs = await fetchServerNotifications(resolvedMobile);
+      const serverNotifs = await fetchServerNotifications(resolvedMobile, slug);
       setServerNotifications(serverNotifs);
       setHasUnread(notifs.some(n => !n.read) || serverNotifs.some(n => !n.read));
     } else {
@@ -1756,7 +1756,7 @@ export default function EventScreen() {
                   await refreshNotifications(mobile);
                   await markNotificationsRead(slug);
                   if (mobile) {
-                    await markServerNotificationsRead(mobile);
+                    await markServerNotificationsRead(mobile, slug);
                     setServerNotifications(prev => prev.map(n => ({ ...n, read: true })));
                   }
                   setHasUnread(false);
@@ -2447,7 +2447,7 @@ export default function EventScreen() {
                 await clearAllUploadNotifications(slug);
                 setNotifications([]);
                 if (userMobile) {
-                  await deleteAllServerNotifications(userMobile);
+                  await deleteAllServerNotifications(userMobile, slug);
                   setServerNotifications([]);
                 }
                 setHasUnread(false);
@@ -2475,7 +2475,7 @@ export default function EventScreen() {
                       <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
                         <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 4, flex: 1 }}>{n.message}</Text>
                         <TouchableOpacity onPress={async () => {
-                          if (userMobile) await deleteServerNotification(userMobile, n.id);
+                          if (userMobile) await deleteServerNotification(userMobile, n.id, slug);
                           setServerNotifications(prev => prev.filter(x => x.id !== n.id));
                         }} style={{ marginLeft: 8, paddingLeft: 16 }}>
                           <Text style={styles.skippedClose}>×</Text>
@@ -2484,23 +2484,21 @@ export default function EventScreen() {
                       <Text style={{ color: '#888780', fontSize: 12, marginBottom: n.photo_id ? 10 : 0 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
                       {((n.photo_ids && n.photo_ids.length > 0) || n.photo_id) && (
                         <TouchableOpacity onPress={async () => {
-                          setNotificationsVisible(false);
                           const ids = (n.photo_ids && n.photo_ids.length > 0) ? n.photo_ids : [n.photo_id!];
                           const result = await getPhotoUrls(slug, ids);
                           const urlMap = result.urls ?? {};
                           const entries = ids
                             .map(id => {
                               const urls = urlMap[id];
-                              const uri = urls?.displayUrl ?? urls?.thumbUrl ?? null;
+                              const uri = urls?.displayUrl ?? urls?.thumbUrl ?? urls?.url ?? null;
                               return uri ? { status: 'upgraded' as const, uri, filename: '', section: null, existingPhotoId: undefined } : null;
                             })
                             .filter(Boolean) as { status: 'upgraded'; uri: string; filename: string; section: null; existingPhotoId: undefined }[];
                           if (entries.length === 0) return;
-                          InteractionManager.runAfterInteractions(() => {
-                            setDuplicateResults(entries);
-                            setDuplicateViewerIndex(0);
-                            setDuplicateViewerVisible(true);
-                          });
+                          setDuplicateResults(entries);
+                          setDuplicateViewerIndex(0);
+                          setNotificationsVisible(false);
+                          setTimeout(() => setDuplicateViewerVisible(true), 400);
                         }}>
                           <Text style={styles.notifViewDupsText}>View photos</Text>
                         </TouchableOpacity>

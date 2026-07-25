@@ -256,9 +256,9 @@ export type ServerNotification = {
   read: boolean;
 };
 
-export async function fetchServerNotifications(phone: string): Promise<ServerNotification[]> {
+export async function fetchServerNotifications(phone: string, slug: string): Promise<ServerNotification[]> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/native/notifications?phone=${encodeURIComponent(phone)}`);
+    const res = await fetch(`${API_BASE_URL}/api/native/notifications?phone=${encodeURIComponent(phone)}&slug=${encodeURIComponent(slug)}`);
     const data = await res.json();
     return data.notifications ?? [];
   } catch {
@@ -266,36 +266,36 @@ export async function fetchServerNotifications(phone: string): Promise<ServerNot
   }
 }
 
-export async function markServerNotificationsRead(phone: string): Promise<void> {
+export async function markServerNotificationsRead(phone: string, slug: string): Promise<void> {
   try {
     await fetch(`${API_BASE_URL}/api/native/notifications`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone }),
+      body: JSON.stringify({ phone, event_slug: slug }),
     });
   } catch {
     // best-effort
   }
 }
 
-export async function deleteServerNotification(phone: string, id: string): Promise<void> {
+export async function deleteServerNotification(phone: string, id: string, slug: string): Promise<void> {
   try {
     await fetch(`${API_BASE_URL}/api/native/notifications`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, id }),
+      body: JSON.stringify({ phone, id, event_slug: slug }),
     });
   } catch {
     // best-effort
   }
 }
 
-export async function deleteAllServerNotifications(phone: string): Promise<void> {
+export async function deleteAllServerNotifications(phone: string, slug: string): Promise<void> {
   try {
     await fetch(`${API_BASE_URL}/api/native/notifications`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone }),
+      body: JSON.stringify({ phone, event_slug: slug }),
     });
   } catch {
     // best-effort

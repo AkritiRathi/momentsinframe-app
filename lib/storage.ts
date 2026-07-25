@@ -104,6 +104,7 @@ export type JoinedEventEntry = {
   createdAt: string;
   allowGuestDelete: boolean;
   isOrganiser?: boolean;
+  ownerPhone?: string;
 };
 
 const JOINED_EVENTS_KEY = 'joined_events_list';

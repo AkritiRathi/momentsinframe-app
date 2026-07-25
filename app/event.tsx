@@ -492,7 +492,6 @@ export default function EventScreen() {
   const dragAnchorIndexRef = useRef<number | null>(null);
   const dragModeRef = useRef<'select' | 'deselect' | null>(null);
   const committedSelectionRef = useRef<Set<string>>(new Set());
-  const [dragScrollEnabled, setDragScrollEnabled] = useState(true);
 
   // Upload
   const [uploading, setUploading] = useState(false);
@@ -839,8 +838,7 @@ export default function EventScreen() {
     const mode = anchorId && committedSelectionRef.current.has(anchorId) ? 'deselect' : 'select';
     dragAnchorIndexRef.current = index;
     dragModeRef.current = mode;
-    setDragScrollEnabled(false);
-    applyDragRange(index, index, mode);
+        applyDragRange(index, index, mode);
   }, [selected]);
 
   const onDragUpdate = useCallback((absX: number, absY: number) => {
@@ -853,12 +851,12 @@ export default function EventScreen() {
   const onDragEnd = useCallback(() => {
     dragAnchorIndexRef.current = null;
     dragModeRef.current = null;
-    setDragScrollEnabled(true);
-  }, []);
+      }, []);
 
   const dragGesture = useMemo(() => Gesture.Pan()
     .enabled(selectMode || deleteMode)
-    .minDistance(8)
+    .activeOffsetX([-8, 8])
+    .failOffsetY([-15, 15])
     .onStart((e) => { 'worklet'; runOnJS(onDragStart)(e.absoluteX, e.absoluteY); })
     .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
     .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
@@ -2370,8 +2368,7 @@ export default function EventScreen() {
             extraData={[selected, stickySection, selectBarSticky, deleteMode]}
             onScroll={handleScroll}
             scrollEventThrottle={16}
-            scrollEnabled={dragScrollEnabled}
-            contentContainerStyle={{ paddingBottom: 48 }}
+contentContainerStyle={{ paddingBottom: 48 }}
             removeClippedSubviews={false}
             refreshControl={
               <RefreshControl

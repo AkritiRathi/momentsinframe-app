@@ -131,44 +131,9 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   isCoadmin?: boolean;
   isAdmin?: boolean;
 }) {
-  const [rangeFrom, setRangeFrom] = useState('');
-  const [rangeTo, setRangeTo] = useState('');
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
   const allSelected = items.length > 0 && items.every(p => selected.has(p.id));
-
-  useEffect(() => {
-    if (!selectMode) { setRangeFrom(''); setRangeTo(''); }
-  }, [selectMode]);
-
-  function clampFrom(val: string) {
-    const n = parseInt(val, 10);
-    if (isNaN(n)) return;
-    const to = parseInt(rangeTo, 10);
-    const clamped = Math.max(1, Math.min(n, isNaN(to) ? items.length : to));
-    setRangeFrom(String(clamped));
-  }
-
-  function clampTo(val: string) {
-    const n = parseInt(val, 10);
-    if (isNaN(n)) return;
-    const from = parseInt(rangeFrom, 10);
-    const clamped = Math.max(isNaN(from) ? 1 : from, Math.min(n, items.length));
-    setRangeTo(String(clamped));
-  }
-
-  function applyRange() {
-    const from = parseInt(rangeFrom, 10);
-    const to = parseInt(rangeTo, 10);
-    if (isNaN(from) || isNaN(to) || from < 1 || to > items.length || from > to) return;
-    onGroupToggle(items.slice(from - 1, to), true);
-  }
-
-  function clearRange() {
-    onGroupToggle(items, false);
-    setRangeFrom('');
-    setRangeTo('');
-  }
 
   return (
     <View style={styles.sectionBlock}>
@@ -187,36 +152,6 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
                 {allSelected ? `Deselect all ${label}` : `Select all ${label}`}
               </Text>
             </TouchableOpacity>
-            {!deleteMode && (
-              <View style={styles.rangeRow}>
-                <Text style={styles.rangeLabel}>Range:</Text>
-                <TextInput
-                  style={styles.rangeInput}
-                  keyboardType="number-pad"
-                  placeholder="From"
-                  placeholderTextColor="#555"
-                  value={rangeFrom}
-                  onChangeText={setRangeFrom}
-                  onEndEditing={() => clampFrom(rangeFrom)}
-                />
-                <Text style={styles.rangeLabel}>–</Text>
-                <TextInput
-                  style={styles.rangeInput}
-                  keyboardType="number-pad"
-                  placeholder="To"
-                  placeholderTextColor="#555"
-                  value={rangeTo}
-                  onChangeText={setRangeTo}
-                  onEndEditing={() => clampTo(rangeTo)}
-                />
-                <Pressable style={styles.rangeBtn} onPress={applyRange}>
-                  <Text style={styles.rangeBtnText}>Apply</Text>
-                </Pressable>
-                <Pressable style={styles.rangeBtnOutline} onPress={clearRange}>
-                  <Text style={styles.rangeBtnOutlineText}>Clear</Text>
-                </Pressable>
-              </View>
-            )}
             {deleteMode && !isAdmin && (
               <Text style={styles.deleteNote}>You can only delete photos that you have uploaded.</Text>
             )}

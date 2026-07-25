@@ -9,6 +9,8 @@ import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/d
 import * as Contacts from 'expo-contacts';
 import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
+import { hasPrimingBeenShown, markPrimingShown, showPermissionDeniedAlert, shouldShowDeniedAlert } from '../../lib/priming';
+import PermissionPrimingModal from '../../components/PermissionPrimingModal';
 import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, clearAllowedGuests, clearJoinedGuests, listJoinedGuests, setGuestBlocked } from '../../lib/api';
 import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
@@ -82,6 +84,9 @@ export default function EventDetailScreen() {
   const [manualInputMode, setManualInputMode] = useState<'coadmin' | 'guest'>('coadmin');
   const [manualPhone, setManualPhone] = useState('');
 
+  const [contactsPrimingVisible, setContactsPrimingVisible] = useState(false);
+  const pendingAfterContactsPriming = useRef<(() => void) | null>(null);
+
   const loadCoadmins = useCallback(async () => {
     const pw = await getOrganiserPassword();
     if (!pw || !params.organiserPhone) return;
@@ -91,7 +96,7 @@ export default function EventDetailScreen() {
       if (result.coadmins) {
         setCoadmins(result.coadmins);
         try {
-          const { status } = await Contacts.requestPermissionsAsync();
+          const { status } = await Contacts.getPermissionsAsync();
           if (status === 'granted') {
             const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
             const map: Record<string, string> = {};
@@ -129,7 +134,7 @@ export default function EventDetailScreen() {
       if (result.guests) {
         setAllowedGuests(result.guests);
         try {
-          const { status } = await Contacts.requestPermissionsAsync();
+          const { status } = await Contacts.getPermissionsAsync();
           if (status === 'granted') {
             const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
             const map: Record<string, string> = {};
@@ -169,7 +174,7 @@ export default function EventDetailScreen() {
         setJoinedGuests([organiserEntry, ...others]);
         // Look up each mobile in the organiser's contacts
         try {
-          const { status } = await Contacts.requestPermissionsAsync();
+          const { status } = await Contacts.getPermissionsAsync();
           if (status === 'granted') {
             const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
             const map: Record<string, string> = {};
@@ -406,9 +411,11 @@ export default function EventDetailScreen() {
   }
 
   async function loadContactsForPicker(mode: 'coadmin' | 'guest') {
-    const { status } = await Contacts.requestPermissionsAsync();
-    if (status !== 'granted') {
-      showAlert('Permission needed', 'Please allow access to contacts.');
+    const permResult = await Contacts.requestPermissionsAsync();
+    if (!permResult.granted) {
+      if (shouldShowDeniedAlert(permResult.granted, permResult.canAskAgain)) {
+        showPermissionDeniedAlert('Contacts');
+      }
       return;
     }
     const { data: contacts } = await Contacts.getContactsAsync({
@@ -446,7 +453,15 @@ export default function EventDetailScreen() {
   }
 
   async function handleAddCoadmin() {
-    await Contacts.requestPermissionsAsync();
+    const phone = params.organiserPhone ?? null;
+    if (phone) {
+      const shown = await hasPrimingBeenShown('contacts', phone);
+      if (!shown) {
+        pendingAfterContactsPriming.current = () => handleAddCoadmin();
+        setContactsPrimingVisible(true);
+        return;
+      }
+    }
     showAlert(
       'Add Co-Admin',
       'How would you like to add a co-admin?',
@@ -478,7 +493,15 @@ export default function EventDetailScreen() {
   }
 
   async function handleAddGuest() {
-    await Contacts.requestPermissionsAsync();
+    const phone = params.organiserPhone ?? null;
+    if (phone) {
+      const shown = await hasPrimingBeenShown('contacts', phone);
+      if (!shown) {
+        pendingAfterContactsPriming.current = () => handleAddGuest();
+        setContactsPrimingVisible(true);
+        return;
+      }
+    }
     showAlert(
       'Add Guest',
       'How would you like to add a guest?',
@@ -1170,6 +1193,25 @@ export default function EventDetailScreen() {
           </View>
         </Modal>
       )}
+
+      <PermissionPrimingModal
+        visible={contactsPrimingVisible}
+        icon="👥"
+        title="Access Your Contacts"
+        description="To find your guests by name, Moments in Frame needs access to your contacts."
+        onContinue={async () => {
+          setContactsPrimingVisible(false);
+          const phone = params.organiserPhone ?? null;
+          if (phone) await markPrimingShown('contacts', phone);
+          pendingAfterContactsPriming.current?.();
+          pendingAfterContactsPriming.current = null;
+        }}
+        onDismiss={() => {
+          setContactsPrimingVisible(false);
+          pendingAfterContactsPriming.current = null;
+        }}
+      />
+
     </SafeAreaView>
   );
 }

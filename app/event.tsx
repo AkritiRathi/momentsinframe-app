@@ -36,6 +36,8 @@ import {
   saveLastEvent, clearLastEvent,
 } from '../lib/storage';
 import { setupNotifications, showUploadCompleteNotification, showDownloadCompleteNotification } from '../lib/notifications';
+import { hasPrimingBeenShown, markPrimingShown, showPermissionDeniedAlert, shouldShowDeniedAlert } from '../lib/priming';
+import PermissionPrimingModal from '../components/PermissionPrimingModal';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { useAlert, alertStyles } from '../lib/useAlert';
@@ -516,6 +518,12 @@ export default function EventScreen() {
   const failedAssetsRef = useRef<ImagePicker.ImagePickerAsset[]>([]);
   const { showAlert, alertOverlay, isAlertVisible } = useAlert();
 
+  // Permission priming
+  const [photosPrimingVisible, setPhotosPrimingVisible] = useState(false);
+  const [notifPrimingVisible, setNotifPrimingVisible] = useState(false);
+  const pendingAfterPhotoPriming = useRef<(() => void) | null>(null);
+  const pendingAfterNotifPriming = useRef<(() => void) | null>(null);
+
   // Notifications panel
   const [notificationsVisible, setNotificationsVisible] = useState(false);
   const [notifications, setNotifications] = useState<UploadNotification[]>([]);
@@ -553,9 +561,20 @@ export default function EventScreen() {
   }
 
   useEffect(() => {
-    setupNotifications();
     loadPhotos();
-    getUserProfile().then(p => {
+    getUserProfile().then(async p => {
+      const phone = p?.mobile ?? params.adminPhone ?? null;
+      if (phone) {
+        const shown = await hasPrimingBeenShown('notifications', phone);
+        if (shown) {
+          setupNotifications();
+        } else {
+          pendingAfterNotifPriming.current = () => setupNotifications();
+          setNotifPrimingVisible(true);
+        }
+      } else {
+        setupNotifications();
+      }
       if (p) {
         setUserMobile(p.mobile);
         userMobileRef.current = p.mobile;
@@ -811,12 +830,26 @@ export default function EventScreen() {
     if (retryAssets) {
       assets = retryAssets;
     } else {
+      if (source === 'gallery') {
+        const phone = userMobile ?? params.adminPhone ?? null;
+        if (phone) {
+          const shown = await hasPrimingBeenShown('photos', phone);
+          if (!shown) {
+            pendingAfterPhotoPriming.current = () => handleUpload('gallery');
+            setPhotosPrimingVisible(true);
+            return;
+          }
+        }
+      }
+
       const permResult = source === 'camera'
         ? await ImagePicker.requestCameraPermissionsAsync()
         : await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (!permResult.granted) {
-        showAlert('Permission needed', `Allow ${source === 'camera' ? 'camera' : 'photo library'} access in Settings.`);
+        if (shouldShowDeniedAlert(permResult.granted, permResult.canAskAgain)) {
+          showPermissionDeniedAlert('Photos');
+        }
         return;
       }
 
@@ -1149,9 +1182,20 @@ export default function EventScreen() {
       showAlert('Upload in progress', 'A background upload is already running. Please wait for it to complete.');
       return;
     }
+    const phone = userMobile ?? params.adminPhone ?? null;
+    if (phone) {
+      const shown = await hasPrimingBeenShown('photos', phone);
+      if (!shown) {
+        pendingAfterPhotoPriming.current = () => handleDateUpload();
+        setPhotosPrimingVisible(true);
+        return;
+      }
+    }
     const perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
     if (!perm.granted) {
-      showAlert('Permission required', 'Please allow access to your photos and videos to use this feature.');
+      if (shouldShowDeniedAlert(perm.granted, perm.canAskAgain)) {
+        showPermissionDeniedAlert('Photos');
+      }
       return;
     }
     showAlert(
@@ -2604,6 +2648,41 @@ export default function EventScreen() {
         </View>
       </Modal>
 
+      <PermissionPrimingModal
+        visible={photosPrimingVisible}
+        icon="🖼️"
+        title="Access Your Photos"
+        description="To upload and save photos, Moments in Frame needs access to your photo library."
+        onContinue={async () => {
+          setPhotosPrimingVisible(false);
+          const phone = userMobile ?? params.adminPhone ?? null;
+          if (phone) await markPrimingShown('photos', phone);
+          pendingAfterPhotoPriming.current?.();
+          pendingAfterPhotoPriming.current = null;
+        }}
+        onDismiss={() => {
+          setPhotosPrimingVisible(false);
+          pendingAfterPhotoPriming.current = null;
+        }}
+      />
+
+      <PermissionPrimingModal
+        visible={notifPrimingVisible}
+        icon="🔔"
+        title="Stay in the Loop"
+        description="We'll notify you when photos are uploaded or upgraded in your events."
+        onContinue={async () => {
+          setNotifPrimingVisible(false);
+          const phone = userMobile ?? params.adminPhone ?? null;
+          if (phone) await markPrimingShown('notifications', phone);
+          pendingAfterNotifPriming.current?.();
+          pendingAfterNotifPriming.current = null;
+        }}
+        onDismiss={() => {
+          setNotifPrimingVisible(false);
+          pendingAfterNotifPriming.current = null;
+        }}
+      />
 
     </SafeAreaView>
   );

@@ -11,7 +11,7 @@ import * as Sharing from 'expo-sharing';
 import * as MediaLibrary from 'expo-media-library';
 import * as SecureStore from 'expo-secure-store';
 import RNFetchBlob from 'react-native-blob-util';
-import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GestureDetector, Gesture, GestureHandlerRootView, NativeViewGestureHandler, Swipeable } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 let BackgroundUpload: { startService: (t: string, d: string) => Promise<void>; updateService: (t: string, d: string, p: number, m: number) => Promise<void>; stopService: () => Promise<void>; isRunning: () => boolean } | null = null;
@@ -485,6 +485,13 @@ export default function EventScreen() {
   const flatListRef = useRef<FlatList>(null);
   const accumulatedHeights = useRef<Record<string, number>>({});
   const listDataRef = useRef<ListItem[]>([]);
+  const scrollOffsetRef = useRef(0);
+  const flatListLayoutRef = useRef({ x: 0, y: 0 });
+  const flatListContainerRef = useRef<any>(null);
+  const dragSelectModeRef = useRef<'select' | 'deselect' | null>(null);
+  const lastDraggedIdRef = useRef<string | null>(null);
+  const selectedRef = useRef<Set<string>>(new Set());
+  const nativeViewRef = useRef(null);
 
   // Upload
   const [uploading, setUploading] = useState(false);
@@ -780,6 +787,65 @@ export default function EventScreen() {
     });
   }
 
+  function getPhotoAtAbsolutePosition(absoluteX: number, absoluteY: number): { id: string } | null {
+    const contentY = absoluteY - flatListLayoutRef.current.y + scrollOffsetRef.current;
+    const contentX = absoluteX - flatListLayoutRef.current.x;
+    let accY = 0;
+    for (const item of listDataRef.current) {
+      const h = accumulatedHeights.current[item.key] ?? 0;
+      if (contentY >= accY && contentY < accY + h) {
+        if (item.type === 'photo_row') {
+          const col = Math.floor(contentX / (THUMB_SIZE + GAP));
+          if (col >= 0 && col < item.photos.length) {
+            return { id: item.photos[col].id };
+          }
+        }
+        return null;
+      }
+      accY += h;
+    }
+    return null;
+  }
+
+  const dragSelectApply = useCallback((id: string, mode: 'select' | 'deselect') => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (mode === 'select') next.add(id); else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const onDragBegin = useCallback((absX: number, absY: number) => {
+    const photo = getPhotoAtAbsolutePosition(absX, absY);
+    if (!photo) return;
+    const mode = selectedRef.current.has(photo.id) ? 'deselect' : 'select';
+    dragSelectModeRef.current = mode;
+    lastDraggedIdRef.current = photo.id;
+    dragSelectApply(photo.id, mode);
+  }, [dragSelectApply]);
+
+  const onDragUpdate = useCallback((absX: number, absY: number) => {
+    if (!dragSelectModeRef.current) return;
+    const photo = getPhotoAtAbsolutePosition(absX, absY);
+    if (!photo || photo.id === lastDraggedIdRef.current) return;
+    lastDraggedIdRef.current = photo.id;
+    dragSelectApply(photo.id, dragSelectModeRef.current);
+  }, [dragSelectApply]);
+
+  const onDragEnd = useCallback(() => {
+    dragSelectModeRef.current = null;
+    lastDraggedIdRef.current = null;
+  }, []);
+
+  const dragGesture = useMemo(() => Gesture.Pan()
+    .enabled(selectMode || deleteMode)
+    .minDistance(5)
+    .simultaneousWithExternalGesture(nativeViewRef)
+    .onBegin((e) => { 'worklet'; runOnJS(onDragBegin)(e.absoluteX, e.absoluteY); })
+    .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
+    .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
+  , [selectMode, deleteMode, onDragBegin, onDragUpdate, onDragEnd]);
+
   function selectGroup(items: Photo[], on: boolean) {
     setSelected(prev => {
       const next = new Set(prev);
@@ -811,7 +877,10 @@ export default function EventScreen() {
     }
   }
 
+  useEffect(() => { selectedRef.current = selected; }, [selected]);
+
   const handleScroll = useCallback((e: any) => {
+    scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
     if (!selectMode && !deleteMode) return;
     const y = e.nativeEvent.contentOffset.y;
 
@@ -2266,33 +2335,45 @@ export default function EventScreen() {
         </GestureHandlerRootView>
       </Modal>
 
-      <View style={{ flex: 1 }}>
-        <FlatList
-          ref={flatListRef}
-          key={selectMode ? 'select' : 'normal'}
-          data={listData}
-          keyExtractor={item => item.key}
-          renderItem={renderItem}
-          extraData={[selected, stickySection, selectBarSticky, deleteMode]}
-          onScroll={handleScroll}
-          scrollEventThrottle={16}
-          contentContainerStyle={{ paddingBottom: 48 }}
-          removeClippedSubviews={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={async () => {
-                exitSelectMode();
-                setRefreshing(true);
-                setNewlyUploadedIds(new Set());
-                setUploadSummary(null);
-                await loadPhotos();
-                setRefreshing(false);
-              }}
-              tintColor={Colors.accent}
+      <View
+        style={{ flex: 1 }}
+        ref={flatListContainerRef}
+        onLayout={() => {
+          flatListContainerRef.current?.measureInWindow((x: number, y: number) => {
+            flatListLayoutRef.current = { x, y };
+          });
+        }}
+      >
+        <GestureDetector gesture={dragGesture}>
+          <NativeViewGestureHandler ref={nativeViewRef}>
+            <FlatList
+              ref={flatListRef}
+              key={selectMode ? 'select' : 'normal'}
+              data={listData}
+              keyExtractor={item => item.key}
+              renderItem={renderItem}
+              extraData={[selected, stickySection, selectBarSticky, deleteMode]}
+              onScroll={handleScroll}
+              scrollEventThrottle={16}
+              contentContainerStyle={{ paddingBottom: 48 }}
+              removeClippedSubviews={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshing}
+                  onRefresh={async () => {
+                    exitSelectMode();
+                    setRefreshing(true);
+                    setNewlyUploadedIds(new Set());
+                    setUploadSummary(null);
+                    await loadPhotos();
+                    setRefreshing(false);
+                  }}
+                  tintColor={Colors.accent}
+                />
+              }
             />
-          }
-        />
+          </NativeViewGestureHandler>
+        </GestureDetector>
         {(selectMode || deleteMode) && selectBarSticky && (
           <View style={styles.stickySelectBar}>
             {renderSelectBar()}
@@ -2483,6 +2564,7 @@ export default function EventScreen() {
 
       {/* Notifications panel */}
       <Modal visible={notificationsVisible} animationType="slide" onRequestClose={() => setNotificationsVisible(false)}>
+        <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={styles.container}>
           <View style={[styles.skippedHeader, { paddingTop: insets.top + 12 }]}>
             <Text style={styles.notifPanelTitle}>Notifications</Text>
@@ -2515,39 +2597,60 @@ export default function EventScreen() {
               ListHeaderComponent={serverNotifications.length > 0 ? (
                 <>
                   {serverNotifications.map(n => (
-                    <View key={n.id} style={{ backgroundColor: '#1C1C1C', borderRadius: 12, marginHorizontal: 16, marginBottom: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#F5C842' }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 4, flex: 1 }}>{n.message}</Text>
-                        <TouchableOpacity onPress={async () => {
-                          if (userMobile) await deleteServerNotification(userMobile, n.id, slug);
-                          setServerNotifications(prev => prev.filter(x => x.id !== n.id));
-                        }} style={{ marginLeft: 8, paddingLeft: 16 }}>
-                          <Text style={styles.skippedClose}>×</Text>
-                        </TouchableOpacity>
-                      </View>
-                      <Text style={{ color: '#888780', fontSize: 12, marginBottom: n.photo_id ? 10 : 0 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
-                      {((n.photo_ids && n.photo_ids.length > 0) || n.photo_id) && (
-                        <TouchableOpacity onPress={async () => {
-                          const ids = (n.photo_ids && n.photo_ids.length > 0) ? n.photo_ids : [n.photo_id!];
-                          const result = await getPhotoUrls(slug, ids);
-                          const urlMap = result.urls ?? {};
-                          const entries = ids
-                            .map(id => {
-                              const urls = urlMap[id];
-                              const uri = urls?.displayUrl ?? urls?.thumbUrl ?? urls?.url ?? null;
-                              return uri ? { status: 'upgraded' as const, uri, filename: '', section: null, existingPhotoId: undefined } : null;
-                            })
-                            .filter(Boolean) as { status: 'upgraded'; uri: string; filename: string; section: null; existingPhotoId: undefined }[];
-                          if (entries.length === 0) return;
-                          setDuplicateResults(entries);
-                          setDuplicateViewerIndex(0);
-                          setNotificationsVisible(false);
-                          setTimeout(() => setDuplicateViewerVisible(true), 400);
-                        }}>
-                          <Text style={styles.notifViewDupsText}>View photos</Text>
+                    <Swipeable
+                      key={n.id}
+                      renderRightActions={() => (
+                        <TouchableOpacity
+                          style={{ backgroundColor: '#E53E3E', justifyContent: 'center', alignItems: 'center', width: 80, borderRadius: 12, marginBottom: 10, marginRight: 16 }}
+                          onPress={async () => {
+                            if (userMobile) await deleteServerNotification(userMobile, n.id, slug);
+                            setServerNotifications(prev => prev.filter(x => x.id !== n.id));
+                          }}
+                        >
+                          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Delete</Text>
                         </TouchableOpacity>
                       )}
-                    </View>
+                      onSwipeableOpen={async (direction) => {
+                        if (direction === 'right') {
+                          if (userMobile) await deleteServerNotification(userMobile, n.id, slug);
+                          setServerNotifications(prev => prev.filter(x => x.id !== n.id));
+                        }
+                      }}
+                    >
+                      <View style={{ backgroundColor: '#1C1C1C', borderRadius: 12, marginHorizontal: 16, marginBottom: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#F5C842' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                          <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 4, flex: 1 }}>{n.message}</Text>
+                          <TouchableOpacity onPress={async () => {
+                            if (userMobile) await deleteServerNotification(userMobile, n.id, slug);
+                            setServerNotifications(prev => prev.filter(x => x.id !== n.id));
+                          }} style={{ marginLeft: 8, paddingLeft: 16 }}>
+                            <Text style={styles.skippedClose}>×</Text>
+                          </TouchableOpacity>
+                        </View>
+                        <Text style={{ color: '#888780', fontSize: 12, marginBottom: n.photo_id ? 10 : 0 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
+                        {((n.photo_ids && n.photo_ids.length > 0) || n.photo_id) && (
+                          <TouchableOpacity onPress={async () => {
+                            const ids = (n.photo_ids && n.photo_ids.length > 0) ? n.photo_ids : [n.photo_id!];
+                            const result = await getPhotoUrls(slug, ids);
+                            const urlMap = result.urls ?? {};
+                            const entries = ids
+                              .map(id => {
+                                const urls = urlMap[id];
+                                const uri = urls?.displayUrl ?? urls?.thumbUrl ?? urls?.url ?? null;
+                                return uri ? { status: 'upgraded' as const, uri, filename: '', section: null, existingPhotoId: undefined } : null;
+                              })
+                              .filter(Boolean) as { status: 'upgraded'; uri: string; filename: string; section: null; existingPhotoId: undefined }[];
+                            if (entries.length === 0) return;
+                            setDuplicateResults(entries);
+                            setDuplicateViewerIndex(0);
+                            setNotificationsVisible(false);
+                            setTimeout(() => setDuplicateViewerVisible(true), 400);
+                          }}>
+                            <Text style={styles.notifViewDupsText}>View photos</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    </Swipeable>
                   ))}
                   {notifications.length > 0 && (
                     <Text style={{ color: '#888780', fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase', marginHorizontal: 16, marginBottom: 8, marginTop: 4 }}>Upload History</Text>
@@ -2577,6 +2680,27 @@ export default function EventScreen() {
                 const hasDups = item.duplicateData.length > 0;
                 const hasFailed = (item.failedCount ?? 0) > 0 && (item.failedData?.length ?? 0) > 0;
                 return (
+                  <Swipeable
+                    renderRightActions={() => (
+                      <TouchableOpacity
+                        style={{ backgroundColor: '#E53E3E', justifyContent: 'center', alignItems: 'center', width: 80, borderRadius: 12, marginLeft: 8 }}
+                        onPress={async () => {
+                          await deleteUploadNotification(slug, item.id);
+                          const updated = await getUploadNotifications(slug);
+                          setNotifications(updated);
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Delete</Text>
+                      </TouchableOpacity>
+                    )}
+                    onSwipeableOpen={async (direction) => {
+                      if (direction === 'right') {
+                        await deleteUploadNotification(slug, item.id);
+                        const updated = await getUploadNotifications(slug);
+                        setNotifications(updated);
+                      }
+                    }}
+                  >
                   <View style={styles.notifCard}>
                     <View style={styles.notifCardHeader}>
                       <View style={{ flex: 1 }}>
@@ -2641,11 +2765,13 @@ export default function EventScreen() {
                       )}
                     </View>
                   </View>
+                  </Swipeable>
                 );
               }}
             />
           )}
         </View>
+        </GestureHandlerRootView>
       </Modal>
 
       <PermissionPrimingModal

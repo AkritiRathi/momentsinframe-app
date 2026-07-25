@@ -121,7 +121,7 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, onToggleSort }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -130,10 +130,16 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   onGroupToggle: (photos: Photo[], on: boolean) => void;
   isCoadmin?: boolean;
   isAdmin?: boolean;
+  sortOrder?: 'asc' | 'desc';
+  onToggleSort?: () => void;
 }) {
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
   const allSelected = items.length > 0 && items.every(p => selected.has(p.id));
+  const sortLabel = sortOrder === 'desc' ? '↓ Newest first' : '↑ Oldest first';
+  const subText = isMain
+    ? `(sorted by date taken · ${sortOrder === 'desc' ? 'newest first' : 'oldest first'})`
+    : '(no date info — sorted by upload time)';
 
   return (
     <View style={styles.sectionBlock}>
@@ -141,10 +147,13 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
         <View style={styles.sectionTitleRow}>
           <Text style={styles.sectionTitle}>{label}</Text>
           <Text style={styles.sectionCount}>{items.length}</Text>
+          {isMain && onToggleSort && (
+            <TouchableOpacity onPress={onToggleSort} style={styles.sortToggleBtn}>
+              <Text style={styles.sortToggleText}>{sortLabel}</Text>
+            </TouchableOpacity>
+          )}
         </View>
-        <Text style={styles.sectionSub}>
-          {isMain ? '(sorted by date taken · oldest first)' : '(no date info — sorted by upload time)'}
-        </Text>
+        <Text style={styles.sectionSub}>{subText}</Text>
         {(selectMode || deleteMode) && (
           <View style={styles.sectionSelectRow}>
             <TouchableOpacity onPress={() => onGroupToggle(items, !allSelected)}>
@@ -412,6 +421,7 @@ export default function EventScreen() {
   const [selectMode, setSelectMode] = useState(false);
   const [deleteMode, setDeleteMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
   const [selectBarSticky, setSelectBarSticky] = useState(false);
   const mainHeaderY = useRef<number | null>(null);
@@ -1654,8 +1664,11 @@ export default function EventScreen() {
       ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone)
       : otherPhotos;
 
-    const mainPhotos = deleteMode ? deleteFilteredPhotos : photos;
-    const otherList = deleteMode ? deleteFilteredOther : otherPhotos;
+    const baseMain = deleteMode ? deleteFilteredPhotos : photos;
+    const baseOther = deleteMode ? deleteFilteredOther : otherPhotos;
+
+    const mainPhotos = sortOrder === 'desc' ? [...baseMain].reverse() : baseMain;
+    const otherList = sortOrder === 'desc' ? [...baseOther].reverse() : baseOther;
 
     if (mainPhotos.length > 0) {
       items.push({ type: 'section_header', section: 'main', key: 'header_main' });
@@ -1680,7 +1693,7 @@ export default function EventScreen() {
     }
 
     return { listData: items, stickyIndices: sticky };
-  }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin]);
+  }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, sortOrder]);
 
   useEffect(() => {
     listDataRef.current = listData;
@@ -1940,6 +1953,8 @@ export default function EventScreen() {
               onGroupToggle={selectGroup}
               isCoadmin={isCoadmin}
               isAdmin={isAdmin}
+              sortOrder={sortOrder}
+              onToggleSort={() => setSortOrder(o => o === 'asc' ? 'desc' : 'asc')}
             />
           </View>
         );
@@ -2341,6 +2356,8 @@ contentContainerStyle={{ paddingBottom: 48 }}
               onGroupToggle={selectGroup}
               isCoadmin={isCoadmin}
               isAdmin={isAdmin}
+              sortOrder={sortOrder}
+              onToggleSort={() => setSortOrder(o => o === 'asc' ? 'desc' : 'asc')}
             />
           </View>
         )}
@@ -2818,6 +2835,8 @@ const styles = StyleSheet.create({
   sectionTitle: { ...Typography.sectionHeading, color: Colors.white },
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },
+  sortToggleBtn: { marginLeft: 'auto', borderWidth: 1, borderColor: '#444', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 3 },
+  sortToggleText: { fontSize: 12, color: '#aaa' },
   sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
   sectionSelectRow: { marginTop: 6, gap: 6 },
   deleteNote: { fontSize: 12, color: '#888', fontStyle: 'italic', marginTop: 2 },

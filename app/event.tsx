@@ -2678,8 +2678,10 @@ export default function EventScreen() {
           pendingAfterNotifPriming.current?.();
           pendingAfterNotifPriming.current = null;
         }}
-        onDismiss={() => {
+        onDismiss={async () => {
           setNotifPrimingVisible(false);
+          const phone = userMobile ?? params.adminPhone ?? null;
+          if (phone) await markPrimingShown('notifications', phone);
           pendingAfterNotifPriming.current = null;
         }}
       />

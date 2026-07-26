@@ -899,7 +899,7 @@ export default function EventScreen() {
       const shouldUpload = await new Promise<boolean>(resolve =>
         showAlert(
           'Start upload?',
-          `Uploading ${assets.length} photo${assets.length !== 1 ? 's' : ''}. ${Platform.OS === 'ios' ? 'Keep the app open while uploading.' : 'You can close the app while uploading.'}`,
+          `Uploading ${assets.length} photo${assets.length !== 1 ? 's' : ''}. Keep the app open while uploading.`,
           [
             { text: 'Start Upload', onPress: () => resolve(true) },
             { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
@@ -1901,7 +1901,7 @@ export default function EventScreen() {
                 }]} />
               </View>
               <Text style={styles.uploadOverlayPct}>
-                {bgUploadProgress.total > 0 ? Math.round((bgUploadProgress.current / bgUploadProgress.total) * 100) : 0}% complete — {Platform.OS === 'ios' ? 'keep the app open' : 'you can close the app'}
+                {bgUploadProgress.total > 0 ? Math.round((bgUploadProgress.current / bgUploadProgress.total) * 100) : 0}% complete — keep the app open
               </Text>
             </View>
           );
@@ -1911,7 +1911,7 @@ export default function EventScreen() {
             <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode) && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode || deleteMode}>
               <Text style={styles.uploadBtnText}>Upload Photos</Text>
             </TouchableOpacity>
-            <Text style={styles.uploadHint}>Max 40 photos per batch.{'\n'}{Platform.OS === 'ios' ? 'Keep the app open while uploading.' : 'You can close the app while uploading.'}</Text>
+            <Text style={styles.uploadHint}>Max 40 photos per batch.{'\n'}Keep the app open while uploading.</Text>
             {uploadSummary && (
               <Text style={styles.uploadSummary}>{uploadSummary}</Text>
             )}

@@ -2419,9 +2419,9 @@ contentContainerStyle={{ paddingBottom: 48 }}
 
       {/* Sort panel */}
       <Modal visible={sortPanelVisible} transparent animationType="fade" onRequestClose={() => setSortPanelVisible(false)}>
-        <View style={styles.sortPanelOverlay}>
-          <View style={styles.sortPanelSheet}>
-            <Text style={styles.sortPanelTitle}>Sort</Text>
+        <View style={alertStyles.overlay}>
+          <View style={alertStyles.card}>
+            <Text style={alertStyles.title}>Sort</Text>
             {(['asc', 'desc'] as const).map(mode => (
               <TouchableOpacity key={mode} style={styles.sortPanelOption} onPress={() => setDraftSortOrder(mode)}>
                 <View style={[styles.sortRadio, draftSortOrder === mode && styles.sortRadioSelected]}>
@@ -2437,18 +2437,18 @@ contentContainerStyle={{ paddingBottom: 48 }}
               </View>
               <Text style={styles.sortPanelOptionText}>Display by date</Text>
             </TouchableOpacity>
-            <View style={styles.sortPanelButtons}>
-              <TouchableOpacity style={[styles.sortPanelBtn, styles.sortPanelBtnCancel]} onPress={() => setSortPanelVisible(false)}>
-                <Text style={styles.sortPanelBtnCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.sortPanelBtn, styles.sortPanelBtnDone]} onPress={() => {
+            <View style={[alertStyles.buttons, { marginTop: 16 }]}>
+              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnPrimary]} onPress={() => {
                 setSortOrder(draftSortOrder);
                 setGroupByDate(draftGroupByDate);
                 SecureStore.setItemAsync('gallery_sort_order', draftSortOrder);
                 SecureStore.setItemAsync('gallery_group_by_date', String(draftGroupByDate));
                 setSortPanelVisible(false);
               }}>
-                <Text style={styles.sortPanelBtnDoneText}>Done</Text>
+                <Text style={[alertStyles.btnText, alertStyles.btnPrimaryText]}>Done</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnCancel]} onPress={() => setSortPanelVisible(false)}>
+                <Text style={[alertStyles.btnText, alertStyles.btnCancelText]}>Cancel</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -2928,31 +2928,22 @@ const styles = StyleSheet.create({
   sortToggleBtn: {},
   sortToggleText: { fontSize: 14, color: '#888' },
 
-  dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: Colors.background, gap: 10 },
-  dateHeaderText: { fontSize: 15, fontWeight: '700', color: Colors.text },
+  dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#1c1c1e', borderTopWidth: 1, borderTopColor: '#333', gap: 10 },
+  dateHeaderText: { fontSize: 15, fontWeight: '700', color: Colors.white },
   dateHeaderCircle: { padding: 2 },
   dateCircleInner: { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, borderColor: '#aaa', alignItems: 'center', justifyContent: 'center' },
   dateCircleSelected: { backgroundColor: Colors.accent, borderColor: Colors.accent },
   dateCircleCheck: { fontSize: 13, color: '#fff', fontWeight: '700' },
 
-  sortPanelOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
-  sortPanelSheet: { backgroundColor: Colors.card, borderRadius: 16, paddingTop: 20, paddingBottom: 16, paddingHorizontal: 20, width: '100%' },
-  sortPanelTitle: { fontSize: 16, fontWeight: '700', color: Colors.text, marginBottom: 12 },
   sortPanelOption: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
-  sortPanelOptionText: { fontSize: 15, color: Colors.text },
-  sortPanelDivider: { height: 1, backgroundColor: Colors.border, marginVertical: 4 },
+  sortPanelOptionText: { fontSize: 15, color: Colors.white },
+  sortPanelDivider: { height: 1, backgroundColor: '#333', marginVertical: 4 },
   sortRadio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#aaa', alignItems: 'center', justifyContent: 'center' },
   sortRadioSelected: { borderColor: Colors.accent },
   sortRadioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.accent },
   sortCheckbox: { width: 20, height: 20, borderRadius: 4, borderWidth: 2, borderColor: '#aaa', alignItems: 'center', justifyContent: 'center' },
   sortCheckboxSelected: { backgroundColor: Colors.accent, borderColor: Colors.accent },
   sortCheckboxTick: { fontSize: 12, color: '#fff', fontWeight: '700' },
-  sortPanelButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 16 },
-  sortPanelBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8 },
-  sortPanelBtnCancel: { backgroundColor: Colors.border },
-  sortPanelBtnCancelText: { fontSize: 14, color: Colors.text, fontWeight: '600' },
-  sortPanelBtnDone: { backgroundColor: Colors.accent },
-  sortPanelBtnDoneText: { fontSize: 14, color: '#000', fontWeight: '700' },
   sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
   sectionSelectRow: { marginTop: 6, gap: 6 },
   deleteNote: { fontSize: 12, color: '#888', fontStyle: 'italic', marginTop: 2 },

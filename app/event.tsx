@@ -148,9 +148,12 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
           <Text style={styles.sectionTitle}>{label}</Text>
           <Text style={styles.sectionCount}>{items.length}</Text>
           {isMain && onToggleSort && (
-            <TouchableOpacity onPress={onToggleSort} style={styles.sortToggleBtn}>
-              <Text style={styles.sortToggleText}>{sortLabel}</Text>
-            </TouchableOpacity>
+            <>
+              <Text style={styles.sectionCount}>·</Text>
+              <TouchableOpacity onPress={onToggleSort} style={styles.sortToggleBtn}>
+                <Text style={styles.sortToggleText}>{sortLabel}</Text>
+              </TouchableOpacity>
+            </>
           )}
         </View>
         <Text style={styles.sectionSub}>{subText}</Text>
@@ -2835,7 +2838,7 @@ const styles = StyleSheet.create({
   sectionTitle: { ...Typography.sectionHeading, color: Colors.white },
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },
-  sortToggleBtn: { marginLeft: 'auto' },
+  sortToggleBtn: {},
   sortToggleText: { fontSize: 12, color: '#888' },
   sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
   sectionSelectRow: { marginTop: 6, gap: 6 },

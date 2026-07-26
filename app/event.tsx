@@ -71,6 +71,7 @@ type ListItem =
   | { type: 'select_photos_btn'; key: string }
   | { type: 'select_bar'; key: string }
   | { type: 'section_header'; section: 'main' | 'other'; key: string }
+  | { type: 'date_header'; date: string; photos: Photo[]; section: 'main' | 'other'; key: string }
   | { type: 'photo_row'; photos: Photo[]; section: 'main' | 'other'; startIndex: number; key: string }
   | { type: 'empty'; key: string }
   | { type: 'delete_empty'; key: string };
@@ -121,7 +122,7 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, onToggleSort }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, displayMode, onOpenSortPanel }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -130,15 +131,16 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   onGroupToggle: (photos: Photo[], on: boolean) => void;
   isCoadmin?: boolean;
   isAdmin?: boolean;
-  sortOrder?: 'asc' | 'desc';
-  onToggleSort?: () => void;
+  displayMode?: 'asc' | 'desc' | 'date';
+  onOpenSortPanel?: () => void;
 }) {
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
   const allSelected = items.length > 0 && items.every(p => selected.has(p.id));
-  const sortLabel = sortOrder === 'asc' ? '↓ Newest first' : '↑ Oldest first';
   const subText = isMain
-    ? `(sorted by date taken · ${sortOrder === 'desc' ? 'newest first' : 'oldest first'})`
+    ? displayMode === 'date'
+      ? '(grouped by date taken)'
+      : `(sorted by date taken · ${displayMode === 'desc' ? 'newest first' : 'oldest first'})`
     : '(no date info — sorted by upload time)';
 
   return (
@@ -147,13 +149,10 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
         <View style={styles.sectionTitleRow}>
           <Text style={styles.sectionTitle}>{label}</Text>
           <Text style={styles.sectionCount}>{items.length}</Text>
-          {isMain && onToggleSort && (
-            <>
-              <Text style={styles.sectionCount}>·</Text>
-              <TouchableOpacity onPress={onToggleSort} style={styles.sortToggleBtn}>
-                <Text style={styles.sortToggleText}>{sortLabel}</Text>
-              </TouchableOpacity>
-            </>
+          {isMain && onOpenSortPanel && (
+            <TouchableOpacity onPress={onOpenSortPanel} style={styles.sortToggleBtn}>
+              <Text style={styles.sortToggleText}>Sort ▾</Text>
+            </TouchableOpacity>
           )}
         </View>
         <Text style={styles.sectionSub}>{subText}</Text>
@@ -424,7 +423,8 @@ export default function EventScreen() {
   const [selectMode, setSelectMode] = useState(false);
   const [deleteMode, setDeleteMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [displayMode, setDisplayMode] = useState<'asc' | 'desc' | 'date'>('asc');
+  const [sortPanelVisible, setSortPanelVisible] = useState(false);
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
   const [selectBarSticky, setSelectBarSticky] = useState(false);
   const mainHeaderY = useRef<number | null>(null);
@@ -1670,13 +1670,34 @@ export default function EventScreen() {
     const baseMain = deleteMode ? deleteFilteredPhotos : photos;
     const baseOther = deleteMode ? deleteFilteredOther : otherPhotos;
 
-    const mainPhotos = sortOrder === 'desc' ? [...baseMain].reverse() : baseMain;
-    const otherList = sortOrder === 'desc' ? [...baseOther].reverse() : baseOther;
+    const mainPhotos = displayMode === 'desc' ? [...baseMain].reverse() : baseMain;
+    const otherList = displayMode === 'desc' ? [...baseOther].reverse() : baseOther;
+
+    function formatDateLabel(takenAt: string): string {
+      return new Date(takenAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
+    }
 
     if (mainPhotos.length > 0) {
       items.push({ type: 'section_header', section: 'main', key: 'header_main' });
-      for (let i = 0; i < mainPhotos.length; i += 3) {
-        items.push({ type: 'photo_row', photos: mainPhotos.slice(i, i + 3), section: 'main', startIndex: i, key: `row_main_${i}` });
+      if (displayMode === 'date') {
+        // Group by date, newest date first
+        const groups: { date: string; photos: Photo[] }[] = [];
+        for (const p of [...baseMain].reverse()) {
+          const dateLabel = formatDateLabel(p.taken_at);
+          const last = groups[groups.length - 1];
+          if (last && last.date === dateLabel) last.photos.push(p);
+          else groups.push({ date: dateLabel, photos: [p] });
+        }
+        for (const group of groups) {
+          items.push({ type: 'date_header', date: group.date, photos: group.photos, section: 'main', key: `date_main_${group.date}` });
+          for (let i = 0; i < group.photos.length; i += 3) {
+            items.push({ type: 'photo_row', photos: group.photos.slice(i, i + 3), section: 'main', startIndex: i, key: `row_main_date_${group.date}_${i}` });
+          }
+        }
+      } else {
+        for (let i = 0; i < mainPhotos.length; i += 3) {
+          items.push({ type: 'photo_row', photos: mainPhotos.slice(i, i + 3), section: 'main', startIndex: i, key: `row_main_${i}` });
+        }
       }
     }
 
@@ -1696,7 +1717,7 @@ export default function EventScreen() {
     }
 
     return { listData: items, stickyIndices: sticky };
-  }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, sortOrder]);
+  }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, displayMode]);
 
   useEffect(() => {
     listDataRef.current = listData;
@@ -1956,11 +1977,27 @@ export default function EventScreen() {
               onGroupToggle={selectGroup}
               isCoadmin={isCoadmin}
               isAdmin={isAdmin}
-              sortOrder={sortOrder}
-              onToggleSort={() => setSortOrder(o => o === 'asc' ? 'desc' : 'asc')}
+              displayMode={displayMode}
+              onOpenSortPanel={() => setSortPanelVisible(true)}
             />
           </View>
         );
+
+      case 'date_header': {
+        const allDateSelected = item.photos.every(p => selected.has(p.id));
+        return (
+          <View style={styles.dateHeaderRow}>
+            <Text style={styles.dateHeaderText}>{item.date}</Text>
+            {(selectMode || deleteMode) && (
+              <TouchableOpacity onPress={() => selectGroup(item.photos, !allDateSelected)} style={styles.dateHeaderCircle}>
+                <View style={[styles.dateCircleInner, allDateSelected && styles.dateCircleSelected]}>
+                  {allDateSelected && <Text style={styles.dateCircleCheck}>✓</Text>}
+                </View>
+              </TouchableOpacity>
+            )}
+          </View>
+        );
+      }
 
       case 'photo_row':
         return (
@@ -2359,14 +2396,38 @@ contentContainerStyle={{ paddingBottom: 48 }}
               onGroupToggle={selectGroup}
               isCoadmin={isCoadmin}
               isAdmin={isAdmin}
-              sortOrder={sortOrder}
-              onToggleSort={() => setSortOrder(o => o === 'asc' ? 'desc' : 'asc')}
+              displayMode={displayMode}
+              onOpenSortPanel={() => setSortPanelVisible(true)}
             />
           </View>
         )}
       </View>
 
       {alertOverlay}
+
+      {/* Sort panel */}
+      <Modal visible={sortPanelVisible} transparent animationType="slide" onRequestClose={() => setSortPanelVisible(false)}>
+        <TouchableOpacity style={styles.sortPanelOverlay} activeOpacity={1} onPress={() => setSortPanelVisible(false)}>
+          <View style={styles.sortPanelSheet}>
+            <Text style={styles.sortPanelTitle}>Sort</Text>
+            {(['asc', 'desc'] as const).map(mode => (
+              <TouchableOpacity key={mode} style={styles.sortPanelOption} onPress={() => { setDisplayMode(mode); setSortPanelVisible(false); }}>
+                <Text style={styles.sortPanelOptionText}>{mode === 'asc' ? 'Oldest first' : 'Newest first'}</Text>
+                <View style={[styles.sortRadio, displayMode === mode && styles.sortRadioSelected]}>
+                  {displayMode === mode && <View style={styles.sortRadioDot} />}
+                </View>
+              </TouchableOpacity>
+            ))}
+            <View style={styles.sortPanelDivider} />
+            <TouchableOpacity style={styles.sortPanelOption} onPress={() => { setDisplayMode('date'); setSortPanelVisible(false); }}>
+              <Text style={styles.sortPanelOptionText}>Display by date</Text>
+              <View style={[styles.sortRadio, displayMode === 'date' && styles.sortRadioSelected]}>
+                {displayMode === 'date' && <View style={styles.sortRadioDot} />}
+              </View>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Folder name setup — first download only */}
       <Modal visible={folderSetupVisible} transparent animationType="fade" onRequestClose={() => {
@@ -2840,6 +2901,23 @@ const styles = StyleSheet.create({
   sectionSub: { fontSize: 13, color: '#666' },
   sortToggleBtn: {},
   sortToggleText: { fontSize: 12, color: '#888' },
+
+  dateHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: Colors.background },
+  dateHeaderText: { fontSize: 13, fontWeight: '600', color: Colors.textMuted },
+  dateHeaderCircle: { padding: 4 },
+  dateCircleInner: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: '#aaa', alignItems: 'center', justifyContent: 'center' },
+  dateCircleSelected: { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  dateCircleCheck: { fontSize: 12, color: '#fff', fontWeight: '700' },
+
+  sortPanelOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
+  sortPanelSheet: { backgroundColor: Colors.card, borderTopLeftRadius: 16, borderTopRightRadius: 16, paddingTop: 16, paddingBottom: 32, paddingHorizontal: 16 },
+  sortPanelTitle: { fontSize: 15, fontWeight: '700', color: Colors.text, marginBottom: 12 },
+  sortPanelOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 },
+  sortPanelOptionText: { fontSize: 15, color: Colors.text },
+  sortPanelDivider: { height: 1, backgroundColor: Colors.border, marginVertical: 4 },
+  sortRadio: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: '#aaa', alignItems: 'center', justifyContent: 'center' },
+  sortRadioSelected: { borderColor: Colors.accent },
+  sortRadioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: Colors.accent },
   sectionSelectLink: { fontSize: 13, color: Colors.accent, textDecorationLine: 'underline' },
   sectionSelectRow: { marginTop: 6, gap: 6 },
   deleteNote: { fontSize: 12, color: '#888', fontStyle: 'italic', marginTop: 2 },

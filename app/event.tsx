@@ -2928,7 +2928,7 @@ const styles = StyleSheet.create({
   sortToggleBtn: {},
   sortToggleText: { fontSize: 15, color: '#888' },
 
-  dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#1c1c1e', marginTop: 6, gap: 10 },
+  dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 18, paddingBottom: 8, backgroundColor: Colors.background, gap: 10 },
   dateHeaderText: { fontSize: 15, fontWeight: '700', color: Colors.white },
   dateHeaderCircle: { padding: 2 },
   dateCircleInner: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: '#aaa', alignItems: 'center', justifyContent: 'center' },

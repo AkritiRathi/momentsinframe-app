@@ -2926,14 +2926,14 @@ const styles = StyleSheet.create({
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },
   sortToggleBtn: {},
-  sortToggleText: { fontSize: 14, color: '#888' },
+  sortToggleText: { fontSize: 15, color: '#888' },
 
-  dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8, backgroundColor: '#1c1c1e', borderTopWidth: 1, borderTopColor: '#333', gap: 10 },
+  dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#1c1c1e', marginTop: 6, gap: 10 },
   dateHeaderText: { fontSize: 15, fontWeight: '700', color: Colors.white },
   dateHeaderCircle: { padding: 2 },
-  dateCircleInner: { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, borderColor: '#aaa', alignItems: 'center', justifyContent: 'center' },
+  dateCircleInner: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: '#aaa', alignItems: 'center', justifyContent: 'center' },
   dateCircleSelected: { backgroundColor: Colors.accent, borderColor: Colors.accent },
-  dateCircleCheck: { fontSize: 13, color: '#fff', fontWeight: '700' },
+  dateCircleCheck: { fontSize: 11, color: '#fff', fontWeight: '700' },
 
   sortPanelOption: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
   sortPanelOptionText: { fontSize: 15, color: Colors.white },

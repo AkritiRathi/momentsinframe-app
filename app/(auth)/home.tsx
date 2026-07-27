@@ -14,6 +14,7 @@ import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
 import { checkWhitelist, checkUserStatus, deleteAccount, organiserLogin, logoutUser, listEvents } from '../../lib/api';
 import { getOrganiserPassword } from '../../lib/auth';
+import OfflineBanner from '../../components/OfflineBanner';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -156,6 +157,7 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <OfflineBanner />
 
       {/* Password verification modal for organiser delete */}
       <Modal

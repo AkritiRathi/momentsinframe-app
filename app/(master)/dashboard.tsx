@@ -11,6 +11,7 @@ import { listEvents, organiserChangePassword, joinEvent } from '../../lib/api';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
+import OfflineBanner from '../../components/OfflineBanner';
 
 type Event = {
   id: string;
@@ -210,6 +211,7 @@ export default function DashboardScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <OfflineBanner />
       <View style={styles.header}>
         <View>
           <Text style={styles.headerTitle}>My Events</Text>

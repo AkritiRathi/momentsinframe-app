@@ -3,6 +3,7 @@ import {
   Modal, ActivityIndicator, Dimensions, TextInput,
   Platform, BackHandler, AppState, RefreshControl, Alert, InteractionManager,
 } from 'react-native';
+import { Image as ExpoImage } from 'expo-image';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
@@ -38,6 +39,7 @@ import {
 import { setupNotifications, showUploadCompleteNotification, showDownloadCompleteNotification } from '../lib/notifications';
 import { hasPrimingBeenShown, markPrimingShown, showPermissionDeniedAlert, shouldShowDeniedAlert } from '../lib/priming';
 import PermissionPrimingModal from '../components/PermissionPrimingModal';
+import OfflineBanner from '../components/OfflineBanner';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { useAlert, alertStyles } from '../lib/useAlert';
@@ -862,12 +864,14 @@ export default function EventScreen() {
       setSelectBarSticky(newSelectBarSticky);
     }
 
-    let next: 'main' | 'other' | null = null;
-    if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
-    else if (mainHeaderY.current !== null && y >= mainHeaderY.current) next = 'main';
-    if (stickySectionRef.current !== next) {
-      stickySectionRef.current = next;
-      setStickySection(next);
+    if (Platform.OS === 'ios') {
+      let next: 'main' | 'other' | null = null;
+      if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
+      else if (mainHeaderY.current !== null && y >= mainHeaderY.current) next = 'main';
+      if (stickySectionRef.current !== next) {
+        stickySectionRef.current = next;
+        setStickySection(next);
+      }
     }
   }, [selectMode, deleteMode]);
 
@@ -1753,6 +1757,11 @@ export default function EventScreen() {
     return { listData: items, stickyIndices: sticky };
   }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, sortOrder, groupByDate]);
 
+  const flatListExtraData = useMemo(
+    () => ({ selected, deleteMode, selectMode }),
+    [selected, deleteMode, selectMode]
+  );
+
   useEffect(() => {
     listDataRef.current = listData;
     updateSectionPositions();
@@ -1830,7 +1839,7 @@ export default function EventScreen() {
         activeOpacity={0.85}
       >
         {urls?.thumbUrl
-          ? <Image source={{ uri: urls.thumbUrl }} style={styles.thumbImage} />
+          ? <ExpoImage source={{ uri: urls.thumbUrl }} style={styles.thumbImage} contentFit="cover" />
           : <View style={styles.thumbSkeleton} />
         }
         {isNew && !selectMode && !deleteMode && (
@@ -2097,8 +2106,7 @@ export default function EventScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-
-
+      <OfflineBanner />
 
       {/* Download progress overlay */}
       {downloadingBulk && (
@@ -2397,9 +2405,10 @@ export default function EventScreen() {
             data={listData}
             keyExtractor={item => item.key}
             renderItem={renderItem}
-            extraData={[selected, stickySection, selectBarSticky, deleteMode, selectMode]}
+            extraData={flatListExtraData}
             onScroll={handleScroll}
             scrollEventThrottle={16}
+            stickyHeaderIndices={Platform.OS === 'android' ? stickyIndices : undefined}
 contentContainerStyle={{ paddingBottom: 48 }}
             removeClippedSubviews={false}
             refreshControl={
@@ -2423,7 +2432,7 @@ contentContainerStyle={{ paddingBottom: 48 }}
             {renderSelectBar()}
           </View>
         )}
-        {stickySection && (
+        {Platform.OS === 'ios' && stickySection && (
           <View style={[styles.stickySectionHeader, {
             top: (selectMode || deleteMode) && selectBarSticky ? (accumulatedHeights.current['select_bar'] ?? 0) : 0,
           }]}>

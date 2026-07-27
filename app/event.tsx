@@ -1713,8 +1713,25 @@ export default function EventScreen() {
 
     if (otherList.length > 0) {
       items.push({ type: 'section_header', section: 'other', key: 'header_other' });
-      for (let i = 0; i < otherList.length; i += 3) {
-        items.push({ type: 'photo_row', photos: otherList.slice(i, i + 3), section: 'other', startIndex: i, key: `row_other_${i}` });
+      if (groupByDate) {
+        const sourceForGroups = sortOrder === 'desc' ? [...baseOther].reverse() : [...baseOther];
+        const groups: { date: string; photos: Photo[] }[] = [];
+        for (const p of sourceForGroups) {
+          const dateLabel = formatDateLabel(p.taken_at);
+          const last = groups[groups.length - 1];
+          if (last && last.date === dateLabel) last.photos.push(p);
+          else groups.push({ date: dateLabel, photos: [p] });
+        }
+        for (const group of groups) {
+          items.push({ type: 'date_header', date: group.date, photos: group.photos, section: 'other', key: `date_other_${group.date}` });
+          for (let i = 0; i < group.photos.length; i += 3) {
+            items.push({ type: 'photo_row', photos: group.photos.slice(i, i + 3), section: 'other', startIndex: i, key: `row_other_date_${group.date}_${i}` });
+          }
+        }
+      } else {
+        for (let i = 0; i < otherList.length; i += 3) {
+          items.push({ type: 'photo_row', photos: otherList.slice(i, i + 3), section: 'other', startIndex: i, key: `row_other_${i}` });
+        }
       }
     }
 

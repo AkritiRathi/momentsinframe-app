@@ -2696,8 +2696,10 @@ contentContainerStyle={{ paddingBottom: 48 }}
                         {((n.photo_ids && n.photo_ids.length > 0) || n.photo_id) && (
                           <TouchableOpacity onPress={async () => {
                             const ids = (n.photo_ids && n.photo_ids.length > 0) ? n.photo_ids : [n.photo_id!];
-                            const result = await getPhotoUrls(slug, ids);
-                            const urlMap = result.urls ?? {};
+                            const batches = [];
+                            for (let i = 0; i < ids.length; i += 20) batches.push(ids.slice(i, i + 20));
+                            const results = await Promise.all(batches.map(batch => getPhotoUrls(slug, batch)));
+                            const urlMap = Object.assign({}, ...results.map(r => r.urls ?? {}));
                             const entries = ids
                               .map(id => {
                                 const urls = urlMap[id];

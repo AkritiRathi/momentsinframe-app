@@ -1812,6 +1812,14 @@ export default function EventScreen() {
             setLightboxVisible(true);
           }
         }}
+        onLongPress={() => {
+          if (!selectMode && !deleteMode) {
+            setSelectMode(true);
+            setDeleteMode(false);
+            toggleSelect(photo.id);
+          }
+        }}
+        delayLongPress={350}
         activeOpacity={0.85}
       >
         {urls?.thumbUrl
@@ -2379,11 +2387,10 @@ export default function EventScreen() {
         <GestureDetector gesture={dragGesture}>
           <FlatList
             ref={flatListRef}
-            key={selectMode ? 'select' : 'normal'}
             data={listData}
             keyExtractor={item => item.key}
             renderItem={renderItem}
-            extraData={[selected, stickySection, selectBarSticky, deleteMode]}
+            extraData={[selected, stickySection, selectBarSticky, deleteMode, selectMode]}
             onScroll={handleScroll}
             scrollEventThrottle={16}
 contentContainerStyle={{ paddingBottom: 48 }}

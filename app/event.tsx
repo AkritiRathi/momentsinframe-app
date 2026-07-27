@@ -1722,7 +1722,7 @@ export default function EventScreen() {
       items.push({ type: 'empty', key: 'empty' });
     }
 
-    if (deleteMode && ((!isAdmin) || isCoadmin) && mainPhotos.length === 0 && otherList.length === 0 && totalPhotos > 0 && !loading) {
+    if (deleteMode && ((!isAdmin) || isCoadmin) && deleteFilteredPhotos.length === 0 && otherList.length === 0 && totalPhotos > 0 && !loading) {
       items.push({ type: 'delete_empty', key: 'delete_empty' });
     }
 

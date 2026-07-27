@@ -434,6 +434,8 @@ export default function EventScreen() {
   const [draftGroupByDate, setDraftGroupByDate] = useState(false);
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
   const [selectBarSticky, setSelectBarSticky] = useState(false);
+  const stickySectionRef = useRef<'main' | 'other' | null>(null);
+  const selectBarStickyRef = useRef(false);
   const mainHeaderY = useRef<number | null>(null);
   const otherHeaderY = useRef<number | null>(null);
   const selectBarYRef = useRef<number | null>(null);
@@ -852,16 +854,21 @@ export default function EventScreen() {
 
   const handleScroll = useCallback((e: any) => {
     scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
-    if (!selectMode && !deleteMode) return;
     const y = e.nativeEvent.contentOffset.y;
 
     const newSelectBarSticky = selectBarYRef.current !== null && y >= selectBarYRef.current;
-    setSelectBarSticky(prev => prev === newSelectBarSticky ? prev : newSelectBarSticky);
+    if (selectBarStickyRef.current !== newSelectBarSticky) {
+      selectBarStickyRef.current = newSelectBarSticky;
+      setSelectBarSticky(newSelectBarSticky);
+    }
 
     let next: 'main' | 'other' | null = null;
     if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
     else if (mainHeaderY.current !== null && y >= mainHeaderY.current) next = 'main';
-    setStickySection(prev => prev === next ? prev : next);
+    if (stickySectionRef.current !== next) {
+      stickySectionRef.current = next;
+      setStickySection(next);
+    }
   }, [selectMode, deleteMode]);
 
   async function handleUpload(source: 'camera' | 'gallery', retryAssets?: ImagePicker.ImagePickerAsset[]) {
@@ -2416,9 +2423,9 @@ contentContainerStyle={{ paddingBottom: 48 }}
             {renderSelectBar()}
           </View>
         )}
-        {(selectMode || deleteMode) && stickySection && (
+        {stickySection && (
           <View style={[styles.stickySectionHeader, {
-            top: selectBarSticky ? (accumulatedHeights.current['select_bar'] ?? 0) : 0,
+            top: (selectMode || deleteMode) && selectBarSticky ? (accumulatedHeights.current['select_bar'] ?? 0) : 0,
           }]}>
             <SectionHeader
               section={stickySection}

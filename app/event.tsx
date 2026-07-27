@@ -22,7 +22,7 @@ let PhotoSaverError: string = 'not attempted';
 try { PhotoSaver = require('photo-saver').default; PhotoSaverError = 'ok'; } catch (e: any) { PhotoSaverError = String(e?.message ?? e); }
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback, memo } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
   prepareZip, fetchServerNotifications, markServerNotificationsRead,
@@ -386,6 +386,48 @@ async function backgroundUploadTask(): Promise<void> {
 
   _bgCompleteCb?.(results, preSkipped);
 }
+
+type PhotoThumbProps = {
+  photoId: string;
+  photoIndex: number;
+  section: 'main' | 'other';
+  thumbUrl: string | null;
+  isSelected: boolean;
+  isNew: boolean;
+  selectMode: boolean;
+  deleteMode: boolean;
+  onPress: (photoId: string, index: number, section: 'main' | 'other') => void;
+  onLongPress: (photoId: string) => void;
+};
+
+const PhotoThumb = memo(function PhotoThumb({
+  photoId, photoIndex, section, thumbUrl, isSelected, isNew, selectMode, deleteMode, onPress, onLongPress,
+}: PhotoThumbProps) {
+  return (
+    <TouchableOpacity
+      style={styles.thumb}
+      onPress={() => onPress(photoId, photoIndex, section)}
+      onLongPress={() => onLongPress(photoId)}
+      delayLongPress={350}
+      activeOpacity={0.85}
+    >
+      {thumbUrl
+        ? <ExpoImage source={{ uri: thumbUrl }} style={styles.thumbImage} contentFit="cover" cachePolicy="memory-disk" recyclingKey={photoId} />
+        : <View style={styles.thumbSkeleton} />
+      }
+      {isNew && !selectMode && !deleteMode && (
+        <View style={styles.newBadge}>
+          <Text style={styles.newBadgeText}>New</Text>
+        </View>
+      )}
+      {(selectMode || deleteMode) && (
+        <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
+          {isSelected && <Text style={styles.checkboxTick}>✓</Text>}
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+});
 
 export default function EventScreen() {
   const router = useRouter();
@@ -830,6 +872,24 @@ export default function EventScreen() {
       return next;
     });
   }
+
+  const handleThumbPress = useCallback((photoId: string, index: number, section: 'main' | 'other') => {
+    if (selectMode || deleteMode) {
+      toggleSelect(photoId);
+    } else {
+      setLightboxIndex(index);
+      setLightboxSection(section);
+      setLightboxVisible(true);
+    }
+  }, [selectMode, deleteMode]);
+
+  const handleThumbLongPress = useCallback((photoId: string) => {
+    if (!selectMode && !deleteMode) {
+      setSelectMode(true);
+      setDeleteMode(false);
+      toggleSelect(photoId);
+    }
+  }, [selectMode, deleteMode]);
 
   function exitSelectMode() {
     setSelectMode(false);
@@ -1813,46 +1873,20 @@ export default function EventScreen() {
 
   function renderThumb(photo: Photo, index: number, section: 'main' | 'other') {
     const urls = photoUrls[photo.id];
-    const isSelected = selected.has(photo.id);
-    const isNew = newlyUploadedIds.has(photo.id);
     return (
-      <TouchableOpacity
+      <PhotoThumb
         key={photo.id}
-        style={styles.thumb}
-        onPress={() => {
-          if (selectMode || deleteMode) {
-            toggleSelect(photo.id);
-          } else {
-            setLightboxIndex(index);
-            setLightboxSection(section);
-            setLightboxVisible(true);
-          }
-        }}
-        onLongPress={() => {
-          if (!selectMode && !deleteMode) {
-            setSelectMode(true);
-            setDeleteMode(false);
-            toggleSelect(photo.id);
-          }
-        }}
-        delayLongPress={350}
-        activeOpacity={0.85}
-      >
-        {urls?.thumbUrl
-          ? <ExpoImage source={{ uri: urls.thumbUrl }} style={styles.thumbImage} contentFit="cover" />
-          : <View style={styles.thumbSkeleton} />
-        }
-        {isNew && !selectMode && !deleteMode && (
-          <View style={styles.newBadge}>
-            <Text style={styles.newBadgeText}>New</Text>
-          </View>
-        )}
-        {(selectMode || deleteMode) && (
-          <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
-            {isSelected && <Text style={styles.checkboxTick}>✓</Text>}
-          </View>
-        )}
-      </TouchableOpacity>
+        photoId={photo.id}
+        photoIndex={index}
+        section={section}
+        thumbUrl={urls?.thumbUrl ?? null}
+        isSelected={selected.has(photo.id)}
+        isNew={newlyUploadedIds.has(photo.id)}
+        selectMode={selectMode}
+        deleteMode={deleteMode}
+        onPress={handleThumbPress}
+        onLongPress={handleThumbLongPress}
+      />
     );
   }
 

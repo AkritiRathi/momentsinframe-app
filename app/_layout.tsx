@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import OfflineBanner from '../components/OfflineBanner';
 import * as SplashScreen from 'expo-splash-screen';
 import { getUserProfile } from '../lib/storage';
 import * as Updates from 'expo-updates';
@@ -140,6 +141,7 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <Slot />
+        <OfflineBanner />
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

@@ -39,7 +39,6 @@ import {
 import { setupNotifications, showUploadCompleteNotification, showDownloadCompleteNotification } from '../lib/notifications';
 import { hasPrimingBeenShown, markPrimingShown, showPermissionDeniedAlert, shouldShowDeniedAlert } from '../lib/priming';
 import PermissionPrimingModal from '../components/PermissionPrimingModal';
-import OfflineBanner from '../components/OfflineBanner';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { useAlert, alertStyles } from '../lib/useAlert';
@@ -2143,8 +2142,6 @@ export default function EventScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <OfflineBanner />
-
       {/* Download progress overlay */}
       {downloadingBulk && (
         <View style={styles.uploadOverlay}>

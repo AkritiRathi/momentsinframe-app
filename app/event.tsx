@@ -123,7 +123,7 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, onOpenSortPanel }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -134,7 +134,6 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   isAdmin?: boolean;
   sortOrder?: 'asc' | 'desc';
   groupByDate?: boolean;
-  onOpenSortPanel?: () => void;
 }) {
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
@@ -151,14 +150,6 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
         <View style={styles.sectionTitleRow}>
           <Text style={styles.sectionTitle}>{label}</Text>
           <Text style={styles.sectionCount}>{items.length}</Text>
-          {isMain && onOpenSortPanel && (
-            <>
-              <Text style={styles.sectionCount}> ·</Text>
-              <TouchableOpacity onPress={onOpenSortPanel} style={styles.sortToggleBtn}>
-                <Text style={styles.sortToggleText}>Sort ▾</Text>
-              </TouchableOpacity>
-            </>
-          )}
         </View>
         <Text style={styles.sectionSub}>{subText}</Text>
         {(selectMode || deleteMode) && (
@@ -473,6 +464,9 @@ export default function EventScreen() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [groupByDate, setGroupByDate] = useState(false);
   const [sortPanelVisible, setSortPanelVisible] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const menuBtnRef = useRef<any>(null);
+  const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
   const [draftSortOrder, setDraftSortOrder] = useState<'asc' | 'desc'>('asc');
   const [draftGroupByDate, setDraftGroupByDate] = useState(false);
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
@@ -1951,6 +1945,14 @@ export default function EventScreen() {
                   <Text style={styles.adminGearIcon}>🔔</Text>
                   {hasUnread && <View style={styles.notifDot} />}
                 </TouchableOpacity>
+                <TouchableOpacity ref={menuBtnRef} style={styles.menuBtn} onPress={() => {
+                  menuBtnRef.current?.measure((_x: number, _y: number, width: number, height: number, pageX: number, pageY: number) => {
+                    setMenuBtnLayout({ top: pageY + height, right: SCREEN_WIDTH - pageX - width });
+                    setMenuVisible(true);
+                  });
+                }}>
+                  <Text style={styles.menuBtnText}>⋮</Text>
+                </TouchableOpacity>
               </View>
             </View>
             <View style={styles.eventHeaderBody}>
@@ -2066,7 +2068,6 @@ export default function EventScreen() {
               isAdmin={isAdmin}
               sortOrder={sortOrder}
               groupByDate={groupByDate}
-              onOpenSortPanel={() => { setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}
             />
           </View>
         );
@@ -2484,11 +2485,21 @@ export default function EventScreen() {
               isAdmin={isAdmin}
               sortOrder={sortOrder}
               groupByDate={groupByDate}
-              onOpenSortPanel={() => { setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}
             />
           </View>
         )}
       </View>
+
+      {/* Three-dot menu dropdown */}
+      <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
+        <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
+          <View style={[styles.menuDropdown, menuBtnLayout ? { top: menuBtnLayout.top, right: menuBtnLayout.right } : {}]}>
+            <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}>
+              <Text style={styles.menuItemText}>Sort & Display</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {alertOverlay}
 
@@ -3002,8 +3013,12 @@ const styles = StyleSheet.create({
   sectionTitle: { ...Typography.sectionHeading, color: Colors.white },
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },
-  sortToggleBtn: {},
-  sortToggleText: { fontSize: 15, color: '#888' },
+  menuBtn: { padding: 4 },
+  menuBtnText: { fontSize: 22, color: '#fff', fontWeight: '700' },
+  menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
+  menuDropdown: { position: 'absolute', backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 0.5, borderColor: '#333', overflow: 'hidden' },
+  menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
+  menuItemText: { fontSize: 14, fontWeight: '600', color: '#fff' },
 
   dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 18, paddingBottom: 8, backgroundColor: Colors.background, gap: 10 },
   dateHeaderText: { fontSize: 15, fontWeight: '700', color: Colors.white },

@@ -690,7 +690,7 @@ export default function EventScreen() {
     );
   }
 
-  const lightboxPhotos = lightboxSection === 'main' ? photos : otherPhotos;
+  const lightboxPhotos = lightboxSection === 'main' ? (orderedMain ?? photos) : (orderedOther ?? otherPhotos);
 
   useEffect(() => { lightboxPhotosRef.current = lightboxPhotos; }, [lightboxPhotos]);
 
@@ -1719,7 +1719,7 @@ export default function EventScreen() {
   }, [photos, otherPhotos, userMobile]);
 
   // Build flat list data + compute sticky indices
-  const { listData, stickyIndices } = useMemo(() => {
+  const { listData, stickyIndices, orderedMain, orderedOther } = useMemo(() => {
     const items: ListItem[] = [];
     const sticky: number[] = [];
 
@@ -1769,11 +1769,13 @@ export default function EventScreen() {
           if (last && last.date === dateLabel) last.photos.push(p);
           else groups.push({ date: dateLabel, photos: [p] });
         }
+        let mainGlobalIndex = 0;
         for (const group of groups) {
           items.push({ type: 'date_header', date: group.date, photos: group.photos, section: 'main', key: `date_main_${group.date}` });
           for (let i = 0; i < group.photos.length; i += 3) {
-            items.push({ type: 'photo_row', photos: group.photos.slice(i, i + 3), section: 'main', startIndex: i, key: `row_main_date_${group.date}_${i}` });
+            items.push({ type: 'photo_row', photos: group.photos.slice(i, i + 3), section: 'main', startIndex: mainGlobalIndex + i, key: `row_main_date_${group.date}_${i}` });
           }
+          mainGlobalIndex += group.photos.length;
         }
       } else {
         for (let i = 0; i < orderedMain.length; i += 3) {
@@ -1793,11 +1795,13 @@ export default function EventScreen() {
           if (last && last.date === dateLabel) last.photos.push(p);
           else groups.push({ date: dateLabel, photos: [p] });
         }
+        let otherGlobalIndex = 0;
         for (const group of groups) {
           items.push({ type: 'date_header', date: group.date, photos: group.photos, section: 'other', key: `date_other_${group.date}` });
           for (let i = 0; i < group.photos.length; i += 3) {
-            items.push({ type: 'photo_row', photos: group.photos.slice(i, i + 3), section: 'other', startIndex: i, key: `row_other_date_${group.date}_${i}` });
+            items.push({ type: 'photo_row', photos: group.photos.slice(i, i + 3), section: 'other', startIndex: otherGlobalIndex + i, key: `row_other_date_${group.date}_${i}` });
           }
+          otherGlobalIndex += group.photos.length;
         }
       } else {
         for (let i = 0; i < otherList.length; i += 3) {
@@ -1814,7 +1818,7 @@ export default function EventScreen() {
       items.push({ type: 'delete_empty', key: 'delete_empty' });
     }
 
-    return { listData: items, stickyIndices: sticky };
+    return { listData: items, stickyIndices: sticky, orderedMain, orderedOther: otherList };
   }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, sortOrder, groupByDate]);
 
   const flatListExtraData = useMemo(

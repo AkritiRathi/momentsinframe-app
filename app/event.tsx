@@ -2446,7 +2446,8 @@ export default function EventScreen() {
             onScroll={handleScroll}
             scrollEventThrottle={16}
             stickyHeaderIndices={undefined}
-contentContainerStyle={{ paddingBottom: 48 }}
+            maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+            contentContainerStyle={{ paddingBottom: 48 }}
             removeClippedSubviews={false}
             refreshControl={
               <RefreshControl

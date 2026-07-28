@@ -690,9 +690,7 @@ export default function EventScreen() {
     );
   }
 
-  const lightboxPhotos = lightboxSection === 'main' ? (orderedMain ?? photos) : (orderedOther ?? otherPhotos);
-
-  useEffect(() => { lightboxPhotosRef.current = lightboxPhotos; }, [lightboxPhotos]);
+  // lightboxPhotos is declared after listData useMemo (below) so orderedMain/orderedOther are in scope
 
   // Mark image as loading whenever we navigate to a new photo
   useEffect(() => {
@@ -1820,6 +1818,10 @@ export default function EventScreen() {
 
     return { listData: items, stickyIndices: sticky, orderedMain, orderedOther: otherList };
   }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, sortOrder, groupByDate]);
+
+  const lightboxPhotos = lightboxSection === 'main' ? (orderedMain ?? photos) : (orderedOther ?? otherPhotos);
+
+  useEffect(() => { lightboxPhotosRef.current = lightboxPhotos; }, [lightboxPhotos]);
 
   const flatListExtraData = useMemo(
     () => ({ selected, deleteMode, selectMode }),

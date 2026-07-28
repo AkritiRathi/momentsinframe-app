@@ -92,8 +92,9 @@ export default function RootLayout() {
         return;
       }
 
-      // Event screen and organiser screens are accessible to authenticated users
-      if (inEvent || inMaster) return;
+      // Event screen, organiser screens, and deep link handler are accessible to authenticated users
+      const inJoin = segments[0] === 'join';
+      if (inEvent || inMaster || inJoin) return;
 
       if (!inAuth) {
         router.replace('/(auth)/home');

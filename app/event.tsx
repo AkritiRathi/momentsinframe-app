@@ -474,6 +474,7 @@ export default function EventScreen() {
   const [selectBarSticky, setSelectBarSticky] = useState(false);
   const stickySectionRef = useRef<'main' | 'other' | null>(null);
   const selectBarStickyRef = useRef(false);
+  const selectBarHeightRef = useRef(0);
   const mainHeaderY = useRef<number | null>(null);
   const otherHeaderY = useRef<number | null>(null);
   const selectBarYRef = useRef<number | null>(null);
@@ -880,6 +881,10 @@ export default function EventScreen() {
       setSelectMode(true);
       setDeleteMode(false);
       toggleSelect(photoId);
+      if (scrollOffsetRef.current > 0) {
+        selectBarStickyRef.current = true;
+        setSelectBarSticky(true);
+      }
     }
   }, [selectMode, deleteMode]);
 
@@ -2464,13 +2469,13 @@ export default function EventScreen() {
           />
         </GestureDetector>
         {(selectMode || deleteMode) && selectBarSticky && (
-          <View style={styles.stickySelectBar}>
+          <View style={styles.stickySelectBar} onLayout={e => { selectBarHeightRef.current = e.nativeEvent.layout.height; }}>
             {renderSelectBar()}
           </View>
         )}
         {stickySection && (
           <View style={[styles.stickySectionHeader, {
-            top: (selectMode || deleteMode) && selectBarSticky ? (accumulatedHeights.current['select_bar'] ?? 0) : 0,
+            top: (selectMode || deleteMode) && selectBarSticky ? selectBarHeightRef.current : 0,
           }]}>
             <SectionHeader
               section={stickySection}

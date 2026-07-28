@@ -1303,7 +1303,7 @@ const styles = StyleSheet.create({
   headerGear: { marginLeft: 'auto', padding: 4 },
   headerGearIcon: { fontSize: 20 },
   dropBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
-  dropdown: { backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 0.5, borderColor: '#333', overflow: 'hidden', minWidth: 160 },
+  dropdown: { backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 0.5, borderColor: '#333', overflow: 'hidden' },
   dropRow: { paddingHorizontal: 16, paddingVertical: 14 },
   dropText: { fontSize: 14, fontWeight: '600', color: Colors.white },
   blockedRow: { opacity: 0.6 },

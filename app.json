@@ -3,7 +3,7 @@
     "name": "MomentsInFrame",
     "slug": "MomentsInFrame",
     "scheme": "momentsinframe",
-    "version": "1.8.0",
+    "version": "1.9.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -24,6 +24,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.momentsinframe.app",
+      "associatedDomains": ["applinks:momentsinframe.com"],
       "infoPlist": {
         "UIBackgroundModes": ["fetch"],
         "ITSAppUsesNonExemptEncryption": false
@@ -47,6 +48,20 @@
         "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.READ_CONTACTS"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "momentsinframe.com",
+              "pathPrefix": "/join"
+            }
+          ],
+          "category": ["BROWSABLE", "DEFAULT"]
+        }
       ]
     },
     "web": {

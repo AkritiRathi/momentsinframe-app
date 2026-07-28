@@ -3,6 +3,7 @@ import {
   Modal, ActivityIndicator, Dimensions, TextInput,
   Platform, BackHandler, AppState, RefreshControl, Alert, InteractionManager,
 } from 'react-native';
+import { FlashList } from '@shopify/flash-list';
 import { Image as ExpoImage } from 'expo-image';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -476,7 +477,7 @@ export default function EventScreen() {
   const mainHeaderY = useRef<number | null>(null);
   const otherHeaderY = useRef<number | null>(null);
   const selectBarYRef = useRef<number | null>(null);
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef = useRef<FlashList<ListItem>>(null);
   const accumulatedHeights = useRef<Record<string, number>>({});
   const listDataRef = useRef<ListItem[]>([]);
   // Drag-to-select
@@ -2435,18 +2436,17 @@ export default function EventScreen() {
         }}
       >
         <GestureDetector gesture={dragGesture}>
-          <FlatList
+          <FlashList
             ref={flatListRef}
             data={listData}
             keyExtractor={item => item.key}
             renderItem={renderItem}
             extraData={flatListExtraData}
+            estimatedItemSize={130}
             onScroll={handleScroll}
             scrollEventThrottle={16}
-            stickyHeaderIndices={undefined}
             maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
             contentContainerStyle={{ paddingBottom: 48 }}
-            removeClippedSubviews={false}
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}

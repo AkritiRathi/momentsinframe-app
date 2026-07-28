@@ -308,9 +308,9 @@ export default function EventDetailScreen() {
   }
 
   function copyCode() {
-    const text = `Event: ${params.name}\nEvent Code: ${params.join_code}`;
+    const text = `You're invited to ${params.name}!\n\nEvent Code: ${params.join_code}\nJoin here: https://momentsinframe.com/join/${params.join_code}`;
     Clipboard.setString(text);
-    showAlert('Copied', `Event: ${params.name}\nEvent Code: ${params.join_code}`);
+    showAlert('Copied!', text);
   }
 
   async function handleExtend() {

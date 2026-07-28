@@ -33,6 +33,11 @@
       "ios": {
         "ascAppId": "6788342647"
       }
+    },
+    "preview": {
+      "android": {
+        "track": "internal"
+      }
     }
   }
 }

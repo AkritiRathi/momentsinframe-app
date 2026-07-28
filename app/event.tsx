@@ -893,7 +893,6 @@ export default function EventScreen() {
     setSelectMode(false);
     setDeleteMode(false);
     setSelected(new Set());
-    setStickySection(null);
     setSelectBarSticky(false);
     mainHeaderY.current = null;
     otherHeaderY.current = null;
@@ -922,14 +921,12 @@ export default function EventScreen() {
       setSelectBarSticky(newSelectBarSticky);
     }
 
-    if (Platform.OS === 'ios') {
-      let next: 'main' | 'other' | null = null;
-      if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
-      else if (mainHeaderY.current !== null && y >= mainHeaderY.current) next = 'main';
-      if (stickySectionRef.current !== next) {
-        stickySectionRef.current = next;
-        setStickySection(next);
-      }
+    let next: 'main' | 'other' | null = null;
+    if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
+    else if (mainHeaderY.current !== null && y >= mainHeaderY.current) next = 'main';
+    if (stickySectionRef.current !== next) {
+      stickySectionRef.current = next;
+      setStickySection(next);
     }
   }, [selectMode, deleteMode]);
 
@@ -2448,7 +2445,7 @@ export default function EventScreen() {
             extraData={flatListExtraData}
             onScroll={handleScroll}
             scrollEventThrottle={16}
-            stickyHeaderIndices={Platform.OS === 'android' ? stickyIndices : undefined}
+            stickyHeaderIndices={undefined}
 contentContainerStyle={{ paddingBottom: 48 }}
             removeClippedSubviews={false}
             refreshControl={
@@ -2472,7 +2469,7 @@ contentContainerStyle={{ paddingBottom: 48 }}
             {renderSelectBar()}
           </View>
         )}
-        {Platform.OS === 'ios' && stickySection && (
+        {stickySection && (
           <View style={[styles.stickySectionHeader, {
             top: (selectMode || deleteMode) && selectBarSticky ? (accumulatedHeights.current['select_bar'] ?? 0) : 0,
           }]}>

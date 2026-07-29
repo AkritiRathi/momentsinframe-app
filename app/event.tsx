@@ -23,7 +23,7 @@ let PhotoSaverError: string = 'not attempted';
 try { PhotoSaver = require('photo-saver').default; PhotoSaverError = 'ok'; } catch (e: any) { PhotoSaverError = String(e?.message ?? e); }
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState, useMemo, useCallback, memo } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback, memo, forwardRef } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
   prepareZip, fetchServerNotifications, markServerNotificationsRead,
@@ -153,17 +153,12 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
           <Text style={styles.sectionCount}>{items.length}</Text>
         </View>
         <Text style={styles.sectionSub}>{subText}</Text>
-        {(selectMode || deleteMode) && (
+        {deleteMode && (
           <View style={styles.sectionSelectRow}>
-            <TouchableOpacity onPress={() => onGroupToggle(items, !allSelected)}>
-              <Text style={styles.sectionSelectLink}>
-                {allSelected ? `Deselect all ${label}` : `Select all ${label}`}
-              </Text>
-            </TouchableOpacity>
-            {deleteMode && !isAdmin && (
+            {!isAdmin && (
               <Text style={styles.deleteNote}>You can only delete photos that you have uploaded.</Text>
             )}
-            {deleteMode && isCoadmin && (
+            {isCoadmin && (
               <Text style={styles.deleteNote}>You can delete any guest's photos, but not photos uploaded by the Organiser.</Text>
             )}
           </View>
@@ -391,11 +386,12 @@ type PhotoThumbProps = {
   onLongPress: (photoId: string) => void;
 };
 
-const PhotoThumb = memo(function PhotoThumb({
+const PhotoThumb = memo(forwardRef<View, PhotoThumbProps>(function PhotoThumb({
   photoId, photoIndex, section, thumbUrl, isSelected, isNew, selectMode, deleteMode, onPress, onLongPress,
-}: PhotoThumbProps) {
+}, ref) {
   return (
     <TouchableOpacity
+      ref={ref as any}
       style={styles.thumb}
       onPress={() => onPress(photoId, photoIndex, section)}
       onLongPress={() => onLongPress(photoId)}
@@ -418,7 +414,9 @@ const PhotoThumb = memo(function PhotoThumb({
       )}
     </TouchableOpacity>
   );
-});
+}));
+
+PhotoThumb.displayName = 'PhotoThumb';
 
 export default function EventScreen() {
   const router = useRouter();
@@ -474,7 +472,7 @@ export default function EventScreen() {
   const [selectBarSticky, setSelectBarSticky] = useState(false);
   const stickySectionRef = useRef<'main' | 'other' | null>(null);
   const selectBarStickyRef = useRef(false);
-  const selectBarHeightRef = useRef(0);
+  const [selectBarHeight, setSelectBarHeight] = useState(0);
   const mainHeaderY = useRef<number | null>(null);
   const otherHeaderY = useRef<number | null>(null);
   const selectBarYRef = useRef<number | null>(null);
@@ -488,6 +486,9 @@ export default function EventScreen() {
   const dragAnchorIndexRef = useRef<number | null>(null);
   const dragModeRef = useRef<'select' | 'deselect' | null>(null);
   const committedSelectionRef = useRef<Set<string>>(new Set());
+  const photoRefsMap = useRef<Map<string, any>>(new Map());
+  // anchorFlatIndex: flat photo index; anchorContentY: content-space Y of anchor photo top (scroll-invariant)
+  const longPressAnchorRef = useRef<{ anchorFlatIndex: number; anchorContentY: number } | null>(null);
 
   // Upload
   const [uploading, setUploading] = useState(false);
@@ -784,20 +785,24 @@ export default function EventScreen() {
   }
 
   function getPhotoIndexAtPosition(absX: number, absY: number): number | null {
-    const contentY = absY - flatListLayoutRef.current.y + scrollOffsetRef.current;
+    if (!longPressAnchorRef.current) return null;
+
+    const fingerContentY = absY - flatListLayoutRef.current.y + scrollOffsetRef.current;
     const contentX = absX - flatListLayoutRef.current.x;
-    let accY = 0;
-    let flatIndex = 0;
+    const col = Math.min(Math.max(Math.floor(contentX / (THUMB_SIZE + GAP)), 0), 2);
+
+    let cumY = 0;
+    let photoFlatIndex = 0;
+
     for (const item of listDataRef.current) {
-      const h = accumulatedHeights.current[item.key] ?? 0;
+      const h = accumulatedHeights.current[item.key] ?? (item.type === 'photo_row' ? THUMB_SIZE + GAP : 0);
       if (item.type === 'photo_row') {
-        if (contentY >= accY && contentY < accY + h) {
-          const col = Math.min(Math.max(Math.floor(contentX / (THUMB_SIZE + GAP)), 0), item.photos.length - 1);
-          return flatIndex + col;
+        if (fingerContentY >= cumY && fingerContentY < cumY + h) {
+          return Math.min(photoFlatIndex + col, photoFlatIndex + item.photos.length - 1);
         }
-        flatIndex += item.photos.length;
+        photoFlatIndex += item.photos.length;
       }
-      accY += h;
+      cumY += h;
     }
     return null;
   }
@@ -827,21 +832,27 @@ export default function EventScreen() {
   }
 
   const onDragStart = useCallback((absX: number, absY: number) => {
+    if (!longPressAnchorRef.current) return;
+    committedSelectionRef.current = new Set(selected);
     const index = getPhotoIndexAtPosition(absX, absY);
     if (index === null) return;
-    committedSelectionRef.current = new Set(selected);
     const anchorId = getPhotoIdAtFlatIndex(index);
     const mode = anchorId && committedSelectionRef.current.has(anchorId) ? 'deselect' : 'select';
     dragAnchorIndexRef.current = index;
     dragModeRef.current = mode;
-        applyDragRange(index, index, mode);
+    applyDragRange(index, index, mode);
   }, [selected]);
 
   const onDragUpdate = useCallback((absX: number, absY: number) => {
-    if (dragAnchorIndexRef.current === null || !dragModeRef.current) return;
+    if (!longPressAnchorRef.current) return;
     const currentIndex = getPhotoIndexAtPosition(absX, absY);
     if (currentIndex === null) return;
-    applyDragRange(dragAnchorIndexRef.current, currentIndex, dragModeRef.current);
+    if (dragAnchorIndexRef.current === null) {
+      const anchorId = getPhotoIdAtFlatIndex(currentIndex);
+      dragAnchorIndexRef.current = currentIndex;
+      dragModeRef.current = committedSelectionRef.current.has(anchorId ?? '') ? 'deselect' : 'select';
+    }
+    applyDragRange(dragAnchorIndexRef.current, currentIndex, dragModeRef.current!);
   }, []);
 
   const onDragEnd = useCallback(() => {
@@ -852,7 +863,6 @@ export default function EventScreen() {
   const dragGesture = useMemo(() => Gesture.Pan()
     .enabled(selectMode || deleteMode)
     .activeOffsetX([-8, 8])
-    .failOffsetY([-15, 15])
     .onStart((e) => { 'worklet'; runOnJS(onDragStart)(e.absoluteX, e.absoluteY); })
     .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
     .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
@@ -866,8 +876,34 @@ export default function EventScreen() {
     });
   }
 
+  function setAnchorForPhoto(photoId: string) {
+    // Find flat index of this photo
+    let flatIndex = 0;
+    let found = false;
+    for (const item of listDataRef.current) {
+      if (item.type === 'photo_row') {
+        const idx = item.photos.findIndex(p => p.id === photoId);
+        if (idx >= 0) {
+          flatIndex += idx;
+          found = true;
+          break;
+        }
+        flatIndex += item.photos.length;
+      }
+    }
+    if (!found) return;
+
+    const ref = photoRefsMap.current.get(photoId);
+    if (!ref) return;
+    ref.measureInWindow((x: number, y: number) => {
+      const contentY = y - flatListLayoutRef.current.y + scrollOffsetRef.current;
+      longPressAnchorRef.current = { anchorFlatIndex: flatIndex, anchorContentY: contentY };
+    });
+  }
+
   const handleThumbPress = useCallback((photoId: string, index: number, section: 'main' | 'other') => {
     if (selectMode || deleteMode) {
+      if (!longPressAnchorRef.current) setAnchorForPhoto(photoId);
       toggleSelect(photoId);
     } else {
       setLightboxIndex(index);
@@ -880,6 +916,7 @@ export default function EventScreen() {
     if (!selectMode && !deleteMode) {
       setSelectMode(true);
       setDeleteMode(false);
+      setAnchorForPhoto(photoId);
       toggleSelect(photoId);
       if (scrollOffsetRef.current > 0) {
         selectBarStickyRef.current = true;
@@ -896,6 +933,7 @@ export default function EventScreen() {
     mainHeaderY.current = null;
     otherHeaderY.current = null;
     selectBarYRef.current = null;
+    longPressAnchorRef.current = null;
   }
 
   function updateSectionPositions() {
@@ -1833,10 +1871,7 @@ export default function EventScreen() {
     if (deleteMode) {
       return (
         <View style={styles.selectBar}>
-          <View>
-            <Text style={styles.selectCount}>{selected.size}</Text>
-            <Text style={styles.selectCountLabel}>selected</Text>
-          </View>
+          <Text style={styles.selectCount}>{selected.size}</Text>
           <View style={styles.selectBarBtns}>
             <Pressable style={styles.selBtn} onPress={() => selectGroup(deletablePhotos, !allSelected)}>
               <Text style={styles.selBtnText}>Select all</Text>
@@ -1854,10 +1889,7 @@ export default function EventScreen() {
 
     return (
       <View style={styles.selectBar}>
-        <View>
-          <Text style={styles.selectCount}>{selected.size}</Text>
-          <Text style={styles.selectCountLabel}>selected</Text>
-        </View>
+        <Text style={styles.selectCount}>{selected.size}</Text>
         <View style={styles.selectBarBtns}>
           <Pressable style={styles.selBtn} onPress={() => selectGroup([...photos, ...otherPhotos], !allSelected)}>
             <Text style={styles.selBtnText}>Select all</Text>
@@ -1865,8 +1897,8 @@ export default function EventScreen() {
           <Pressable style={styles.selBtn} onPress={exitSelectMode}>
             <Text style={styles.selBtnText}>Cancel</Text>
           </Pressable>
-          <Pressable style={[styles.selBtnPrimary, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={handleBulkDownload}>
-            <Text style={styles.selBtnPrimaryText}>↓ Download</Text>
+          <Pressable style={[styles.selBtn, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={handleBulkDownload}>
+            <Text style={[styles.selBtnText, { color: Colors.accent }]}>Download</Text>
           </Pressable>
         </View>
       </View>
@@ -1878,6 +1910,10 @@ export default function EventScreen() {
     return (
       <PhotoThumb
         key={photo.id}
+        ref={(r) => {
+          if (r) photoRefsMap.current.set(photo.id, r);
+          else photoRefsMap.current.delete(photo.id);
+        }}
         photoId={photo.id}
         photoIndex={index}
         section={section}
@@ -2435,8 +2471,8 @@ export default function EventScreen() {
         style={{ flex: 1 }}
         ref={flatListContainerRef}
         onLayout={() => {
-          flatListContainerRef.current?.measureInWindow((x: number, y: number) => {
-            flatListLayoutRef.current = { x, y };
+          flatListContainerRef.current?.measure((_x: number, _y: number, _w: number, _h: number, pageX: number, pageY: number) => {
+            flatListLayoutRef.current = { x: pageX, y: pageY };
           });
         }}
       >
@@ -2469,13 +2505,13 @@ export default function EventScreen() {
           />
         </GestureDetector>
         {(selectMode || deleteMode) && selectBarSticky && (
-          <View style={styles.stickySelectBar} onLayout={e => { selectBarHeightRef.current = e.nativeEvent.layout.height; }}>
+          <View style={styles.stickySelectBar} onLayout={e => { setSelectBarHeight(e.nativeEvent.layout.height); }}>
             {renderSelectBar()}
           </View>
         )}
         {stickySection && (
           <View style={[styles.stickySectionHeader, {
-            top: (selectMode || deleteMode) && selectBarSticky ? selectBarHeightRef.current : 0,
+            top: (selectMode || deleteMode) && selectBarSticky ? selectBarHeight : 0,
           }]}>
             <SectionHeader
               section={stickySection}
@@ -2499,7 +2535,7 @@ export default function EventScreen() {
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
           <View style={[styles.menuDropdown, menuBtnLayout ? { top: menuBtnLayout.top, right: menuBtnLayout.right } : {}]}>
-            <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}>
+            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode) && { opacity: 0.4 }]} disabled={selectMode || deleteMode} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}>
               <Text style={styles.menuItemText}>Sort & Display</Text>
             </TouchableOpacity>
           </View>
@@ -2999,11 +3035,11 @@ const styles = StyleSheet.create({
   deleteModeBtnText: { ...Typography.buttonText, color: Colors.danger },
 
   // Select mode bar (sticky)
-  selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 10, backgroundColor: Colors.card, borderBottomWidth: 0.5, borderBottomColor: Colors.cardBorder, gap: 8 },
+  selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8, backgroundColor: Colors.background, gap: 8 },
   selectCount: { fontSize: 22, fontWeight: '500', color: Colors.white, lineHeight: 24 },
   selectCountLabel: { fontSize: 11, color: '#666' },
   selectBarBtns: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' },
-  selBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  selBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9 },
   selBtnText: { fontSize: 13, color: Colors.textMuted },
   selBtnPrimary: { backgroundColor: Colors.background, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 7 },
   selBtnPrimaryText: { fontSize: 13, fontWeight: '600', color: Colors.white },

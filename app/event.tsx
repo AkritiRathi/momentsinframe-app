@@ -76,7 +76,8 @@ type ListItem =
   | { type: 'date_header'; date: string; photos: Photo[]; section: 'main' | 'other'; key: string }
   | { type: 'photo_row'; photos: Photo[]; section: 'main' | 'other'; startIndex: number; key: string }
   | { type: 'empty'; key: string }
-  | { type: 'delete_empty'; key: string };
+  | { type: 'delete_empty'; key: string }
+  | { type: 'my_uploads_empty'; key: string };
 
 type UploadFileResult = {
   status: 'success' | 'duplicate' | 'upgraded' | 'failed' | 'cancelled';
@@ -124,7 +125,7 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -135,6 +136,8 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   isAdmin?: boolean;
   sortOrder?: 'asc' | 'desc';
   groupByDate?: boolean;
+  myUploadsFilter?: boolean;
+  onMyUploadsToggle?: () => void;
 }) {
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
@@ -149,8 +152,20 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
     <View style={styles.sectionBlock}>
       <View style={styles.sectionHeader}>
         <View style={styles.sectionTitleRow}>
-          <Text style={styles.sectionTitle}>{label}</Text>
-          <Text style={styles.sectionCount}>{items.length}</Text>
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={styles.sectionTitle}>{label}</Text>
+            <Text style={styles.sectionCount}>{items.length}</Text>
+          </View>
+          {isMain && (
+            <TouchableOpacity
+              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive]}
+              onPress={onMyUploadsToggle}
+            >
+              <Text style={[styles.myUploadsPillText, myUploadsFilter && styles.myUploadsPillTextActive]}>
+                My Uploads
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
         <Text style={styles.sectionSub}>{subText}</Text>
         {deleteMode && (
@@ -463,6 +478,7 @@ export default function EventScreen() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [groupByDate, setGroupByDate] = useState(false);
   const [sortPanelVisible, setSortPanelVisible] = useState(false);
+  const [myUploadsFilter, setMyUploadsFilter] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const menuBtnRef = useRef<any>(null);
   const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
@@ -913,6 +929,7 @@ export default function EventScreen() {
   }, [selectMode, deleteMode]);
 
   const handleThumbLongPress = useCallback((photoId: string) => {
+    if (myUploadsFilter) return;
     if (!selectMode && !deleteMode) {
       setSelectMode(true);
       setDeleteMode(false);
@@ -1757,13 +1774,13 @@ export default function EventScreen() {
 
     items.push({ type: 'event_header', key: 'event_header' });
     if (daysLeft <= 3) items.push({ type: 'expiry_banner', key: 'expiry_banner' });
-    items.push({ type: 'upload_card', key: 'upload_card' });
+    if (!myUploadsFilter) items.push({ type: 'upload_card', key: 'upload_card' });
 
-    if (totalPhotos > 0 && !selectMode && !deleteMode) {
+    if (totalPhotos > 0 && !selectMode && !deleteMode && !myUploadsFilter) {
       items.push({ type: 'select_photos_btn', key: 'select_photos_btn' });
     }
 
-    if (selectMode || deleteMode) {
+    if ((selectMode || deleteMode) && !myUploadsFilter) {
       items.push({ type: 'select_bar', key: 'select_bar' });
     }
 
@@ -1779,8 +1796,8 @@ export default function EventScreen() {
       ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone)
       : otherPhotos;
 
-    const baseMain = deleteMode ? deleteFilteredPhotos : photos;
-    const baseOther = deleteMode ? deleteFilteredOther : otherPhotos;
+    const baseMain = deleteMode ? deleteFilteredPhotos : myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos;
+    const baseOther = deleteMode ? deleteFilteredOther : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos;
 
     const orderedMain = sortOrder === 'desc' ? [...baseMain].reverse() : baseMain;
     const otherList = sortOrder === 'desc' ? [...baseOther].reverse() : baseOther;
@@ -1850,8 +1867,12 @@ export default function EventScreen() {
       items.push({ type: 'delete_empty', key: 'delete_empty' });
     }
 
+    if (myUploadsFilter && userMobile && baseMain.length === 0 && baseOther.length === 0 && totalPhotos > 0 && !loading) {
+      items.push({ type: 'my_uploads_empty', key: 'my_uploads_empty' });
+    }
+
     return { listData: items, stickyIndices: sticky, orderedMain, orderedOther: otherList };
-  }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, sortOrder, groupByDate]);
+  }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, sortOrder, groupByDate, myUploadsFilter]);
 
   const lightboxPhotos = lightboxSection === 'main' ? (orderedMain ?? photos) : (orderedOther ?? otherPhotos);
 
@@ -2100,8 +2121,8 @@ export default function EventScreen() {
             <SectionHeader
               section={item.section}
               items={item.section === 'main'
-                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : photos)
-                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : otherPhotos)}
+                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos)
+                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
               selectMode={selectMode}
               deleteMode={deleteMode}
               selected={selected}
@@ -2110,6 +2131,11 @@ export default function EventScreen() {
               isAdmin={isAdmin}
               sortOrder={sortOrder}
               groupByDate={groupByDate}
+              myUploadsFilter={myUploadsFilter}
+              onMyUploadsToggle={() => {
+                if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
+                setMyUploadsFilter(f => !f);
+              }}
             />
           </View>
         );
@@ -2157,6 +2183,14 @@ export default function EventScreen() {
                 ? "All photos here were uploaded by the Organiser, which Co-Admins cannot delete."
                 : "You can only delete photos you uploaded. You haven't uploaded any photos to this event yet."}
             </Text>
+          </View>
+        );
+
+      case 'my_uploads_empty':
+        return (
+          <View style={styles.empty}>
+            <Text style={styles.emptyText}>No uploads yet.</Text>
+            <Text style={styles.emptySub}>You haven't uploaded any photos to this event yet.</Text>
           </View>
         );
 
@@ -3050,7 +3084,11 @@ const styles = StyleSheet.create({
   // Section header
   sectionBlock: { backgroundColor: Colors.background },
   sectionHeader: { backgroundColor: Colors.background, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
-  sectionTitleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 2 },
+  sectionTitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
+  myUploadsPill: { borderWidth: 0.5, borderColor: '#555', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+  myUploadsPillActive: { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  myUploadsPillText: { fontSize: 11, fontWeight: '600', color: '#888' },
+  myUploadsPillTextActive: { color: '#000' },
   sectionTitle: { ...Typography.sectionHeading, color: Colors.white },
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },

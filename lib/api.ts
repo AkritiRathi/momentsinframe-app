@@ -52,6 +52,11 @@ export async function organiserResetPassword(phone: string, newPassword: string)
   return post('/api/native/organiser/reset-password', { phone, newPassword });
 }
 
+export async function getOrganiserEventCount(phone: string): Promise<number> {
+  const result = await get(`/api/native/organiser/event-count?phone=${encodeURIComponent(phone)}`);
+  return result.count ?? 0;
+}
+
 export async function checkWhitelist(phone: string): Promise<{ whitelisted: boolean }> {
   return post('/api/native/whitelist/check', { phone });
 }

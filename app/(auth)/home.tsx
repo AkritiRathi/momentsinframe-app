@@ -12,8 +12,7 @@ import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
-import { checkWhitelist, checkUserStatus, deleteAccount, organiserLogin, logoutUser, listEvents } from '../../lib/api';
-import { getOrganiserPassword } from '../../lib/auth';
+import { checkWhitelist, checkUserStatus, deleteAccount, organiserLogin, logoutUser, getOrganiserEventCount } from '../../lib/api';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -91,11 +90,8 @@ export default function HomeScreen() {
   }
 
   async function checkOrganiserHasEvents(): Promise<number> {
-    if (!isWhitelisted || !profile?.mobile) return 0;
-    const pw = await getOrganiserPassword();
-    if (!pw) return 0;
-    const result = await listEvents(profile.mobile, pw).catch(() => ({ events: [] }));
-    return (result.events ?? []).length;
+    if (!profile?.mobile) return 0;
+    return getOrganiserEventCount(profile.mobile).catch(() => 0);
   }
 
   async function handleDeleteAccountPress() {

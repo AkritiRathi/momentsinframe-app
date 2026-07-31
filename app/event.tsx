@@ -2137,11 +2137,13 @@ export default function EventScreen() {
               myUploadsFilter={myUploadsFilter}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
-                if (!myUploadsFilter) {
-                  flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
-                  scrollOffsetRef.current = 0;
-                }
                 setMyUploadsFilter(f => !f);
+                if (!myUploadsFilter) {
+                  setTimeout(() => {
+                    flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+                    scrollOffsetRef.current = 0;
+                  }, 50);
+                }
               }}
             />
           </View>
@@ -2570,11 +2572,13 @@ export default function EventScreen() {
               myUploadsFilter={myUploadsFilter}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
-                if (!myUploadsFilter) {
-                  flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
-                  scrollOffsetRef.current = 0;
-                }
                 setMyUploadsFilter(f => !f);
+                if (!myUploadsFilter) {
+                  setTimeout(() => {
+                    flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+                    scrollOffsetRef.current = 0;
+                  }, 50);
+                }
               }}
             />
           </View>

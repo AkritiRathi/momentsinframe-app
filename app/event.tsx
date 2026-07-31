@@ -929,7 +929,6 @@ export default function EventScreen() {
   }, [selectMode, deleteMode]);
 
   const handleThumbLongPress = useCallback((photoId: string) => {
-    if (myUploadsFilter) return;
     if (!selectMode && !deleteMode) {
       setSelectMode(true);
       setDeleteMode(false);
@@ -1751,7 +1750,9 @@ export default function EventScreen() {
   const daysLeft = params.expiresAt ? daysUntil(params.expiresAt) : 999;
   const totalPhotos = photos.length + otherPhotos.length;
   const isCoadmin = isAdmin && params.role === 'coadmin';
-  const deletablePhotos = deleteMode && !isAdmin && userMobile
+  const deletablePhotos = myUploadsFilter && userMobile
+    ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
+    : deleteMode && !isAdmin && userMobile
     ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
     : deleteMode && isCoadmin && ownerPhone
     ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile !== ownerPhone)
@@ -1774,13 +1775,13 @@ export default function EventScreen() {
 
     items.push({ type: 'event_header', key: 'event_header' });
     if (daysLeft <= 3) items.push({ type: 'expiry_banner', key: 'expiry_banner' });
-    if (!myUploadsFilter) items.push({ type: 'upload_card', key: 'upload_card' });
+    items.push({ type: 'upload_card', key: 'upload_card' });
 
-    if (totalPhotos > 0 && !selectMode && !deleteMode && !myUploadsFilter) {
+    if (totalPhotos > 0 && !selectMode && !deleteMode) {
       items.push({ type: 'select_photos_btn', key: 'select_photos_btn' });
     }
 
-    if ((selectMode || deleteMode) && !myUploadsFilter) {
+    if (selectMode || deleteMode) {
       items.push({ type: 'select_bar', key: 'select_bar' });
     }
 
@@ -2084,7 +2085,7 @@ export default function EventScreen() {
         }
         return (
           <View style={styles.uploadCard}>
-            <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode) && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode || deleteMode}>
+            <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode || deleteMode || myUploadsFilter}>
               <Text style={styles.uploadBtnText}>Upload Photos</Text>
             </TouchableOpacity>
             <Text style={styles.uploadHint}>Max 40 photos per batch.{'\n'}Keep the app open while uploading.</Text>
@@ -2569,7 +2570,7 @@ export default function EventScreen() {
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
           <View style={[styles.menuDropdown, menuBtnLayout ? { top: menuBtnLayout.top, right: menuBtnLayout.right } : {}]}>
-            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode) && { opacity: 0.4 }]} disabled={selectMode || deleteMode} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}>
+            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.4 }]} disabled={selectMode || deleteMode || myUploadsFilter} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}>
               <Text style={styles.menuItemText}>Sort & Display</Text>
             </TouchableOpacity>
           </View>

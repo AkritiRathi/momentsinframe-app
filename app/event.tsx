@@ -946,6 +946,7 @@ export default function EventScreen() {
     setDeleteMode(false);
     setSelected(new Set());
     setSelectBarSticky(false);
+    setMyUploadsFilter(false);
     mainHeaderY.current = null;
     otherHeaderY.current = null;
     selectBarYRef.current = null;
@@ -2551,8 +2552,8 @@ export default function EventScreen() {
             <SectionHeader
               section={stickySection}
               items={stickySection === 'main'
-                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : photos)
-                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : otherPhotos)}
+                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos)
+                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
               selectMode={selectMode}
               deleteMode={deleteMode}
               selected={selected}
@@ -2561,6 +2562,11 @@ export default function EventScreen() {
               isAdmin={isAdmin}
               sortOrder={sortOrder}
               groupByDate={groupByDate}
+              myUploadsFilter={myUploadsFilter}
+              onMyUploadsToggle={() => {
+                if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
+                setMyUploadsFilter(f => !f);
+              }}
             />
           </View>
         )}

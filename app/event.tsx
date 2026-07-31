@@ -158,8 +158,9 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
           </View>
           {isMain && (
             <TouchableOpacity
-              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive]}
+              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode) && { opacity: 0.3 }]}
               onPress={onMyUploadsToggle}
+              disabled={selectMode || deleteMode}
             >
               <Text style={[styles.myUploadsPillText, myUploadsFilter && styles.myUploadsPillTextActive]}>
                 My Uploads

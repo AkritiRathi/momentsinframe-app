@@ -1,0 +1,1155 @@
+================================================================================
+  APP LOGIC REFERENCE — MomentsInFrame
+  Last updated: 2026-07-31
+  Use this file to brief Claude or any developer in future sessions.
+  Covers iOS photo saving, upload, download, duplicate detection, and all
+  major app-side features.
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. THE ROOT CAUSE — WHY THE NATIVE MODULE WAS NULL FOR 16 BUILDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Expo's autolinking (expo-modules-autolinking) uses a function called
+listFilesInDirectories to find .podspec files inside a local module.
+
+This function scans SUBDIRECTORIES ONLY. It NEVER reads files at the root
+of the module directory. So if the podspec is at:
+
+    modules/photo-saver/photo-saver.podspec   ← ROOT LEVEL — NOT FOUND
+
+...autolinking silently skips the module. The JS side loads fine but the native
+module is never compiled, causing:
+
+    Error: Cannot find native module 'PhotoSaver'
+
+THE FIX: Add "podspecPath" to expo-module.config.json under the "ios" key.
+This bypasses the directory scan and tells autolinking exactly where the
+podspec is:
+
+--- CODE: expo-module.config.json ---
+{
+  "platforms": ["ios"],
+  "ios": {
+    "modules": ["PhotoSaverModule"],
+    "podspecPath": "./photo-saver.podspec"
+  }
+}
+
+Without podspecPath → module returns null → not linked → native code never runs.
+With podspecPath → autolinking uses it directly → Swift compiled → module works.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. TWO THINGS BOTH REQUIRED — JS SIDE AND NATIVE SIDE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+There are TWO separate systems that must both be configured:
+
+  A) Metro bundler (JS resolution) — needs a "file:" entry in root package.json:
+       "photo-saver": "file:./modules/photo-saver"
+     Without this: require('photo-saver') throws "Cannot find module"
+
+  B) CocoaPods (native compilation) — needs the podspec + podspecPath:
+       modules/photo-saver/photo-saver.podspec
+       + "podspecPath" in expo-module.config.json
+     Without this: JS loads but native module is null
+
+Missing A → JS error ("Cannot find module 'photo-saver'")
+Missing B → Native error ("Cannot find native module 'PhotoSaver'")
+Both required for the module to work end to end.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. COMPLETE MODULE FILE STRUCTURE (all 5 files required)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+modules/
+└── photo-saver/
+    ├── expo-module.config.json    ← tells autolinking what to link
+    ├── photo-saver.podspec        ← CocoaPods spec for native compilation
+    ├── package.json               ← module identity for npm/Metro
+    ├── index.ts                   ← JS entry point, exports the native module
+    └── ios/
+        └── PhotoSaverModule.swift ← the actual native Swift code
+
+--- FILE: expo-module.config.json ---
+{
+  "platforms": ["ios"],
+  "ios": {
+    "modules": ["PhotoSaverModule"],
+    "podspecPath": "./photo-saver.podspec"
+  }
+}
+
+--- FILE: photo-saver.podspec ---
+require 'json'
+
+package = JSON.parse(File.read(File.join(__dir__, 'package.json')))
+
+Pod::Spec.new do |s|
+  s.name           = 'photo-saver'
+  s.version        = package['version']
+  s.summary        = 'Saves photos to iOS Photos with correct EXIF date and album'
+  s.author         = 'YourAppName'
+  s.homepage       = 'https://yourapp.com'
+  s.platforms      = { :ios => '15.1' }
+  s.source         = { :path => '.' }
+  s.source_files   = 'ios/**/*.{swift}'
+  s.dependency 'ExpoModulesCore'
+end
+
+--- FILE: package.json ---
+{
+  "name": "photo-saver",
+  "version": "1.0.0",
+  "main": "index.ts"
+}
+
+--- FILE: index.ts ---
+import { requireNativeModule } from 'expo-modules-core';
+import { Platform } from 'react-native';
+
+interface PhotoSaverModule {
+  saveToPhotos(fileUri: string, dateTakenMs: number, albumName: string): Promise<string | null>;
+}
+
+// iOS only — Android uses MediaStore directly
+const PhotoSaver = Platform.OS === 'ios'
+  ? requireNativeModule<PhotoSaverModule>('PhotoSaver')
+  : null;
+
+export default PhotoSaver;
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. WHY PHAssetCreationRequest.creationDate DOES NOT WORK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+You might try:
+    creationRequest.creationDate = dateTaken
+
+iOS Photos COMPLETELY IGNORES this for JPEG files. It reads the date from
+the EXIF metadata embedded in the file itself, not from the creation request.
+
+THE ONLY RELIABLE FIX: Embed DateTimeOriginal into the JPEG EXIF before
+saving using CGImageDestination. See the Swift code in Section 6.
+
+The embedExifDate() function:
+  1. Reads the image file into a CGImageSource
+  2. Copies existing EXIF properties
+  3. Overwrites DateTimeOriginal, DateTimeDigitized (EXIF) and DateTime (TIFF)
+  4. Writes a new JPEG to a temp file via CGImageDestination
+  5. Saves the new temp file (with correct EXIF) to Photos
+  6. Deletes the temp file after saving
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. iOS PHOTOS PERMISSION LEVELS AND ALBUM CREATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+iOS has two Photos permission levels:
+
+  FULL ACCESS (.authorized):
+    - Can create a named album
+    - Can add photo to a specific album
+    - Photo appears in "Albums → [Event Name]"
+
+  LIMITED ACCESS (.limited):
+    - CANNOT create or modify albums
+    - Photo saves to main library only (Camera Roll)
+    - Must handle this case gracefully — don't reject, resolve with "limited_access"
+
+Always request .readWrite permission, not just .addOnly.
+Check status before attempting album operations.
+
+--- CODE: Swift permission check ---
+PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+    let hasFullAccess = (status == .authorized)
+    // use hasFullAccess to decide whether to attempt album creation
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. FULL SWIFT CODE — PhotoSaverModule.swift
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+--- CODE: modules/photo-saver/ios/PhotoSaverModule.swift ---
+import ExpoModulesCore
+import Photos
+import ImageIO
+
+public class PhotoSaverModule: Module {
+  public func definition() -> ModuleDefinition {
+    Name("PhotoSaver")
+
+    AsyncFunction("saveToPhotos") { (fileUri: String, dateTakenMs: Double, albumName: String, promise: Promise) in
+      guard let url = URL(string: fileUri) else {
+        promise.reject("ERR_INVALID_URI", "Invalid file URI: \(fileUri)")
+        return
+      }
+
+      let dateTaken: Date? = dateTakenMs > 0 ? Date(timeIntervalSince1970: dateTakenMs / 1000.0) : nil
+
+      PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
+        guard status == .authorized || status == .limited else {
+          promise.reject("ERR_NO_PERMISSION", "Photos permission not granted")
+          return
+        }
+
+        let hasFullAccess = (status == .authorized)
+
+        // Embed correct EXIF date into file before saving (creationDate is ignored by iOS Photos)
+        let saveUrl: URL
+        if let dateTaken = dateTaken, let exifUrl = self.embedExifDate(sourceUrl: url, dateTaken: dateTaken) {
+          saveUrl = exifUrl
+        } else {
+          saveUrl = url
+        }
+
+        let cleanup = { try? FileManager.default.removeItem(at: saveUrl) }
+
+        if hasFullAccess {
+          self.findOrCreateAlbum(named: albumName) { collection in
+            guard let collection = collection else {
+              cleanup()
+              promise.reject("ERR_ALBUM_FAILED", "Could not find or create album '\(albumName)'")
+              return
+            }
+            PHPhotoLibrary.shared().performChanges({
+              if let creationRequest = PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: saveUrl) {
+                if let date = dateTaken { creationRequest.creationDate = date }
+                if let placeholder = creationRequest.placeholderForCreatedAsset {
+                  PHAssetCollectionChangeRequest(for: collection)?.addAssets([placeholder] as NSArray)
+                }
+              }
+            }) { success, error in
+              cleanup()
+              if success {
+                promise.resolve("ok")
+              } else {
+                promise.reject("ERR_SAVE_FAILED", error?.localizedDescription ?? "Failed to save photo")
+              }
+            }
+          }
+        } else {
+          // Limited access — save to main library only, no album
+          PHPhotoLibrary.shared().performChanges({
+            if let creationRequest = PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: saveUrl) {
+              if let date = dateTaken { creationRequest.creationDate = date }
+            }
+          }) { success, error in
+            cleanup()
+            if success {
+              promise.resolve("limited_access")
+            } else {
+              promise.reject("ERR_SAVE_FAILED", error?.localizedDescription ?? "Failed to save photo")
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Embeds DateTimeOriginal into JPEG EXIF — the ONLY way iOS Photos respects the date
+  private func embedExifDate(sourceUrl: URL, dateTaken: Date) -> URL? {
+    guard let imageData = try? Data(contentsOf: sourceUrl),
+          let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+          let uti = CGImageSourceGetType(source) else { return nil }
+
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+    let dateString = formatter.string(from: dateTaken)
+
+    var properties = (CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]) ?? [:]
+
+    var exifDict = (properties[kCGImagePropertyExifDictionary as String] as? [String: Any]) ?? [:]
+    exifDict[kCGImagePropertyExifDateTimeOriginal as String] = dateString
+    exifDict[kCGImagePropertyExifDateTimeDigitized as String] = dateString
+    properties[kCGImagePropertyExifDictionary as String] = exifDict
+
+    var tiffDict = (properties[kCGImagePropertyTIFFDictionary as String] as? [String: Any]) ?? [:]
+    tiffDict[kCGImagePropertyTIFFDateTime as String] = dateString
+    if tiffDict[kCGImagePropertyTIFFMake as String] == nil {
+      tiffDict[kCGImagePropertyTIFFMake as String] = "Apple"
+    }
+    if tiffDict[kCGImagePropertyTIFFModel as String] == nil {
+      tiffDict[kCGImagePropertyTIFFModel as String] = "iPhone"
+    }
+    properties[kCGImagePropertyTIFFDictionary as String] = tiffDict
+
+    let tempUrl = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".jpg")
+    guard let destination = CGImageDestinationCreateWithURL(tempUrl as CFURL, uti, 1, nil) else { return nil }
+    CGImageDestinationAddImageFromSource(destination, source, 0, properties as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { return nil }
+
+    return tempUrl
+  }
+
+  // Finds an existing album by name or creates a new one
+  private func findOrCreateAlbum(named title: String, completion: @escaping (PHAssetCollection?) -> Void) {
+    let fetchOptions = PHFetchOptions()
+    fetchOptions.predicate = NSPredicate(format: "title = %@", title)
+    let existing = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: fetchOptions)
+
+    if let collection = existing.firstObject {
+      completion(collection)
+      return
+    }
+
+    var placeholderIdentifier: String?
+    PHPhotoLibrary.shared().performChanges({
+      let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: title)
+      placeholderIdentifier = request.placeholderForCreatedAssetCollection.localIdentifier
+    }) { success, _ in
+      guard success, let identifier = placeholderIdentifier else {
+        completion(nil)
+        return
+      }
+      let created = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [identifier], options: nil)
+      completion(created.firstObject)
+    }
+  }
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. JPEG vs JPEG — FILENAME NORMALISATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When photos are uploaded, normalise .jpeg extension to .jpg before storing
+the filename in the database. Both are the same format — .jpg is the
+universally preferred extension.
+
+--- CODE: TypeScript, at upload time ---
+const normalisedName = filename.replace(/\.jpeg$/i, '.jpg');
+
+NOTE: iOS Photos info panel always displays "JPEG" as the format label
+regardless of whether the file extension is .jpg or .jpeg. This is Apple's
+display name for the format type — it is NOT the file extension and cannot
+be changed. There is nothing wrong if you see "JPEG" there.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. HEIC/HEIF PHOTOS SAVED TO "OTHER" INSTEAD OF PHOTOS LIBRARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When a HEIC/HEIF file contains Live Photo metadata (a reference to a paired
+.mov video file) but the .mov is absent, iOS classifies the image as an
+INCOMPLETE LIVE PHOTO and places it in the "Other" category in Photos instead
+of the main library.
+
+This happens when:
+  - A user uploads a Live Photo from their iPhone (HEIC + .mov pair)
+  - Only the HEIC is stored/downloaded (the .mov is not included)
+  - The HEIC retains the Live Photo UUID metadata pointing to a missing .mov
+
+FIX OPTIONS:
+  A) Convert HEIC to JPEG at upload time (recommended — MomentsInFrame approach)
+     — strips all Live Photo metadata automatically
+     — consistent format across all devices
+
+  B) Strip Live Photo metadata before saving:
+     Remove kCGImagePropertyMakerAppleDictionary key 17 (Live Photo identifier)
+
+MomentsInFrame converts all uploads to JPEG on the server side, so this
+issue does not occur at download time.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. HOW TO USE PhotoSaver IN THE APP (event.tsx pattern)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Load with try/catch so the app doesn't crash if the module fails to load.
+Also track the load error string for diagnostics.
+
+--- CODE: app/event.tsx — loading PhotoSaver ---
+let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
+let PhotoSaverError: string = 'not attempted';
+try { PhotoSaver = require('photo-saver').default; PhotoSaverError = 'ok'; } catch (e: any) { PhotoSaverError = String(e?.message ?? e); }
+
+--- CODE: Usage at download time ---
+if (PhotoSaver && Platform.OS === 'ios') {
+  const result = await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs ?? 0, params.name);
+  if (result === 'limited_access') {
+    // User has Limited Photos permission — photo saved to Camera Roll only, no album
+    // Show this alert only once per device
+    const alreadyShown = await SecureStore.getItemAsync('mif_limited_access_shown');
+    if (!alreadyShown) {
+      await SecureStore.setItemAsync('mif_limited_access_shown', '1');
+      Alert.alert('Photo Saved',
+        'To organise photos into your event album, allow Full Access in Settings → Privacy & Security → Photos → MomentsInFrame.',
+        [{ text: 'OK' }]);
+    }
+  }
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. UPLOAD LOGIC — BOTH PLATFORMS (2-PHASE FLOW)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Upload is split into 2 phases to bypass Vercel's 4.5MB serverless body limit.
+The app never sends raw file bytes to the Next.js function — only small JSON.
+
+PHASE 1 — Get presigned URL (/api/upload-url):
+  - App sends filename + event slug to server
+  - Server generates a presigned S3 URL pointing to a staging/ prefix
+  - App receives the URL + stagingKey
+
+PHASE 2 — App PUTs file directly to S3 (bypasses Vercel entirely):
+  - App uploads the raw file bytes straight to S3 using the presigned URL
+  - No file bytes go through the Next.js function
+
+PHASE 3 — Process (/api/upload):
+  - App sends { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId }
+  - Server fetches the staged file from S3 (server-to-S3 has no size limit)
+  - Server runs: EXIF extraction → HEIC pre-decode → JPEG conversion → pHash → duplicate check → store
+  - Staging file deleted from S3 after processing (success or failure) in a finally block
+
+WHAT GETS STORED IN S3 PER PHOTO (3 versions):
+  - Full original: stored as JPEG at event_id/uuid.jpg
+  - Thumbnail: 400px wide, JPEG quality 75, withoutEnlargement: true
+  - Display: 1200px wide, JPEG quality 85, withoutEnlargement: true
+
+FILENAME NORMALISATION AT UPLOAD:
+  - All photos stored with .jpg extension regardless of original format
+  - originalFilename stored in DB as .jpg: filename.replace(/\.[^.]+$/, ".jpg")
+  - original_format column stores the original extension (heic, png, jpeg, etc.)
+
+toPlainBuffer() — IMPORTANT:
+  Some Vercel Node runtime versions produce SharedArrayBuffer-backed Buffers.
+  The AWS S3 SDK rejects these with "input argument must be ArrayBuffer."
+  Always wrap buffers with toPlainBuffer() before sending to S3:
+    function toPlainBuffer(input: Buffer): Buffer { return Buffer.from(input); }
+
+HEIC HANDLING:
+  - iPhone HEIC files (Live Photos, burst) have 48+ iref box references
+  - sharp/libvips has a 16-reference security limit → crashes on these files
+  - Fix: pre-decode HEIC using heic-convert (WASM, no limit) BEFORE passing to sharp
+  - HEIC is converted to JPEG BEFORE duplicate check so file sizes are comparable
+
+FOREIGN KEY FALLBACK:
+  - event_user_id is stored with each photo for future identity features
+  - If the event_user_id no longer exists (FK constraint error code 23503),
+    retry the insert/update with event_user_id: null — never fail the upload
+
+UPGRADE NOTIFICATION:
+  - On a keep_new (quality upgrade), if the original uploader is a different
+    person from the new uploader, send them a notification via
+    createOrUpdateUpgradeNotification() so they know their photo was replaced.
+
+PRE-UPLOAD DEDUPLICATION (client side — before API call):
+  - App fetches all existing filenames for the event before starting
+  - Any asset whose filename already exists is skipped immediately
+
+--- CODE: /api/upload-url/route.ts (Phase 1) ---
+export async function POST(request: NextRequest) {
+  const { eventSlug, filename, contentType } = await request.json();
+  // validate event exists and not expired...
+  const extension = filename.split(".").pop()?.toLowerCase() ?? "";
+  const stagingKey = `staging/${event.id}/${randomUUID()}.${extension}`;
+  const uploadUrl = await getPresignedUploadUrl(stagingKey, contentType || "application/octet-stream");
+  return NextResponse.json({ uploadUrl, stagingKey });
+}
+
+--- CODE: /api/upload/route.ts (Phase 3 — key steps) ---
+// 1. Normalise filename
+const storedFilename = isVideo ? originalFilename : originalFilename.replace(/\.[^.]+$/, ".jpg");
+
+// 2. Fetch staged file from S3
+const getResult = await s3Client.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: stagingKey }));
+let inputBuffer = await streamToBuffer(getResult.Body as NodeJS.ReadableStream);
+
+// 3. Extract EXIF date BEFORE any conversion
+const { takenAt, dateSource } = await extractBestDate(tempInputPath);
+
+// 4. Pre-decode HEIC (48+ iref limit fix), then convert to JPEG
+const decodedBuffer = await preDecodeIfHeic(inputBuffer, originalExtension);
+const isHeic = ["heic", "heif"].includes(originalExtension.toLowerCase());
+const convertedBuffer = isHeic ? await convertToJpg(decodedBuffer) : decodedBuffer;
+const newPhash = await computePhash(convertedBuffer);
+
+// 5. Run duplicate check — see Section 12
+
+// 6. No duplicate — generate thumbnail + display, insert new row
+const [thumbBuffer, displayBuffer] = await Promise.all([
+  sharp(uploadBuffer).rotate().resize(400, undefined, { withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer().then(toPlainBuffer),
+  sharp(uploadBuffer).rotate().resize(1200, undefined, { withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer().then(toPlainBuffer),
+]);
+
+// FK fallback — retry with event_user_id: null if foreign key error (code 23503)
+let { data: newPhoto, error: insertError } = await supabaseAdmin.from("photos").insert(insertPayload).select().single();
+if (insertError?.code === '23503') {
+  ({ data: newPhoto, error: insertError } = await supabaseAdmin.from("photos").insert({ ...insertPayload, event_user_id: null }).select().single());
+}
+
+// Always clean up staging file in S3 — in finally block
+await s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: stagingKey }));
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. ANDROID DOWNLOAD LOGIC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Android uses a custom local native module (modules/media-store) that wraps
+Android's MediaStore API. iOS uses PhotoSaver (see sections 1–9).
+
+SINGLE PHOTO DOWNLOAD:
+  1. Download photo from server to Expo cache directory (temp file)
+  2. Pass local path to MediaStore.saveToDownloads(path, filename, folderName, mimeType, dateTakenMs)
+  3. MediaStore saves it to Downloads/[EventFolderName]/filename.jpg
+  4. dateTakenMs sets the correct "date taken" in Android's media database
+  5. Delete temp cache file after saving
+
+ZIP DOWNLOAD (bulk):
+  - Same flow but mimeType is 'application/zip' — no dateTakenMs needed
+  - For >25 photos, split into batches: slug-photos-part1of3.zip etc.
+
+FOLDER NAMING:
+  - On first download, user is asked to name the folder (defaults to event name)
+  - Folder name stored in SecureStore keyed by event slug
+  - Not asked again for the same event — reuses saved folder name
+
+KEY DIFFERENCE FROM iOS:
+  - Android reads date from dateTakenMs passed to MediaStore — no EXIF embedding needed
+  - iOS completely ignores creation date passed in code — must embed EXIF into file
+  - Android saves to Downloads folder (file manager accessible)
+  - iOS saves to Photos app (camera roll / named album)
+
+iOS ZIP:
+  - iOS has no Downloads folder accessible to apps
+  - ZIP files are shared via iOS Share Sheet (Sharing.shareAsync) instead
+
+--- CODE: app/event.tsx — download functions ---
+const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
+
+async function getDownloadFolder(): Promise<string | null> {
+  if (Platform.OS !== 'android') return null;
+  const storeKey = `downloads_folder_name_${slug}`;
+  let folderName = await SecureStore.getItemAsync(storeKey);
+  if (!folderName) {
+    folderName = await new Promise<string | null>(resolve => {
+      setFolderNameDraft(params.name);
+      folderSetupResolveRef.current = resolve;
+      setFolderSetupVisible(true);
+    });
+    if (!folderName) return null;
+    await SecureStore.setItemAsync(storeKey, folderName);
+  }
+  const folderPath = `${RNFetchBlob.fs.dirs.DownloadDir}/${folderName}`;
+  const exists = await RNFetchBlob.fs.exists(folderPath);
+  if (!exists) await RNFetchBlob.fs.mkdir(folderPath);
+  return folderPath;
+}
+
+async function saveFileToDownloads(filename, url, mimeType, folderPath, mode, notify = false, dateTakenMs?) {
+  if (Platform.OS === 'android') {
+    const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+    if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+    const localPath = dlResult.uri.replace('file://', '');
+    await MediaStore.saveToDownloads(localPath, filename, folderName, mimeType, dateTakenMs);
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+  } else {
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+    if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+    if (PhotoSaver) {
+      const result = await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs ?? 0, params.name);
+      // handle limited_access — see Section 9
+    } else {
+      await MediaLibrary.saveToLibraryAsync(cacheUri);
+    }
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+  }
+}
+
+async function saveZipToDownloads(filename, url) {
+  if (Platform.OS === 'android') {
+    const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+    const localPath = dlResult.uri.replace('file://', '');
+    await MediaStore.saveToDownloads(localPath, filename, folderName, 'application/zip');
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+  } else {
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    await FileSystem.downloadAsync(url, cacheUri);
+    await Sharing.shareAsync(cacheUri, { mimeType: 'application/zip', dialogTitle: 'Save ZIP' });
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+  }
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. DUPLICATE DETECTION LOGIC (server-side, /api/upload)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Uses perceptual hashing (pHash) via sharp-phash. Detects visually identical
+photos even when one has been recompressed (e.g. WhatsApp copies). The logic
+lives in onealbum-trial/src/lib/duplicate-detection.ts.
+
+THRESHOLDS (tightened from original — fewer false positives):
+  - HASH_THRESHOLD = 10 bits — outer limit, beyond this never a duplicate
+  - HASH_THRESHOLD_STRICT = 4 bits — tight match, almost certainly same photo
+  - SIZE_SIMILARITY_RATIO = 15% — files within 15% size are "same quality"
+  - MIN_WHATSAPP_DELAY_MS = 10000ms — minimum gap to treat as WhatsApp timestamp shift
+    (burst shots are always under 10s apart; real WhatsApp delivery takes longer)
+
+isDuplicate() RULES (checked in order):
+  1. If hash distance > 10 → NOT a duplicate
+  2. If distance 5–10 (loose band):
+     - Match ONLY if exactly one side has EXIF (WhatsApp copy scenario)
+     - OR both have EXIF + timestamps within 2s + sizes differ >15% (WhatsApp HD)
+     - Otherwise → NOT a duplicate
+  3. If both have EXIF and timestamps differ by >2s → NOT a duplicate
+     - Exception: if distance ≤4 AND sizes differ >15% AND gap >10s → WhatsApp
+       shifted the timestamp to receive time; trust the visual hash
+  4. Hash collision guard: if one has EXIF, size diff >90%, distance >4 → NOT a duplicate
+  5. Neither has EXIF: only match if distance === 0 (pixel-perfect identical)
+  6. Otherwise → IS a duplicate
+
+--- CODE: src/lib/duplicate-detection.ts ---
+const HASH_THRESHOLD = 10;
+const HASH_THRESHOLD_STRICT = 4;
+const SIZE_SIMILARITY_RATIO = 0.15;
+const MIN_WHATSAPP_DELAY_MS = 10000;
+
+export function isDuplicate(
+  hashA: string, hashB: string,
+  sizeA: number, sizeB: number,
+  takenAtA?: Date | null, takenAtB?: Date | null,
+  dateSourceA?: string | null, dateSourceB?: string | null,
+): boolean {
+  const distance = hammingDistance(hashA, hashB);
+  if (distance > HASH_THRESHOLD) return false;
+
+  const oneHasExif = (dateSourceA === "exif") !== (dateSourceB === "exif");
+  const bothHaveExif = dateSourceA === "exif" && dateSourceB === "exif";
+  const timestampsClose = takenAtA != null && takenAtB != null &&
+    Math.abs(takenAtA.getTime() - takenAtB.getTime()) <= 2000;
+  const sizeDiffRatio = Math.abs(sizeA - sizeB) / Math.max(sizeA, sizeB);
+  const sizeDiffSignificant = sizeDiffRatio > SIZE_SIMILARITY_RATIO;
+
+  if (distance > HASH_THRESHOLD_STRICT) {
+    const isWhatsappHd = bothHaveExif && timestampsClose && sizeDiffSignificant;
+    if (!oneHasExif && !isWhatsappHd) return false;
+  }
+
+  const tsGapMs = takenAtA != null && takenAtB != null
+    ? Math.abs(takenAtA.getTime() - takenAtB.getTime()) : null;
+  const whatsappTimestampShift = distance <= HASH_THRESHOLD_STRICT && sizeDiffSignificant
+    && tsGapMs != null && tsGapMs > MIN_WHATSAPP_DELAY_MS;
+
+  if (bothHaveExif && !timestampsClose && takenAtA != null && takenAtB != null && !whatsappTimestampShift) {
+    return false;
+  }
+
+  if (oneHasExif && sizeDiffRatio > 0.90 && distance > HASH_THRESHOLD_STRICT) return false;
+
+  if (oneHasExif) return true;
+  if (bothHaveExif && timestampsClose && sizeDiffSignificant) return true;
+  if (whatsappTimestampShift) return true;
+
+  if (bothHaveExif && timestampsClose && !sizeDiffSignificant && distance > 0) return false;
+
+  // Neither has EXIF — only trust a pixel-perfect match
+  const neitherHasExif = dateSourceA !== "exif" && dateSourceB !== "exif";
+  if (neitherHasExif) return distance === 0;
+
+  return sizeDiffRatio <= SIZE_SIMILARITY_RATIO;
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+13. QUALITY UPGRADE LOGIC (part of duplicate detection)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+An upgrade happens when a duplicate IS detected but the NEW upload is better
+quality than what is already stored. File size is used as the quality proxy.
+
+WHEN AN UPGRADE HAPPENS:
+  - New file is larger (less compressed) than existing → new wins
+  - New file has genuine EXIF date and existing only has a fallback timestamp
+  - Common real-world: someone uploads a WhatsApp copy first (compressed, no EXIF),
+    then the original owner uploads their original (larger, has EXIF)
+
+WHAT HAPPENS ON UPGRADE (server-side):
+  1. Convert new file to JPEG, generate new thumbnail (400px) and display (1200px)
+  2. Upload all 3 new versions to S3
+  3. UPDATE the existing photo DB row IN-PLACE (same photo ID, same timeline position)
+  4. Send notification to original uploader if they are a different person
+
+WHY UPDATE IN-PLACE (not insert):
+  - Preserves the photo's position in the event timeline
+  - Keeps the same photo ID — no broken references
+  - The WhatsApp copy "becomes" the original
+
+QUALITY UPGRADE IS CRITICAL — DO NOT MODIFY without explicit permission.
+
+--- CODE: src/lib/duplicate-detection.ts — resolveDuplicate() ---
+export function resolveDuplicate(existing: PhotoCandidate, incoming: NewUpload): DuplicateResolution {
+  const sizeDiff = incoming.fileSizeBytes - existing.fileSizeBytes;
+  const sameQuality = Math.abs(sizeDiff) < existing.fileSizeBytes * 0.02;
+  const sameDateSource = incoming.dateSource === existing.dateSource;
+  const sameTimestamp = Math.abs(incoming.takenAt.getTime() - existing.takenAt.getTime()) < 1000;
+
+  if (sameQuality && sameDateSource && sameTimestamp) {
+    return { action: "merge_self_duplicate", reason: "Identical quality and timestamp — accidental repeat upload." };
+  }
+
+  const incomingHigherQuality = sizeDiff > 0 && !sameQuality;
+  const incomingMoreTrustworthyDate = incoming.dateSource === "exif" && existing.dateSource !== "exif";
+
+  if (incomingHigherQuality || incomingMoreTrustworthyDate) {
+    return { action: "keep_new", reason: incomingHigherQuality ? "New upload is higher quality." : "New upload has genuine EXIF date." };
+  }
+
+  return { action: "keep_existing", reason: "Existing photo is equal or higher quality." };
+}
+
+--- CODE: /api/upload/route.ts — keep_new branch ---
+if (resolution.action === "keep_new") {
+  const finalBuffer = toPlainBuffer(alreadyJpg ? uploadBuffer : await convertToJpg(uploadBuffer));
+  const [keepThumbBuffer, keepDisplayBuffer] = await Promise.all([
+    sharp(finalBuffer).rotate().resize(400, undefined, { withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer().then(toPlainBuffer),
+    sharp(finalBuffer).rotate().resize(1200, undefined, { withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer().then(toPlainBuffer),
+  ]);
+  // Upload 3 new versions to S3, then UPDATE existing DB row in-place
+  await supabaseAdmin.from("photos").update({ storage_path, thumbnail_path, display_path, phash, taken_at, ... }).eq("id", existing.id);
+  // FK fallback — retry with event_user_id: null on 23503 error
+
+  // Notify original uploader if different person
+  if (existing.uploaded_by_mobile && existing.uploaded_by_mobile !== uploaderMobile) {
+    await createOrUpdateUpgradeNotification({ recipientPhone: existing.uploaded_by_mobile, ... });
+  }
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+14. MAIN vs OTHER PHOTOS — belongsInMainTimeline
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Photos are shown in two separate sections in the gallery:
+  - "Photo Gallery" — photos with a genuine EXIF date (trusted, real capture time)
+  - "Other Photos" — photos with only a fallback date (screenshots, downloads,
+    photos with no EXIF metadata)
+
+This separation prevents a screenshot or a photo with a wrong date from
+interrupting the chronological story flow of the main event gallery.
+
+The rule is: ONLY dateSource === "exif" belongs in the main timeline.
+File modification dates and upload timestamps are not trustworthy enough.
+
+--- CODE: src/lib/exif.ts ---
+export function belongsInMainTimeline(dateSource: DateSource): boolean {
+  return dateSource === "exif";
+}
+
+--- HOW IT'S USED ---
+The /api/upload route returns inMainTimeline in its response:
+  return NextResponse.json({ success: true, photo: newPhoto, inMainTimeline: belongsInMainTimeline(dateSource) });
+
+The app uses this to decide which section to animate the new photo into
+immediately after upload, without waiting for a gallery refresh.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+15. FLASHLIST MIGRATION — WHY AND HOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The main gallery was originally built with React Native's FlatList. On Android,
+FlatList re-renders every visible item on every scroll event, causing noticeable
+lag with 200+ photos. FlashList (@shopify/flash-list) replaces FlatList and
+recycles cell containers — off-screen items are unmounted and their DOM nodes
+reused, dramatically improving scroll performance.
+
+KEY DIFFERENCE — CELL RECYCLING:
+  FlatList: items stay mounted once rendered; onLayout fires once per item.
+  FlashList: cells are recycled — off-screen items are unmounted and reused.
+  This means onLayout does NOT fire for items that were never rendered on screen
+  or items that have scrolled far off screen and been recycled.
+
+REQUIRED: estimatedItemSize
+  FlashList requires an estimated item height for initial layout. Without it,
+  scroll position jumps. In MomentsInFrame this is set to THUMB_SIZE + GAP.
+
+accumulatedHeights ref:
+  Because FlashList recycles cells, we can't rely on onLayout having fired for
+  every item. We use a ref (not state, to avoid re-renders) that stores each
+  item's rendered height, keyed by item.key. Used for drag-to-select position
+  calculations and sticky header Y tracking.
+
+--- CODE: app/event.tsx ---
+const accumulatedHeights = useRef<Record<string, number>>({});
+
+// In renderItem — store height when item is rendered
+function renderItem({ item }: { item: ListItem }) {
+  return (
+    <View onLayout={(e) => {
+      accumulatedHeights.current[item.key] = e.nativeEvent.layout.height;
+      updateSectionPositions();
+    }}>
+      {renderItemContent(item)}
+    </View>
+  );
+}
+
+// FlashList component
+<FlashList
+  ref={flatListRef}
+  data={listData}
+  renderItem={renderItem}
+  keyExtractor={(item) => item.key}
+  estimatedItemSize={THUMB_SIZE + GAP}
+  showsVerticalScrollIndicator={false}
+  onScroll={handleScroll}
+  scrollEventThrottle={16}
+/>
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+16. SELECT MODE — ENTER, EXIT, SELECT BAR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Select mode lets users pick multiple photos for batch download or delete.
+
+HOW IT WORKS:
+  - Long press any thumbnail → enters select mode, selects that photo
+  - A "select bar" appears at the top of the gallery (below the upload card)
+    showing the count, a Select All button, and action buttons
+  - If the user has already scrolled down, the select bar sticks to the top
+    of the screen so it's always visible (selectBarSticky)
+  - Tapping a thumbnail in select mode toggles its selection
+  - Pressing Cancel or Android back button exits select mode
+  - exitSelectMode() resets ALL select-related state including myUploadsFilter
+
+--- CODE: app/event.tsx ---
+const handleThumbLongPress = useCallback((photoId: string) => {
+  if (!selectMode && !deleteMode) {
+    setSelectMode(true);
+    setDeleteMode(false);
+    setAnchorForPhoto(photoId);
+    toggleSelect(photoId);
+    if (scrollOffsetRef.current > 0) {
+      selectBarStickyRef.current = true;
+      setSelectBarSticky(true);
+    }
+  }
+}, [selectMode, deleteMode]);
+
+function exitSelectMode() {
+  setSelectMode(false);
+  setDeleteMode(false);
+  setSelected(new Set());
+  setSelectBarSticky(false);
+  setMyUploadsFilter(false);  // also resets My Uploads filter
+  mainHeaderY.current = null;
+  otherHeaderY.current = null;
+  selectBarYRef.current = null;
+  longPressAnchorRef.current = null;
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+17. DRAG-TO-SELECT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+After entering select mode, the user can drag their finger left or right to
+select/deselect multiple photos at once without lifting their finger.
+
+RULES:
+  - Drag left → right = SELECT (always, regardless of what is currently selected)
+  - Drag right → left = DESELECT
+  - Direction is determined by the PAN gesture's activeOffsetX
+
+HOW POSITION IS CALCULATED:
+  The PAN gesture fires absoluteX/absoluteY (RNGH coordinate space = RN root view).
+  To find which photo the finger is over:
+    fingerContentY = absoluteY - flatListLayoutRef.y + scrollOffset
+  where flatListLayoutRef.y is measured using ref.measure (NOT measureInWindow —
+  measureInWindow on Android subtracts the status bar height, causing a ~24dp
+  offset that makes the wrong row get selected).
+
+  The scan loops through listData, accumulates cumY using accumulatedHeights,
+  and finds which photo_row contains fingerContentY.
+
+ANCHOR:
+  When long-press enters select mode, setAnchorForPhoto() is called to store
+  the flat index of the initial photo. longPressAnchorRef must be set before
+  any drag can happen — it acts as a guard (getPhotoIndexAtPosition returns null
+  if no anchor is set).
+
+--- CODE: app/event.tsx ---
+
+// Container position — MUST use ref.measure (not measureInWindow) for correct
+// coordinate space on Android
+<View
+  ref={flatListContainerRef}
+  onLayout={() => {
+    flatListContainerRef.current?.measure((_x, _y, _w, _h, pageX, pageY) => {
+      flatListLayoutRef.current = { x: pageX, y: pageY };
+    });
+  }}
+>
+
+// PAN gesture — activeOffsetX activates on horizontal movement only
+const dragGesture = useMemo(() => Gesture.Pan()
+  .enabled(selectMode || deleteMode)
+  .activeOffsetX([-8, 8])
+  .onStart((e) => { 'worklet'; runOnJS(onDragStart)(e.absoluteX, e.absoluteY); })
+  .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
+  .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
+, [selectMode, deleteMode, onDragStart, onDragUpdate, onDragEnd]);
+
+// Find which photo flat index the finger is over
+function getPhotoIndexAtPosition(absX: number, absY: number): number | null {
+  if (!longPressAnchorRef.current) return null;
+  const fingerContentY = absY - flatListLayoutRef.current.y + scrollOffsetRef.current;
+  const contentX = absX - flatListLayoutRef.current.x;
+  const col = Math.min(Math.max(Math.floor(contentX / (THUMB_SIZE + GAP)), 0), 2);
+  let cumY = 0;
+  let photoFlatIndex = 0;
+  for (const item of listDataRef.current) {
+    const h = accumulatedHeights.current[item.key] ?? (item.type === 'photo_row' ? THUMB_SIZE + GAP : 0);
+    if (item.type === 'photo_row') {
+      if (fingerContentY >= cumY && fingerContentY < cumY + h) {
+        return Math.min(photoFlatIndex + col, photoFlatIndex + item.photos.length - 1);
+      }
+      photoFlatIndex += item.photos.length;
+    }
+    cumY += h;
+  }
+  return null;
+}
+
+// Apply selection/deselection across a range of flat indices
+function applyDragRange(anchorIndex: number, currentIndex: number, mode: 'select' | 'deselect') {
+  const lo = Math.min(anchorIndex, currentIndex);
+  const hi = Math.max(anchorIndex, currentIndex);
+  const next = new Set(committedSelectionRef.current);
+  for (let i = lo; i <= hi; i++) {
+    const id = getPhotoIdAtFlatIndex(i);
+    if (id) { if (mode === 'select') next.add(id); else next.delete(id); }
+  }
+  setSelected(next);
+}
+
+const onDragStart = useCallback((absX: number, absY: number) => {
+  if (!longPressAnchorRef.current) return;
+  committedSelectionRef.current = new Set(selected);
+  const index = getPhotoIndexAtPosition(absX, absY);
+  if (index === null) return;
+  const anchorId = getPhotoIdAtFlatIndex(index);
+  const mode = anchorId && committedSelectionRef.current.has(anchorId) ? 'deselect' : 'select';
+  dragAnchorIndexRef.current = index;
+  dragModeRef.current = mode;
+  applyDragRange(index, index, mode);
+}, [selected]);
+
+const onDragUpdate = useCallback((absX: number, absY: number) => {
+  if (!longPressAnchorRef.current) return;
+  const currentIndex = getPhotoIndexAtPosition(absX, absY);
+  if (currentIndex === null) return;
+  if (dragAnchorIndexRef.current === null) {
+    const anchorId = getPhotoIdAtFlatIndex(currentIndex);
+    dragAnchorIndexRef.current = currentIndex;
+    dragModeRef.current = committedSelectionRef.current.has(anchorId ?? '') ? 'deselect' : 'select';
+  }
+  applyDragRange(dragAnchorIndexRef.current, currentIndex, dragModeRef.current!);
+}, []);
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+18. MY UPLOADS FILTER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+A pill button on the Photo Gallery header lets a user filter the gallery to
+show only the photos they personally uploaded. This applies to all roles
+(Guest, Organiser, Co-Admin) — it always shows only that user's own uploads.
+
+WHAT IS DISABLED when My Uploads is active:
+  - Upload button (greyed out, non-tappable)
+  - Sort & Display menu option (greyed out)
+  - Long press to enter select mode is disabled
+  - Drag-to-select is disabled
+
+WHAT STAYS ACTIVE:
+  - Download (downloads only the filtered photos)
+  - Delete (deletes only the filtered photos)
+  - Tapping to select photos (tap-based select still works)
+
+RESETS WHEN:
+  - User presses Cancel in select mode
+  - User presses Android back button
+  - exitSelectMode() is called for any reason
+
+IMPORTANT: deletablePhotos respects My Uploads — even Organisers and Co-Admins
+can only delete/download their own photos when My Uploads is active.
+
+--- CODE: app/event.tsx ---
+const [myUploadsFilter, setMyUploadsFilter] = useState(false);
+
+// Pill button in SectionHeader (Photo Gallery header only)
+<TouchableOpacity
+  style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive]}
+  onPress={onMyUploadsToggle}
+>
+  <Text style={[styles.myUploadsPillText, myUploadsFilter && styles.myUploadsPillTextActive]}>
+    My Uploads
+  </Text>
+</TouchableOpacity>
+
+// Styles — NEVER use marginLeft: 'auto' on styles (crashes StyleSheet.create())
+myUploadsPill: { borderWidth: 0.5, borderColor: '#555', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 },
+myUploadsPillActive: { backgroundColor: Colors.accent, borderColor: Colors.accent },
+myUploadsPillText: { fontSize: 11, fontWeight: '600', color: '#888' },
+myUploadsPillTextActive: { color: '#000' },
+
+// listData filtering — baseMain/baseOther respect My Uploads
+const baseMain = myUploadsFilter && userMobile
+  ? photos.filter(p => p.uploaded_by_mobile === userMobile)
+  : photos;
+const baseOther = myUploadsFilter && userMobile
+  ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile)
+  : otherPhotos;
+
+// deletablePhotos — My Uploads takes priority over role-based rules
+const deletablePhotos = myUploadsFilter && userMobile
+  ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
+  : deleteMode && !isAdmin && userMobile
+  ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
+  : deleteMode && isCoadmin && ownerPhone
+  ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile !== ownerPhone)
+  : [...photos, ...otherPhotos];
+
+// Upload button disabled when My Uploads active
+<TouchableOpacity
+  style={[styles.uploadBtn, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.5 }]}
+  onPress={showUploadOptions}
+  disabled={selectMode || deleteMode || myUploadsFilter}
+>
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+19. STICKY SECTION HEADER
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The "Photo Gallery" and "Other Photos" section headers stick to the top of
+the screen as the user scrolls, so they always know which section they are in.
+
+WHY NOT stickyHeaderIndices:
+  FlashList's stickyHeaderIndices caused bugs on Android (header disappearing
+  after cancel, scroll jumps). The current implementation uses a scroll-driven
+  absolute-positioned overlay instead — fully custom and reliable on both platforms.
+
+HOW IT WORKS:
+  1. updateSectionPositions() walks listData, accumulates item heights using
+     accumulatedHeights, and records the content-space Y of the select_bar,
+     main section header, and other section header
+  2. onScroll compares current scroll offset to mainHeaderY and otherHeaderY
+     to decide which header to show as sticky (stickySection state)
+  3. The in-list section header becomes invisible (opacity: 0) when the sticky
+     overlay is showing the same section — prevents double rendering
+  4. The sticky overlay is an absolutely positioned View over the list,
+     sitting at top: 0 (or below the select bar if selectBarSticky is true)
+
+--- CODE: app/event.tsx ---
+
+// Track section Y positions after any item renders
+function updateSectionPositions() {
+  let y = 0;
+  for (const item of listDataRef.current) {
+    if (item.type === 'select_bar') selectBarYRef.current = y;
+    if (item.type === 'section_header') {
+      if (item.section === 'main') mainHeaderY.current = y;
+      else otherHeaderY.current = y;
+    }
+    y += accumulatedHeights.current[item.key] ?? 0;
+  }
+}
+
+// onScroll — update which section header is sticky
+const handleScroll = useCallback((e) => {
+  const y = e.nativeEvent.contentOffset.y;
+  scrollOffsetRef.current = y;
+  let next: 'main' | 'other' | null = null;
+  if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
+  else if (mainHeaderY.current !== null && y >= mainHeaderY.current) next = 'main';
+  if (stickySectionRef.current !== next) {
+    stickySectionRef.current = next;
+    setStickySection(next);
+  }
+}, [selectMode, deleteMode]);
+
+// In-list header — hidden when sticky overlay is showing
+<View style={{ opacity: stickySection === item.section ? 0 : 1 }}>
+  <SectionHeader ... />
+</View>
+
+// Sticky overlay
+{stickySection && (
+  <View style={[styles.stickySectionHeader, {
+    top: (selectMode || deleteMode) && selectBarSticky ? selectBarHeight : 0,
+  }]}>
+    <SectionHeader
+      section={stickySection}
+      myUploadsFilter={myUploadsFilter}
+      onMyUploadsToggle={...}
+      ...
+    />
+  </View>
+)}
+
+// CRITICAL: The sticky SectionHeader must receive myUploadsFilter and
+// onMyUploadsToggle props — otherwise the pill loses its active style when
+// scrolling (the sticky overlay renders without knowing the filter is active).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+20. CO-ADMIN DELETE MODE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Three roles can delete photos, each with different permissions:
+
+  GUEST (not admin):
+    - Can only delete their own photos (matched by mobile number)
+
+  CO-ADMIN (isAdmin=true, role='coadmin'):
+    - Can delete any guest's photos
+    - CANNOT delete the Organiser's photos (matched by ownerPhone)
+    - ownerPhone is passed as a navigation param when joining the event
+
+  ORGANISER / ADMIN (isAdmin=true, role='organiser' or 'admin'):
+    - Can delete all photos
+
+The deletablePhotos array is computed from these rules and used to:
+  - Limit which photos appear in the select bar count
+  - Limit what "Select All" selects
+  - Show the appropriate note in the section header ("You can only delete
+    photos that you uploaded" vs "You can delete any guest's photos...")
+
+My Uploads filter overrides all role-based rules — when active, only the
+current user's own photos are deletable regardless of role.
+
+--- CODE: app/event.tsx ---
+const isCoadmin = isAdmin && params.role === 'coadmin';
+const ownerPhone = params.ownerPhone ?? '';
+
+const deletablePhotos = myUploadsFilter && userMobile
+  ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
+  : deleteMode && !isAdmin && userMobile
+  ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
+  : deleteMode && isCoadmin && ownerPhone
+  ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile !== ownerPhone)
+  : [...photos, ...otherPhotos];
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+END OF REFERENCE
+Built with Expo SDK 54 · React Native 0.81 · iOS 15.1+ · Next.js 15 · Supabase · S3
+Last updated: 2026-07-31
+================================================================================

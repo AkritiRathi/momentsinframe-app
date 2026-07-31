@@ -125,7 +125,7 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, loading }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -138,6 +138,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   groupByDate?: boolean;
   myUploadsFilter?: boolean;
   onMyUploadsToggle?: () => void;
+  loading?: boolean;
 }) {
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
@@ -158,9 +159,9 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
           </View>
           {isMain && (
             <TouchableOpacity
-              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode) && { opacity: 0.3 }]}
+              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode || loading) && { opacity: 0.3 }]}
               onPress={onMyUploadsToggle}
-              disabled={selectMode || deleteMode}
+              disabled={selectMode || deleteMode || loading}
             >
               <Text style={[styles.myUploadsPillText, myUploadsFilter && styles.myUploadsPillTextActive]}>
                 My Uploads
@@ -2135,6 +2136,7 @@ export default function EventScreen() {
               sortOrder={sortOrder}
               groupByDate={groupByDate}
               myUploadsFilter={myUploadsFilter}
+              loading={loading}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
                 setMyUploadsFilter(f => !f);
@@ -2570,6 +2572,7 @@ export default function EventScreen() {
               sortOrder={sortOrder}
               groupByDate={groupByDate}
               myUploadsFilter={myUploadsFilter}
+              loading={loading}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
                 setMyUploadsFilter(f => !f);

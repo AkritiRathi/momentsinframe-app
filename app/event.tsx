@@ -446,8 +446,8 @@ export default function EventScreen() {
 
   const isAdmin = params.isAdmin === 'true';
   const adminLabel = params.role === 'organiser' ? 'Organiser' : params.role === 'coadmin' ? 'Co-Admin' : 'Admin';
-  const allowGuestDelete = params.allowGuestDelete === 'true';
-  const viewOnly = params.viewOnly === 'true';
+  const [allowGuestDelete, setAllowGuestDelete] = useState(params.allowGuestDelete === 'true');
+  const [viewOnly, setViewOnly] = useState(params.viewOnly === 'true');
   const ownerPhone = params.ownerPhone ?? '';
   const slug = params.slug;
 

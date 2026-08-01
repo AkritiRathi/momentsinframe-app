@@ -125,7 +125,7 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -138,6 +138,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   groupByDate?: boolean;
   myUploadsFilter?: boolean;
   onMyUploadsToggle?: () => void;
+  showMyUploadsOnOther?: boolean;
 }) {
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
@@ -156,7 +157,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
             <Text style={styles.sectionTitle}>{label}</Text>
             <Text style={styles.sectionCount}>{items.length}</Text>
           </View>
-          {isMain && (
+          {(isMain || showMyUploadsOnOther) && (
             <TouchableOpacity
               style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode) && { opacity: 0.3 }]}
               onPress={onMyUploadsToggle}
@@ -2160,6 +2161,7 @@ export default function EventScreen() {
               sortOrder={sortOrder}
               groupByDate={groupByDate}
               myUploadsFilter={myUploadsFilter}
+              showMyUploadsOnOther={item.section === 'other' && photos.length === 0}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
                 if (!myUploadsFilter) {
@@ -2612,6 +2614,7 @@ export default function EventScreen() {
               sortOrder={sortOrder}
               groupByDate={groupByDate}
               myUploadsFilter={myUploadsFilter}
+              showMyUploadsOnOther={stickySection === 'other' && photos.length === 0}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
                 if (!myUploadsFilter) {

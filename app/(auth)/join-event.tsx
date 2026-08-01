@@ -1,7 +1,8 @@
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Modal, ScrollView,
+  ActivityIndicator, Modal, ScrollView, Platform,
 } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
@@ -34,6 +35,9 @@ export default function JoinEventScreen() {
   const [rejoining, setRejoining] = useState<string | null>(null);
   const [eventsModalVisible, setEventsModalVisible] = useState(false);
   const [checkingEvents, setCheckingEvents] = useState(false);
+  const [scannerVisible, setScannerVisible] = useState(false);
+  const [scanned, setScanned] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   useEffect(() => {
     async function load() {
@@ -268,6 +272,31 @@ export default function JoinEventScreen() {
     setEventsModalVisible(true);
   }
 
+  async function openScanner() {
+    if (!cameraPermission?.granted) {
+      const result = await requestCameraPermission();
+      if (!result.granted) {
+        showAlert('Camera access needed', 'Please allow camera access in Settings to scan QR codes.');
+        return;
+      }
+    }
+    setScanned(false);
+    setScannerVisible(true);
+  }
+
+  function handleBarCodeScanned({ data }: { data: string }) {
+    if (scanned) return;
+    const trimmed = data.trim();
+    if (/^\d{6}$/.test(trimmed)) {
+      setScanned(true);
+      setScannerVisible(false);
+      setCode(trimmed);
+      attemptJoin(trimmed);
+    } else {
+      showAlert('Invalid QR code', 'This QR code does not contain a valid event code.');
+    }
+  }
+
   const visibleEvents = joinedEvents.filter(e => !isExpired(e.expiresAt) || e.isOrganiser);
 
   return (
@@ -351,12 +380,33 @@ export default function JoinEventScreen() {
 
         <View style={styles.divider} />
 
-        <TouchableOpacity style={styles.qrButton} onPress={() => showAlert('Coming soon', 'QR scanner will be added shortly.')}>
+        <TouchableOpacity style={styles.qrButton} onPress={openScanner}>
           <Text style={styles.qrIcon}>📷</Text>
           <Text style={styles.qrText}>Scan QR code instead</Text>
         </TouchableOpacity>
       </ScrollView>
       {alertOverlay}
+
+      <Modal visible={scannerVisible} animationType="slide" onRequestClose={() => setScannerVisible(false)}>
+        <View style={styles.scannerContainer}>
+          <CameraView
+            style={StyleSheet.absoluteFillObject}
+            facing="back"
+            barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+            onBarcodeScanned={handleBarCodeScanned}
+          />
+          <View style={styles.scannerOverlay}>
+            <View style={styles.scannerFrame} />
+            <Text style={styles.scannerHint}>Point at an event QR code</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.scannerClose, { top: insets.top + 16 }]}
+            onPress={() => setScannerVisible(false)}
+          >
+            <Text style={styles.scannerCloseText}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -464,6 +514,37 @@ const styles = StyleSheet.create({
   },
   joinBtnText: { ...Typography.buttonText, color: Colors.background },
   divider: { height: 0.5, backgroundColor: '#222', marginVertical: 24 },
+  scannerContainer: { flex: 1, backgroundColor: '#000' },
+  scannerOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scannerFrame: {
+    width: 240,
+    height: 240,
+    borderWidth: 2,
+    borderColor: '#fff',
+    borderRadius: 16,
+    backgroundColor: 'transparent',
+  },
+  scannerHint: {
+    marginTop: 20,
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  scannerClose: {
+    position: 'absolute',
+    right: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scannerCloseText: { color: '#fff', fontSize: 18, fontWeight: '700' },
   qrButton: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -21,6 +21,7 @@ type Event = {
   join_code: string;
   is_closed: boolean;
   allow_guest_delete: boolean;
+  view_only: boolean;
   photo_count: number;
 };
 
@@ -131,6 +132,7 @@ export default function DashboardScreen() {
         photo_count: String(item.photo_count),
         is_closed: item.is_closed ? 'true' : 'false',
         allow_guest_delete: item.allow_guest_delete ? 'true' : 'false',
+        view_only: item.view_only ? 'true' : 'false',
         organiserPhone: organiserPhone ?? '',
       },
     });

@@ -235,7 +235,7 @@ export async function joinEvent(joinCode: string, phone?: string) {
   return post('/api/native/events/join', { joinCode, phone });
 }
 
-export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean }) {
+export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean; viewOnly?: boolean }) {
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/settings`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

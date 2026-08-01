@@ -31,7 +31,7 @@ export default function EventDetailScreen() {
   const params = useLocalSearchParams<{
     id: string; name: string; slug: string; join_code: string;
     created_at: string; expires_at: string; photo_count: string;
-    is_closed: string; allow_guest_delete: string; organiserPhone: string;
+    is_closed: string; allow_guest_delete: string; view_only: string; organiserPhone: string;
   }>();
 
   const [showExtendPicker, setShowExtendPicker] = useState(false);
@@ -42,6 +42,7 @@ export default function EventDetailScreen() {
   const [deletePasswordError, setDeletePasswordError] = useState<string | null>(null);
   const [deletePasswordLoading, setDeletePasswordLoading] = useState(false);
   const [allowGuestDelete, setAllowGuestDelete] = useState(params.allow_guest_delete === 'true');
+  const [viewOnly, setViewOnly] = useState(params.view_only === 'true');
   const [isClosed, setIsClosed] = useState(params.is_closed === 'true');
   const [settingsUpdating, setSettingsUpdating] = useState(false);
   const [closedUpdating, setClosedUpdating] = useState(false);
@@ -220,6 +221,20 @@ export default function EventDetailScreen() {
       showAlert('Error', result.error);
     } else {
       setAllowGuestDelete(value);
+    }
+  }
+
+  async function handleToggleViewOnly(value: boolean) {
+    const pw = await getOrganiserPassword();
+    if (!pw || !params.organiserPhone) return;
+    setSettingsUpdating(true);
+    const result = await updateEventSettings(params.slug, params.organiserPhone, pw, { viewOnly: value });
+    setSettingsUpdating(false);
+    if (result.error) {
+      showAlert('Error', result.error);
+    } else {
+      setViewOnly(value);
+      if (value) setAllowGuestDelete(false);
     }
   }
 
@@ -606,6 +621,7 @@ export default function EventDetailScreen() {
         <Text style={styles.eventSub}>
           {params.photo_count} photos · Event Code: <Text style={styles.codeHighlight}>{params.join_code}</Text>
         </Text>
+        <Text style={styles.eventSub}>Created: {formatDate(params.created_at)} · Expires: {formatDate(params.expires_at)}</Text>
 
         <Text style={styles.sectionLabel}>SHARE</Text>
         <View style={styles.row}>
@@ -621,18 +637,6 @@ export default function EventDetailScreen() {
           >
             <Text style={styles.btnText}>Show QR</Text>
           </TouchableOpacity>
-        </View>
-
-        <Text style={styles.sectionLabel}>DATES</Text>
-        <View style={styles.row}>
-          <View style={styles.metaItem}>
-            <Text style={styles.metaLabel}>CREATED</Text>
-            <Text style={styles.metaValue}>{formatDate(params.created_at)}</Text>
-          </View>
-          <View style={styles.metaItem}>
-            <Text style={styles.metaLabel}>EXPIRES</Text>
-            <Text style={styles.metaValue}>{formatDate(params.expires_at)}</Text>
-          </View>
         </View>
 
         <Text style={styles.sectionLabel}>ACTIONS</Text>
@@ -654,8 +658,9 @@ export default function EventDetailScreen() {
           {settingsUpdating
             ? <ActivityIndicator color={Colors.accent} />
             : <Switch
-                value={allowGuestDelete}
-                onValueChange={handleToggleGuestDelete}
+                value={viewOnly ? false : allowGuestDelete}
+                onValueChange={viewOnly ? undefined : handleToggleGuestDelete}
+                disabled={viewOnly}
                 trackColor={{ false: '#333', true: Colors.accent }}
                 thumbColor={Colors.white}
               />
@@ -685,7 +690,21 @@ export default function EventDetailScreen() {
               />
           }
         </View>
-
+        <View style={styles.settingRow}>
+          <View style={styles.settingInfo}>
+            <Text style={styles.settingLabel}>View only event</Text>
+            <Text style={styles.settingDesc}>Guests can view and download but not upload photos</Text>
+          </View>
+          {settingsUpdating
+            ? <ActivityIndicator color={Colors.accent} />
+            : <Switch
+                value={viewOnly}
+                onValueChange={handleToggleViewOnly}
+                trackColor={{ false: '#333', true: Colors.accent }}
+                thumbColor={Colors.white}
+              />
+          }
+        </View>
 
         <View style={styles.divider} />
 
@@ -701,6 +720,7 @@ export default function EventDetailScreen() {
               isAdmin: 'true',
               adminPhone: params.organiserPhone ?? '',
               allowGuestDelete: allowGuestDelete ? 'true' : 'false',
+              viewOnly: viewOnly ? 'true' : 'false',
               role: 'organiser',
               joinCode: params.join_code,
               ownerPhone: params.organiserPhone ?? '',
@@ -1229,9 +1249,6 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', gap: 8, marginBottom: 4 },
   btn: { flex: 1, backgroundColor: '#252525', borderWidth: 0.5, borderColor: '#333', borderRadius: 8, padding: 11, alignItems: 'center' },
   btnText: { fontSize: 13, fontWeight: '700', color: '#CCC' },
-  metaItem: { flex: 1, backgroundColor: '#252525', borderRadius: 8, padding: 10 },
-  metaLabel: { ...Typography.inputLabel, color: Colors.textMuted, marginBottom: 2 },
-  metaValue: { ...Typography.body, color: Colors.textMuted, fontWeight: '600' },
   emptyText: { fontSize: 13, color: '#555', marginBottom: 10 },
   manageGuestsInline: { fontSize: 13, fontWeight: '600', color: Colors.accent, marginTop: 6 },
   settingRow: {

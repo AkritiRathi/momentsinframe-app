@@ -61,6 +61,7 @@ export default function JoinEventScreen() {
               joinCode: ev.join_code ?? '',
               createdAt: ev.created_at ?? new Date().toISOString(),
               allowGuestDelete: ev.allow_guest_delete ?? false,
+              viewOnly: ev.view_only ?? false,
               isOrganiser: true,
             })));
             // Remove cached organiser events that no longer exist on server (deleted)
@@ -134,6 +135,7 @@ export default function JoinEventScreen() {
         joinCode,
         createdAt: result.event.created_at ?? new Date().toISOString(),
         allowGuestDelete: result.event.allow_guest_delete ?? false,
+        viewOnly: result.event.view_only ?? false,
         ownerPhone: result.event.owner_phone ?? '',
       });
       router.replace({
@@ -146,6 +148,7 @@ export default function JoinEventScreen() {
           isAdmin: isAdmin ? 'true' : 'false',
           adminPhone: isAdmin ? (profile?.mobile ?? '') : '',
           allowGuestDelete: result.event.allow_guest_delete ? 'true' : 'false',
+          viewOnly: result.event.view_only ? 'true' : 'false',
           joinCode,
           role: adminRole,
           ownerPhone: result.event.owner_phone ?? '',
@@ -214,6 +217,7 @@ export default function JoinEventScreen() {
           isAdmin: isAdmin ? 'true' : 'false',
           adminPhone: isAdmin ? (profile?.mobile ?? '') : '',
           allowGuestDelete: entry.allowGuestDelete ? 'true' : 'false',
+          viewOnly: entry.viewOnly ? 'true' : 'false',
           joinCode: entry.joinCode,
           role: adminRole,
           ownerPhone,

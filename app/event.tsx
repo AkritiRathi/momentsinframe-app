@@ -125,7 +125,7 @@ function buildDownloadFilename(id: string, takenAt: string | null, ext: string):
   return `${datePart}_${timePart}_${idSuffix}.${ext}`;
 }
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther, hideMyUploads }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -139,6 +139,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   myUploadsFilter?: boolean;
   onMyUploadsToggle?: () => void;
   showMyUploadsOnOther?: boolean;
+  hideMyUploads?: boolean;
 }) {
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
@@ -157,7 +158,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
             <Text style={styles.sectionTitle}>{label}</Text>
             <Text style={styles.sectionCount}>{items.length}</Text>
           </View>
-          {(isMain || showMyUploadsOnOther) && (
+          {(isMain || showMyUploadsOnOther) && !hideMyUploads && (
             <TouchableOpacity
               style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode) && { opacity: 0.3 }]}
               onPress={onMyUploadsToggle}
@@ -440,12 +441,13 @@ export default function EventScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{
     slug: string; name: string; expiresAt: string; createdAt: string;
-    isAdmin: string; adminPhone: string; allowGuestDelete: string; joinCode: string; role?: string; ownerPhone?: string;
+    isAdmin: string; adminPhone: string; allowGuestDelete: string; viewOnly?: string; joinCode: string; role?: string; ownerPhone?: string;
   }>();
 
   const isAdmin = params.isAdmin === 'true';
   const adminLabel = params.role === 'organiser' ? 'Organiser' : params.role === 'coadmin' ? 'Co-Admin' : 'Admin';
   const allowGuestDelete = params.allowGuestDelete === 'true';
+  const viewOnly = params.viewOnly === 'true';
   const ownerPhone = params.ownerPhone ?? '';
   const slug = params.slug;
 
@@ -2113,10 +2115,20 @@ export default function EventScreen() {
         }
         return (
           <View style={styles.uploadCard}>
-            <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode || deleteMode || myUploadsFilter}>
-              <Text style={styles.uploadBtnText}>Upload Photos</Text>
-            </TouchableOpacity>
-            <Text style={styles.uploadHint}>Max 40 photos per batch.{'\n'}Keep the app open while uploading.</Text>
+            {viewOnly && !isAdmin ? (
+              <TouchableOpacity style={[styles.uploadBtn, { opacity: 0.4 }]} disabled>
+                <Text style={styles.uploadBtnText}>View Only Event</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode || deleteMode || myUploadsFilter}>
+                <Text style={styles.uploadBtnText}>Upload Photos</Text>
+              </TouchableOpacity>
+            )}
+            <Text style={styles.uploadHint}>
+              {viewOnly && !isAdmin
+                ? 'The organiser has disabled uploads for this event.'
+                : `Max 40 photos per batch.\nKeep the app open while uploading.`}
+            </Text>
             {uploadSummary && (
               <Text style={styles.uploadSummary}>{uploadSummary}</Text>
             )}
@@ -2126,7 +2138,7 @@ export default function EventScreen() {
       case 'select_photos_btn':
         return (
           <View style={styles.selectPhotosRow}>
-            {(isAdmin || allowGuestDelete) && (
+            {(isAdmin || (allowGuestDelete && !(viewOnly && !isAdmin))) && (
               <TouchableOpacity style={[styles.deleteModeBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setDeleteMode(true); setSelectMode(false); } }}>
                 <Text style={styles.deleteModeBtnText}>Delete Photos</Text>
               </TouchableOpacity>
@@ -2162,6 +2174,7 @@ export default function EventScreen() {
               groupByDate={groupByDate}
               myUploadsFilter={myUploadsFilter}
               showMyUploadsOnOther={item.section === 'other' && photos.length === 0}
+              hideMyUploads={viewOnly && !isAdmin}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
                 if (!myUploadsFilter) {
@@ -2615,6 +2628,7 @@ export default function EventScreen() {
               groupByDate={groupByDate}
               myUploadsFilter={myUploadsFilter}
               showMyUploadsOnOther={stickySection === 'other' && photos.length === 0}
+              hideMyUploads={viewOnly && !isAdmin}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
                 if (!myUploadsFilter) {

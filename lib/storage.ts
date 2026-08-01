@@ -103,6 +103,7 @@ export type JoinedEventEntry = {
   joinCode: string;
   createdAt: string;
   allowGuestDelete: boolean;
+  viewOnly?: boolean;
   isOrganiser?: boolean;
   ownerPhone?: string;
 };

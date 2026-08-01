@@ -2586,7 +2586,7 @@ export default function EventScreen() {
             {renderSelectBar()}
           </View>
         )}
-        {showScrollTop && !selectMode && !deleteMode && (
+        {showScrollTop && (
           <TouchableOpacity
             style={[styles.scrollTopBtn, { bottom: insets.bottom + 4 }]}
             onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}

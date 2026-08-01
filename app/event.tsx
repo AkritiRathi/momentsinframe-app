@@ -26,7 +26,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback, memo, forwardRef } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
-  prepareZip, fetchServerNotifications, markServerNotificationsRead,
+  getPhotoDownloadUrl, prepareZip, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
 } from '../lib/api';
 import { API_BASE_URL } from '../constants/config';
@@ -555,6 +555,7 @@ export default function EventScreen() {
   const [downloadMode, setDownloadMode] = useState<'jpg' | 'zip'>('jpg');
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const [downloadingPhoto, setDownloadingPhoto] = useState(false);
+  const [sharingPhoto, setSharingPhoto] = useState(false);
   const prevSelectedSize = useRef(0);
 
   const lightboxPhotosRef = useRef<Photo[]>([]);
@@ -1591,6 +1592,27 @@ export default function EventScreen() {
     ]);
   }
 
+  async function handleSharePhoto(id: string) {
+    const photo = [...photos, ...otherPhotos].find(p => p.id === id);
+    setSharingPhoto(true);
+    try {
+      const { url, filename, error } = await getPhotoDownloadUrl(id, params.adminPhone ?? undefined);
+      if (error || !url) throw new Error(error ?? 'Could not get photo URL');
+      const rawExt = (photo?.original_filename ?? filename ?? 'photo.jpg').split('.').pop()?.toLowerCase() ?? 'jpg';
+      const ext = (rawExt === 'heic' || rawExt === 'heif') ? 'jpg' : rawExt;
+      const localFilename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
+      const localUri = `${FileSystem.cacheDirectory}${localFilename}`;
+      const dlResult = await FileSystem.downloadAsync(url, localUri);
+      if (dlResult.status !== 200) throw new Error('Download failed');
+      await Sharing.shareAsync(localUri, { mimeType: 'image/jpeg', dialogTitle: 'Share photo' });
+      await FileSystem.deleteAsync(localUri, { idempotent: true });
+    } catch (e: any) {
+      showAlert('Error', e?.message ?? 'Could not share photo.');
+    } finally {
+      setSharingPhoto(false);
+    }
+  }
+
   async function saveAsJpgs(ids: string[], folderPath: string | null, mode: 'downloads' | 'gallery') {
     const allPhotos = [...photos, ...otherPhotos];
     downloadCancelledRef.current = false;
@@ -2451,6 +2473,9 @@ export default function EventScreen() {
                 <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && handleDownloadPhoto(currentPhoto.id)}>
                   <Text style={styles.lbBtnText}>Download</Text>
                 </TouchableOpacity>
+                <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && handleSharePhoto(currentPhoto.id)}>
+                  <Text style={styles.lbBtnText}>Share</Text>
+                </TouchableOpacity>
               </View>
             </View>
             <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
@@ -2504,6 +2529,12 @@ export default function EventScreen() {
           <View style={styles.lbDownloadOverlay}>
             <ActivityIndicator color={Colors.white} size="large" />
             <Text style={styles.lbDownloadText}>Downloading…</Text>
+          </View>
+        )}
+        {sharingPhoto && (
+          <View style={styles.lbDownloadOverlay}>
+            <ActivityIndicator color={Colors.white} size="large" />
+            <Text style={styles.lbDownloadText}>Preparing…</Text>
           </View>
         )}
         {alertOverlay}

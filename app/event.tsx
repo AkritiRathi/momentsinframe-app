@@ -22,7 +22,7 @@ let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName
 let PhotoSaverError: string = 'not attempted';
 try { PhotoSaver = require('photo-saver').default; PhotoSaverError = 'ok'; } catch (e: any) { PhotoSaverError = String(e?.message ?? e); }
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback, memo, forwardRef } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
@@ -628,6 +628,17 @@ export default function EventScreen() {
     return () => appStateSub.remove();
   }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      getEventPhotos(slug, params.adminPhone || undefined).then(data => {
+        if (data?.event) {
+          if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
+          if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
+        }
+      });
+    }, [])
+  );
+
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (isAlertVisible) return true;
@@ -686,6 +697,10 @@ export default function EventScreen() {
       const other: Photo[] = data.otherPhotos ?? [];
       setPhotos(main);
       setOtherPhotos(other);
+      if (data.event) {
+        if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
+        if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
+      }
       setLoading(false);
       loadAllUrls([...main, ...other]);
     } catch {
@@ -957,6 +972,7 @@ export default function EventScreen() {
     otherHeaderY.current = null;
     selectBarYRef.current = null;
     longPressAnchorRef.current = null;
+    loadPhotos();
   }
 
   function updateSectionPositions() {

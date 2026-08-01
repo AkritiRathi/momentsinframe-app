@@ -2,7 +2,8 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Modal, ScrollView, Platform,
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions, Camera } from 'expo-camera';
+import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
@@ -297,6 +298,28 @@ export default function JoinEventScreen() {
     }
   }
 
+  async function scanFromGallery() {
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false });
+    if (result.canceled || !result.assets?.[0]?.uri) return;
+    try {
+      const scannedCodes = await Camera.scanFromURLAsync(result.assets[0].uri, ['qr']);
+      if (!scannedCodes.length) {
+        showAlert('No QR code found', 'Could not find a QR code in the selected image.');
+        return;
+      }
+      const trimmed = scannedCodes[0].data.trim();
+      if (/^\d{6}$/.test(trimmed)) {
+        setScannerVisible(false);
+        setCode(trimmed);
+        attemptJoin(trimmed);
+      } else {
+        showAlert('Invalid QR code', 'This QR code does not contain a valid event code.');
+      }
+    } catch {
+      showAlert('Error', 'Could not read the QR code. Please try again.');
+    }
+  }
+
   const visibleEvents = joinedEvents.filter(e => !isExpired(e.expiresAt) || e.isOrganiser);
 
   return (
@@ -398,6 +421,9 @@ export default function JoinEventScreen() {
           <View style={styles.scannerOverlay}>
             <View style={styles.scannerFrame} />
             <Text style={styles.scannerHint}>Point at an event QR code</Text>
+            <TouchableOpacity style={styles.galleryBtn} onPress={scanFromGallery}>
+              <Text style={styles.galleryBtnText}>📷 Scan from Gallery</Text>
+            </TouchableOpacity>
           </View>
           <TouchableOpacity
             style={[styles.scannerClose, { top: insets.top + 16 }]}
@@ -545,6 +571,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scannerCloseText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  galleryBtn: {
+    marginTop: 24,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+  },
+  galleryBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
   qrButton: {
     flexDirection: 'row',
     alignItems: 'center',

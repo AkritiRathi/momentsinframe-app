@@ -478,14 +478,14 @@ export default function EventScreen() {
   const [deleteMode, setDeleteMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [groupByDate, setGroupByDate] = useState(false);
+  const [groupByDate, setGroupByDate] = useState(true);
   const [sortPanelVisible, setSortPanelVisible] = useState(false);
   const [myUploadsFilter, setMyUploadsFilter] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const menuBtnRef = useRef<any>(null);
   const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
   const [draftSortOrder, setDraftSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [draftGroupByDate, setDraftGroupByDate] = useState(false);
+  const [draftGroupByDate, setDraftGroupByDate] = useState(true);
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
   const [selectBarSticky, setSelectBarSticky] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);

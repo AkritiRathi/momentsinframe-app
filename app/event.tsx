@@ -487,6 +487,7 @@ export default function EventScreen() {
   const [draftGroupByDate, setDraftGroupByDate] = useState(false);
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
   const [selectBarSticky, setSelectBarSticky] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const stickySectionRef = useRef<'main' | 'other' | null>(null);
   const selectBarStickyRef = useRef(false);
   const [selectBarHeight, setSelectBarHeight] = useState(0);
@@ -660,7 +661,7 @@ export default function EventScreen() {
   }, [selectMode, deleteMode, uploading, bgUploading, isAlertVisible]);
 
   useEffect(() => {
-    const JPG_LIMIT = 25;
+    const JPG_LIMIT = 40;
     if (selectMode && !deleteMode && prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
       showAlert(
         'Downloading as ZIP',
@@ -970,6 +971,7 @@ export default function EventScreen() {
   const handleScroll = useCallback((e: any) => {
     scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
     const y = e.nativeEvent.contentOffset.y;
+    setShowScrollTop(y > 300);
 
     const newSelectBarSticky = selectBarYRef.current !== null && y >= selectBarYRef.current;
     if (selectBarStickyRef.current !== newSelectBarSticky) {
@@ -1893,6 +1895,7 @@ export default function EventScreen() {
     }
 
     if (myUploadsFilter && userMobile && baseMain.length === 0 && baseOther.length === 0 && totalPhotos > 0 && !loading) {
+      items.push({ type: 'section_header', section: 'main', key: 'header_main' });
       items.push({ type: 'my_uploads_empty', key: 'my_uploads_empty' });
     }
 
@@ -2583,6 +2586,14 @@ export default function EventScreen() {
             {renderSelectBar()}
           </View>
         )}
+        {showScrollTop && !selectMode && !deleteMode && (
+          <TouchableOpacity
+            style={[styles.scrollTopBtn, { bottom: insets.bottom + 4 }]}
+            onPress={() => flatListRef.current?.scrollToOffset({ offset: 0, animated: true })}
+          >
+            <Text style={styles.scrollTopBtnText}>↑ Top</Text>
+          </TouchableOpacity>
+        )}
         {stickySection && (
           <View style={[styles.stickySectionHeader, {
             top: (selectMode || deleteMode) && selectBarSticky ? selectBarHeight : 0,
@@ -3131,6 +3142,8 @@ const styles = StyleSheet.create({
 
   stickySelectBar: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20 },
   stickySectionHeader: { position: 'absolute', left: 0, right: 0, zIndex: 10 },
+  scrollTopBtn: { position: 'absolute', alignSelf: 'center', zIndex: 15, backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 20, paddingVertical: 8, paddingHorizontal: 16, alignItems: 'center' },
+  scrollTopBtnText: { color: '#fff', fontSize: 13, fontWeight: '600' },
 
   // Section header
   sectionBlock: { backgroundColor: Colors.background },

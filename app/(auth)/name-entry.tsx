@@ -149,29 +149,33 @@ export default function NameEntryScreen() {
               )}
             </View>
 
-            {/* First name */}
-            <Text style={[styles.label, isPhoneStep && styles.labelMuted]}>FIRST NAME</Text>
-            <TextInput
-              style={[styles.input, (isPhoneStep || isExisting) && styles.inputDisabled]}
-              placeholder="First name"
-              placeholderTextColor="#555"
-              value={firstName}
-              onChangeText={setFirstName}
-              autoCorrect={false}
-              editable={!isPhoneStep && !isExisting}
-            />
+            {/* First name — only shown after OTP is sent */}
+            {!isPhoneStep && (
+              <>
+                <Text style={styles.label}>FIRST NAME</Text>
+                <TextInput
+                  style={[styles.input, isExisting && styles.inputDisabled]}
+                  placeholder="First name"
+                  placeholderTextColor="#555"
+                  value={firstName}
+                  onChangeText={setFirstName}
+                  autoCorrect={false}
+                  editable={!isExisting}
+                />
 
-            {/* Last name */}
-            <Text style={[styles.label, isPhoneStep && styles.labelMuted]}>LAST NAME</Text>
-            <TextInput
-              style={[styles.input, (isPhoneStep || isExisting) && styles.inputDisabled]}
-              placeholder="Last name"
-              placeholderTextColor="#555"
-              value={lastName}
-              onChangeText={setLastName}
-              autoCorrect={false}
-              editable={!isPhoneStep && !isExisting}
-            />
+                {/* Last name */}
+                <Text style={styles.label}>LAST NAME</Text>
+                <TextInput
+                  style={[styles.input, isExisting && styles.inputDisabled]}
+                  placeholder="Last name"
+                  placeholderTextColor="#555"
+                  value={lastName}
+                  onChangeText={setLastName}
+                  autoCorrect={false}
+                  editable={!isExisting}
+                />
+              </>
+            )}
 
             {/* OTP */}
             {!isPhoneStep && (

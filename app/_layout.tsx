@@ -107,11 +107,10 @@ export default function RootLayout() {
       <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <View style={styles.splash}>
-          <Image source={require('../assets/Logo.png')} style={styles.logo} resizeMode="contain" />
-          <Text style={styles.appName}>MomentsInFrame</Text>
+          <Image source={require('../assets/feature_graphic.png')} style={styles.featureGraphic} resizeMode="contain" />
 
           {updateStage === 'checking' && (
-            <ActivityIndicator color="#fff" style={styles.spinner} />
+            <ActivityIndicator color="#F5C842" style={styles.spinner} />
           )}
 
           {updateStage === 'available' && (
@@ -151,22 +150,15 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   splash: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#0F0F0F',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
   },
-  logo: {
-    width: 100,
-    height: 100,
-    marginBottom: 16,
-  },
-  appName: {
-    fontSize: 26,
-    fontWeight: '700',
-    color: '#fff',
-    letterSpacing: 0.5,
-    marginBottom: 32,
+  featureGraphic: {
+    width: '100%',
+    height: 180,
+    marginBottom: 40,
   },
   spinner: {
     marginTop: 8,
@@ -192,7 +184,7 @@ const styles = StyleSheet.create({
   },
   updateBtn: {
     marginTop: 8,
-    backgroundColor: '#4f8ef7',
+    backgroundColor: '#F5C842',
     paddingHorizontal: 36,
     paddingVertical: 14,
     borderRadius: 10,
@@ -201,7 +193,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   updateBtnText: {
-    color: '#fff',
+    color: '#0F0F0F',
     fontSize: 16,
     fontWeight: '600',
   },

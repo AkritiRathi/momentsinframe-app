@@ -3,7 +3,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import { useRef, useState } from 'react';
-import ViewShot from 'react-native-view-shot';
+import ViewShot, { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import { Colors } from '../../constants/colors';
@@ -12,6 +12,7 @@ export default function EventQRScreen() {
   const router = useRouter();
   const { name, join_code } = useLocalSearchParams<{ name: string; join_code: string }>();
   const viewShotRef = useRef<ViewShot>(null);
+  const qrPdfRef = useRef<View>(null);
   const [sharingImage, setSharingImage] = useState(false);
   const [sharingPdf, setSharingPdf] = useState(false);
 
@@ -28,13 +29,13 @@ export default function EventQRScreen() {
   async function handleSharePdf() {
     try {
       setSharingPdf(true);
-      const uri = await viewShotRef.current!.capture!({ format: 'png', quality: 1.0 });
+      const qrBase64 = await captureRef(qrPdfRef, { format: 'png', quality: 1.0, result: 'base64' });
       const html = `
-        <html><body style="margin:0;padding:40px;background:#fff;font-family:sans-serif;text-align:center;">
-          <h2 style="font-size:22px;font-weight:800;margin-bottom:4px;">${name}</h2>
-          <p style="font-size:28px;font-weight:800;letter-spacing:8px;margin:8px 0 24px;">${join_code}</p>
-          <img src="${uri}" style="width:280px;height:280px;" />
-          <p style="margin-top:24px;font-size:13px;color:#888;">Scan the QR code or enter the code above to join the event on MomentsInFrame.</p>
+        <html><body style="margin:0;padding:60px 40px;background:#fff;font-family:sans-serif;text-align:center;">
+          <h2 style="font-size:26px;font-weight:800;margin-bottom:8px;">${name}</h2>
+          <p style="font-size:32px;font-weight:800;letter-spacing:10px;margin:0 0 40px;">${join_code}</p>
+          <img src="data:image/png;base64,${qrBase64}" style="width:320px;height:320px;" />
+          <p style="margin-top:28px;font-size:13px;color:#888;">Scan the QR code or enter the code above to join the event on MomentsInFrame.</p>
         </body></html>`;
       const { uri: pdfUri } = await Print.printToFileAsync({ html, base64: false });
       await Sharing.shareAsync(pdfUri, { mimeType: 'application/pdf', dialogTitle: `${name} QR Code` });
@@ -46,6 +47,12 @@ export default function EventQRScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <View ref={qrPdfRef} collapsable={false} style={{ position: 'absolute', top: -2000, left: 0 }}>
+        <View style={{ backgroundColor: '#FFFFFF', padding: 8 }}>
+          <QRCode value={join_code} size={400} color="#000000" backgroundColor="#FFFFFF" />
+        </View>
+      </View>
+
       <TouchableOpacity style={styles.back} onPress={() => router.back()}>
         <Text style={styles.backText}>←</Text>
       </TouchableOpacity>

@@ -107,7 +107,7 @@ export default function RootLayout() {
       <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <View style={styles.splash}>
-          <Image source={require('../assets/icon.png')} style={styles.logo} resizeMode="contain" />
+          <Image source={require('../assets/Logo.png')} style={styles.logo} resizeMode="contain" />
           <Text style={styles.appName}>MomentsInFrame</Text>
 
           {updateStage === 'checking' && (

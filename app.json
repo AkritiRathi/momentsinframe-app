@@ -5,7 +5,7 @@
     "scheme": "momentsinframe",
     "version": "2.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/Logo.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "runtimeVersion": {
@@ -98,7 +98,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
+          "icon": "./assets/Logo.png",
           "color": "#000000",
           "androidMode": "default",
           "androidCollapsedTitle": "MomentsInFrame"

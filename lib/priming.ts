@@ -1,8 +1,8 @@
-import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alert, Platform } from 'react-native';
 import * as Linking from 'expo-linking';
 
-type PermissionType = 'photos' | 'contacts' | 'notifications';
+type PermissionType = 'photos' | 'contacts' | 'notifications' | 'camera';
 
 function flagKey(type: PermissionType, phone: string): string {
   return `priming_${type}_shown_${phone}`;
@@ -10,7 +10,7 @@ function flagKey(type: PermissionType, phone: string): string {
 
 export async function hasPrimingBeenShown(type: PermissionType, phone: string): Promise<boolean> {
   try {
-    const val = await SecureStore.getItemAsync(flagKey(type, phone));
+    const val = await AsyncStorage.getItem(flagKey(type, phone));
     return val === 'true';
   } catch {
     return false;
@@ -19,7 +19,7 @@ export async function hasPrimingBeenShown(type: PermissionType, phone: string): 
 
 export async function markPrimingShown(type: PermissionType, phone: string): Promise<void> {
   try {
-    await SecureStore.setItemAsync(flagKey(type, phone), 'true');
+    await AsyncStorage.setItem(flagKey(type, phone), 'true');
   } catch {}
 }
 

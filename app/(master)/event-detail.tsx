@@ -9,8 +9,8 @@ import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/d
 import * as Contacts from 'expo-contacts';
 import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
-import { hasPrimingBeenShown, markPrimingShown, showPermissionDeniedAlert, shouldShowDeniedAlert } from '../../lib/priming';
-import PermissionPrimingModal from '../../components/PermissionPrimingModal';
+import { showPermissionDeniedAlert, shouldShowDeniedAlert } from '../../lib/priming';
+import { useAppPermission } from '../../lib/permissions';
 import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, clearAllowedGuests, clearJoinedGuests, listJoinedGuests, setGuestBlocked } from '../../lib/api';
 import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
@@ -85,8 +85,7 @@ export default function EventDetailScreen() {
   const [manualInputMode, setManualInputMode] = useState<'coadmin' | 'guest'>('coadmin');
   const [manualPhone, setManualPhone] = useState('');
 
-  const [contactsPrimingVisible, setContactsPrimingVisible] = useState(false);
-  const pendingAfterContactsPriming = useRef<(() => void) | null>(null);
+  const { requestAppPermission, primingOverlay } = useAppPermission();
 
   const loadCoadmins = useCallback(async () => {
     const pw = await getOrganiserPassword();
@@ -468,15 +467,6 @@ export default function EventDetailScreen() {
   }
 
   async function handleAddCoadmin() {
-    const phone = params.organiserPhone ?? null;
-    if (phone) {
-      const shown = await hasPrimingBeenShown('contacts', phone);
-      if (!shown) {
-        pendingAfterContactsPriming.current = () => handleAddCoadmin();
-        setContactsPrimingVisible(true);
-        return;
-      }
-    }
     showAlert(
       'Add Co-Admin',
       'How would you like to add a co-admin?',
@@ -508,15 +498,6 @@ export default function EventDetailScreen() {
   }
 
   async function handleAddGuest() {
-    const phone = params.organiserPhone ?? null;
-    if (phone) {
-      const shown = await hasPrimingBeenShown('contacts', phone);
-      if (!shown) {
-        pendingAfterContactsPriming.current = () => handleAddGuest();
-        setContactsPrimingVisible(true);
-        return;
-      }
-    }
     showAlert(
       'Add Guest',
       'How would you like to add a guest?',
@@ -618,10 +599,10 @@ export default function EventDetailScreen() {
         </View>
 
         <Text style={styles.eventName}>{params.name}</Text>
+        <Text style={styles.eventSub}>Created: {formatDate(params.created_at)} · Expires: {formatDate(params.expires_at)}</Text>
         <Text style={styles.eventSub}>
           {params.photo_count} photos · Event Code: <Text style={styles.codeHighlight}>{params.join_code}</Text>
         </Text>
-        <Text style={styles.eventSub}>Created: {formatDate(params.created_at)} · Expires: {formatDate(params.expires_at)}</Text>
 
         <Text style={styles.sectionLabel}>SHARE</Text>
         <View style={styles.row}>
@@ -644,7 +625,7 @@ export default function EventDetailScreen() {
           <TouchableOpacity style={styles.btn} onPress={handleExtend}>
             <Text style={styles.btnText}>Extend expiry</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, { borderColor: Colors.accent }]} onPress={() => { loadCoadmins(); setShowCoadminPanel(true); }}>
+          <TouchableOpacity style={[styles.btn, { borderColor: Colors.accent }]} onPress={() => requestAppPermission('contacts', () => { loadCoadmins(); setShowCoadminPanel(true); }, params.organiserPhone)}>
             <Text style={[styles.btnText, { color: Colors.accent }]}>+ Co-Admins</Text>
           </TouchableOpacity>
         </View>
@@ -673,7 +654,7 @@ export default function EventDetailScreen() {
               {isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
             </Text>
             {isClosed && (
-              <TouchableOpacity onPress={() => { loadAllowedGuests(); setShowGuestsPanel(true); }}>
+              <TouchableOpacity onPress={() => requestAppPermission('contacts', () => { loadAllowedGuests(); setShowGuestsPanel(true); }, params.organiserPhone)}>
                 <Text style={styles.manageGuestsInline}>
                   Allowed Guests{allowedGuests.length > 0 ? ` (${allowedGuests.length})` : ''} →
                 </Text>
@@ -1099,8 +1080,7 @@ export default function EventDetailScreen() {
                   showAlert('Invite-Only Event', 'This event is invite-only. To manage who can join, use the Allowed Guests list in the Invite-Only section below.');
                   return;
                 }
-                loadJoinedGuests();
-                setShowManageGuestsPanel(true);
+                requestAppPermission('contacts', () => { loadJoinedGuests(); setShowManageGuestsPanel(true); }, params.organiserPhone);
               }}>
                 <Text style={styles.dropText}>Manage Guests</Text>
               </TouchableOpacity>
@@ -1214,23 +1194,7 @@ export default function EventDetailScreen() {
         </Modal>
       )}
 
-      <PermissionPrimingModal
-        visible={contactsPrimingVisible}
-        icon="👥"
-        title="Access Your Contacts"
-        description="To find your guests by name, Moments in Frame needs access to your contacts."
-        onContinue={async () => {
-          setContactsPrimingVisible(false);
-          const phone = params.organiserPhone ?? null;
-          if (phone) await markPrimingShown('contacts', phone);
-          pendingAfterContactsPriming.current?.();
-          pendingAfterContactsPriming.current = null;
-        }}
-        onDismiss={() => {
-          setContactsPrimingVisible(false);
-          pendingAfterContactsPriming.current = null;
-        }}
-      />
+      {primingOverlay}
 
     </SafeAreaView>
   );

@@ -38,8 +38,9 @@ import {
   saveLastEvent, clearLastEvent,
 } from '../lib/storage';
 import { setupNotifications, showUploadCompleteNotification, showDownloadCompleteNotification } from '../lib/notifications';
-import { hasPrimingBeenShown, markPrimingShown, showPermissionDeniedAlert, shouldShowDeniedAlert } from '../lib/priming';
-import PermissionPrimingModal from '../components/PermissionPrimingModal';
+import * as Notifications from 'expo-notifications';
+import { showPermissionDeniedAlert, shouldShowDeniedAlert } from '../lib/priming';
+import { useAppPermission } from '../lib/permissions';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { useAlert, alertStyles } from '../lib/useAlert';
@@ -543,11 +544,7 @@ export default function EventScreen() {
   const failedAssetsRef = useRef<ImagePicker.ImagePickerAsset[]>([]);
   const { showAlert, alertOverlay, isAlertVisible } = useAlert();
 
-  // Permission priming
-  const [photosPrimingVisible, setPhotosPrimingVisible] = useState(false);
-  const [notifPrimingVisible, setNotifPrimingVisible] = useState(false);
-  const pendingAfterPhotoPriming = useRef<(() => void) | null>(null);
-  const pendingAfterNotifPriming = useRef<(() => void) | null>(null);
+  const { requestAppPermission, primingOverlay } = useAppPermission();
 
   // Notifications panel
   const [notificationsVisible, setNotificationsVisible] = useState(false);
@@ -590,16 +587,11 @@ export default function EventScreen() {
     loadPhotos();
     getUserProfile().then(async p => {
       const phone = p?.mobile ?? params.adminPhone ?? null;
-      if (phone) {
-        const shown = await hasPrimingBeenShown('notifications', phone);
-        if (shown) {
-          setupNotifications();
-        } else {
-          pendingAfterNotifPriming.current = () => setupNotifications();
-          setNotifPrimingVisible(true);
-        }
-      } else {
+      const notifPerm = await Notifications.getPermissionsAsync();
+      if (notifPerm.status === 'granted') {
         setupNotifications();
+      } else if (notifPerm.canAskAgain) {
+        requestAppPermission('notifications', setupNotifications, phone);
       }
       if (p) {
         setUserMobile(p.mobile);
@@ -1013,29 +1005,6 @@ export default function EventScreen() {
     if (retryAssets) {
       assets = retryAssets;
     } else {
-      if (source === 'gallery') {
-        const phone = userMobile ?? params.adminPhone ?? null;
-        if (phone) {
-          const shown = await hasPrimingBeenShown('photos', phone);
-          if (!shown) {
-            pendingAfterPhotoPriming.current = () => handleUpload('gallery');
-            setPhotosPrimingVisible(true);
-            return;
-          }
-        }
-      }
-
-      const permResult = source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-      if (!permResult.granted) {
-        if (shouldShowDeniedAlert(permResult.granted, permResult.canAskAgain)) {
-          showPermissionDeniedAlert('Photos');
-        }
-        return;
-      }
-
       const pickResult = source === 'camera'
         ? await ImagePicker.launchCameraAsync({ quality: 1 })
         : await ImagePicker.launchImageLibraryAsync({
@@ -1364,15 +1333,6 @@ export default function EventScreen() {
     if (bgUploading) {
       showAlert('Upload in progress', 'A background upload is already running. Please wait for it to complete.');
       return;
-    }
-    const phone = userMobile ?? params.adminPhone ?? null;
-    if (phone) {
-      const shown = await hasPrimingBeenShown('photos', phone);
-      if (!shown) {
-        pendingAfterPhotoPriming.current = () => handleDateUpload();
-        setPhotosPrimingVisible(true);
-        return;
-      }
     }
     const perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
     if (!perm.granted) {
@@ -1965,7 +1925,7 @@ export default function EventScreen() {
           <Pressable style={styles.selBtn} onPress={exitSelectMode}>
             <Text style={styles.selBtnText}>Cancel</Text>
           </Pressable>
-          <Pressable style={[styles.selBtn, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={handleBulkDownload}>
+          <Pressable style={[styles.selBtn, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={() => requestAppPermission('gallery', handleBulkDownload, userMobile ?? params.adminPhone ?? null)}>
             <Text style={[styles.selBtnText, { color: Colors.accent }]}>Download</Text>
           </Pressable>
         </View>
@@ -2136,7 +2096,7 @@ export default function EventScreen() {
                 <Text style={styles.uploadBtnText}>View Only Event</Text>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.5 }]} onPress={showUploadOptions} disabled={selectMode || deleteMode || myUploadsFilter}>
+              <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.5 }]} onPress={() => requestAppPermission('gallery', showUploadOptions, userMobile ?? params.adminPhone ?? null)} disabled={selectMode || deleteMode || myUploadsFilter}>
                 <Text style={styles.uploadBtnText}>Upload Photos</Text>
               </TouchableOpacity>
             )}
@@ -2504,7 +2464,7 @@ export default function EventScreen() {
                     <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
                   </TouchableOpacity>
                 )}
-                <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && handleDownloadPhoto(currentPhoto.id)}>
+                <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && requestAppPermission('gallery', () => handleDownloadPhoto(currentPhoto.id), userMobile ?? params.adminPhone ?? null)}>
                   <Text style={styles.lbBtnText}>Download</Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && handleSharePhoto(currentPhoto.id)}>
@@ -3073,43 +3033,7 @@ export default function EventScreen() {
         </GestureHandlerRootView>
       </Modal>
 
-      <PermissionPrimingModal
-        visible={photosPrimingVisible}
-        icon="🖼️"
-        title="Access Your Photos"
-        description="Please grant Full Access to your photo library. Without full access, your event album will not be created."
-        onContinue={async () => {
-          setPhotosPrimingVisible(false);
-          const phone = userMobile ?? params.adminPhone ?? null;
-          if (phone) await markPrimingShown('photos', phone);
-          pendingAfterPhotoPriming.current?.();
-          pendingAfterPhotoPriming.current = null;
-        }}
-        onDismiss={() => {
-          setPhotosPrimingVisible(false);
-          pendingAfterPhotoPriming.current = null;
-        }}
-      />
-
-      <PermissionPrimingModal
-        visible={notifPrimingVisible}
-        icon="🔔"
-        title="Stay in the Loop"
-        description="We'll notify you when photos are uploaded or upgraded in your events."
-        onContinue={async () => {
-          setNotifPrimingVisible(false);
-          const phone = userMobile ?? params.adminPhone ?? null;
-          if (phone) await markPrimingShown('notifications', phone);
-          pendingAfterNotifPriming.current?.();
-          pendingAfterNotifPriming.current = null;
-        }}
-        onDismiss={async () => {
-          setNotifPrimingVisible(false);
-          const phone = userMobile ?? params.adminPhone ?? null;
-          if (phone) await markPrimingShown('notifications', phone);
-          pendingAfterNotifPriming.current = null;
-        }}
-      />
+      {primingOverlay}
 
     </SafeAreaView>
   );

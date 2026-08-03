@@ -2,8 +2,7 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ActivityIndicator, Modal, ScrollView, Platform,
 } from 'react-native';
-import { CameraView, Camera } from 'expo-camera';
-import { useAppPermission } from '../../lib/permissions';
+import { CameraView, Camera, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -39,7 +38,7 @@ export default function JoinEventScreen() {
   const [checkingEvents, setCheckingEvents] = useState(false);
   const [scannerVisible, setScannerVisible] = useState(false);
   const [scanned, setScanned] = useState(false);
-  const { requestAppPermission, primingOverlay } = useAppPermission();
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   useEffect(() => {
     async function load() {
@@ -278,8 +277,16 @@ export default function JoinEventScreen() {
     setEventsModalVisible(true);
   }
 
-  function openScanner() {
-    requestAppPermission('camera', () => { setScanned(false); setScannerVisible(true); });
+  async function openScanner() {
+    if (!cameraPermission?.granted) {
+      const result = await requestCameraPermission();
+      if (!result.granted) {
+        showAlert('Camera access needed', 'Please allow camera access in Settings to scan QR codes.');
+        return;
+      }
+    }
+    setScanned(false);
+    setScannerVisible(true);
   }
 
   function handleBarCodeScanned({ data }: { data: string }) {
@@ -406,7 +413,6 @@ export default function JoinEventScreen() {
         </TouchableOpacity>
       </ScrollView>
       {alertOverlay}
-      {primingOverlay}
 
       <Modal visible={scannerVisible} animationType="slide" onRequestClose={() => setScannerVisible(false)}>
         <View style={styles.scannerContainer}>

@@ -150,7 +150,7 @@ export function useAppPermission() {
     const result = await config.requestPermission();
     if (result.granted) {
       onGranted();
-    } else if (!result.canAskAgain) {
+    } else {
       showDenied(config.label);
     }
   }

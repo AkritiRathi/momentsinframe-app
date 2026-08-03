@@ -233,7 +233,6 @@ export default function EventDetailScreen() {
       showAlert('Error', result.error);
     } else {
       setViewOnly(value);
-      if (value) setAllowGuestDelete(false);
     }
   }
 
@@ -599,7 +598,7 @@ export default function EventDetailScreen() {
         </View>
 
         <Text style={styles.eventName}>{params.name}</Text>
-        <Text style={styles.eventSub}>Created: {formatDate(params.created_at)} · Expires: {formatDate(params.expires_at)}</Text>
+        <Text style={[styles.eventSub, { marginBottom: 4 }]}>Created: {formatDate(params.created_at)} · Expires: {formatDate(params.expires_at)}</Text>
         <Text style={styles.eventSub}>
           {params.photo_count} photos · Event Code: <Text style={styles.codeHighlight}>{params.join_code}</Text>
         </Text>

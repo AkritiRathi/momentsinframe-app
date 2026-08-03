@@ -606,7 +606,7 @@ export default function EventDetailScreen() {
         <Text style={styles.sectionLabel}>SHARE</Text>
         <View style={styles.row}>
           <TouchableOpacity style={styles.btn} onPress={copyCode}>
-            <Text style={styles.btnText}>Copy Event Code</Text>
+            <Text style={styles.btnText}>Event Code</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.btn}
@@ -633,7 +633,7 @@ export default function EventDetailScreen() {
         <View style={styles.settingRow}>
           <View style={styles.settingInfo}>
             <Text style={styles.settingLabel}>Allow guests to delete photos</Text>
-            <Text style={styles.settingDesc}>Guests can delete their own uploaded photos</Text>
+            <Text style={styles.settingDesc}>{allowGuestDelete && !viewOnly ? 'Guests can delete their own uploaded photos' : 'Guests cannot delete photos'}</Text>
           </View>
           {settingsUpdating
             ? <ActivityIndicator color={Colors.accent} />
@@ -648,7 +648,7 @@ export default function EventDetailScreen() {
         </View>
         <View style={styles.settingRow}>
           <View style={styles.settingInfo}>
-            <Text style={styles.settingLabel}>Invite-only event</Text>
+            <Text style={styles.settingLabel}>Invite only event</Text>
             <Text style={styles.settingDesc}>
               {isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
             </Text>
@@ -673,7 +673,7 @@ export default function EventDetailScreen() {
         <View style={styles.settingRow}>
           <View style={styles.settingInfo}>
             <Text style={styles.settingLabel}>View only event</Text>
-            <Text style={styles.settingDesc}>Guests can view and download but not upload photos</Text>
+            <Text style={styles.settingDesc}>Guests can only view and download photos</Text>
           </View>
           {settingsUpdating
             ? <ActivityIndicator color={Colors.accent} />

@@ -132,10 +132,11 @@ export async function checkAdminStatus(slug: string, phone: string): Promise<{ i
 }
 
 // Photo endpoints
-export async function getEventPhotos(slug: string, adminPhone?: string) {
-  const url = adminPhone
-    ? `/api/events/${slug}/photos?adminPhone=${encodeURIComponent(adminPhone)}`
-    : `/api/events/${slug}/photos`;
+export async function getEventPhotos(slug: string, adminPhone?: string, userMobile?: string) {
+  const parts: string[] = [];
+  if (adminPhone) parts.push(`adminPhone=${encodeURIComponent(adminPhone)}`);
+  if (userMobile) parts.push(`userMobile=${encodeURIComponent(userMobile)}`);
+  const url = `/api/events/${slug}/photos${parts.length ? `?${parts.join('&')}` : ''}`;
   return get(url);
 }
 

@@ -444,10 +444,12 @@ export default function EventScreen() {
     isAdmin: string; adminPhone: string; allowGuestDelete: string; viewOnly?: string; joinCode: string; role?: string; ownerPhone?: string;
   }>();
 
-  const isAdmin = params.isAdmin === 'true';
-  const adminLabel = params.role === 'organiser' ? 'Organiser' : params.role === 'coadmin' ? 'Co-Admin' : 'Admin';
+  const [isAdmin, setIsAdmin] = useState(params.isAdmin === 'true');
+  const [userRole, setUserRole] = useState(params.role ?? '');
+  const adminLabel = userRole === 'organiser' ? 'Organiser' : userRole === 'coadmin' ? 'Co-Admin' : 'Admin';
   const [allowGuestDelete, setAllowGuestDelete] = useState(params.allowGuestDelete === 'true');
   const [viewOnly, setViewOnly] = useState(params.viewOnly === 'true');
+  const [expiresAt, setExpiresAt] = useState(expiresAt ?? '');
   const ownerPhone = params.ownerPhone ?? '';
   const slug = params.slug;
 
@@ -569,7 +571,7 @@ export default function EventScreen() {
   const savedTranslateY = useSharedValue(0);
 
   async function refreshNotifications(mobile?: string | null) {
-    await pruneUploadNotifications(slug, params.expiresAt ?? null);
+    await pruneUploadNotifications(slug, expiresAt || null);
     const notifs = await getUploadNotifications(slug);
     setNotifications(notifs);
     const resolvedMobile = mobile ?? userMobile;
@@ -608,7 +610,7 @@ export default function EventScreen() {
     saveLastEvent({
       slug: params.slug,
       name: params.name ?? '',
-      expiresAt: params.expiresAt ?? '',
+      expiresAt: expiresAt,
       createdAt: params.createdAt ?? '',
       isAdmin: params.isAdmin ?? 'false',
     });
@@ -621,10 +623,18 @@ export default function EventScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      getEventPhotos(slug, params.adminPhone || undefined).then(data => {
+      getEventPhotos(slug, params.adminPhone || undefined, userMobileRef.current ?? undefined).then(data => {
         if (data?.event) {
           if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
           if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
+          if (data.event.expires_at) setExpiresAt(data.event.expires_at);
+          if (!params.adminPhone && userMobileRef.current) {
+            if (typeof data.event.isCoadmin === 'boolean') {
+              setIsAdmin(data.event.isCoadmin);
+              setUserRole(data.event.isCoadmin ? 'coadmin' : '');
+            }
+            if (data.event.isBlocked === true) router.back();
+          }
         }
       });
     }, [])
@@ -682,7 +692,7 @@ export default function EventScreen() {
     setUploadSummary(null);
     setNewlyUploadedIds(new Set());
     async function attempt() {
-      const data = await getEventPhotos(slug, params.adminPhone || undefined);
+      const data = await getEventPhotos(slug, params.adminPhone || undefined, userMobileRef.current ?? undefined);
       if (data.error) { setLoading(false); showAlert('Error', data.error); return; }
       const main: Photo[] = data.photos ?? [];
       const other: Photo[] = data.otherPhotos ?? [];
@@ -691,6 +701,18 @@ export default function EventScreen() {
       if (data.event) {
         if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
         if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
+        if (data.event.expires_at) setExpiresAt(data.event.expires_at);
+        if (!params.adminPhone && userMobileRef.current) {
+          if (typeof data.event.isCoadmin === 'boolean') {
+            setIsAdmin(data.event.isCoadmin);
+            setUserRole(data.event.isCoadmin ? 'coadmin' : '');
+          }
+          if (data.event.isBlocked === true) {
+            setLoading(false);
+            router.back();
+            return;
+          }
+        }
       }
       setLoading(false);
       loadAllUrls([...main, ...other]);
@@ -968,6 +990,8 @@ export default function EventScreen() {
     setSelected(new Set());
     setSelectBarSticky(false);
     setMyUploadsFilter(false);
+    setStickySection(null);
+    stickySectionRef.current = null;
     mainHeaderY.current = null;
     otherHeaderY.current = null;
     selectBarYRef.current = null;
@@ -1760,9 +1784,9 @@ export default function EventScreen() {
     );
   }
 
-  const daysLeft = params.expiresAt ? daysUntil(params.expiresAt) : 999;
+  const daysLeft = expiresAt ? daysUntil(expiresAt) : 999;
   const totalPhotos = photos.length + otherPhotos.length;
-  const isCoadmin = isAdmin && params.role === 'coadmin';
+  const isCoadmin = isAdmin && userRole === 'coadmin';
   const deletablePhotos = myUploadsFilter && userMobile
     ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
     : deleteMode && !isAdmin && userMobile
@@ -2040,9 +2064,9 @@ export default function EventScreen() {
             <View style={styles.eventHeaderBody}>
               <Text style={styles.eventName}>{params.name || 'Event'}</Text>
               {params.joinCode ? <Text style={styles.eventCode}>Event Code: {params.joinCode}</Text> : null}
-              {params.expiresAt && (
+              {expiresAt && (
                 <Text style={styles.eventMeta}>
-                  Event expires {formatDate(params.expiresAt)}
+                  Event expires {formatDate(expiresAt)}
                   {total > 0 ? ` · ${total} photo${total !== 1 ? 's' : ''}` : ''}
                 </Text>
               )}
@@ -2061,10 +2085,10 @@ export default function EventScreen() {
           <View style={styles.expiryBanner}>
             <Text style={styles.expiryText}>
               {daysLeft < 0
-                ? `This event closed on ${formatDate(params.expiresAt)}.\nDownload your photos before they are removed.`
+                ? `This event closed on ${formatDate(expiresAt)}.\nDownload your photos before they are removed.`
                 : daysLeft === 0
-                ? `This event closes today (${formatDate(params.expiresAt)}).\nDownload your photos before then.`
-                : `This event closes on ${formatDate(params.expiresAt)}.\nDownload your photos before then.`}
+                ? `This event closes today (${formatDate(expiresAt)}).\nDownload your photos before then.`
+                : `This event closes on ${formatDate(expiresAt)}.\nDownload your photos before then.`}
             </Text>
           </View>
         );
@@ -2470,7 +2494,7 @@ export default function EventScreen() {
               <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
               <View style={styles.lbActions}>
                 {(
-                  (isAdmin && !(params.role === 'coadmin' && currentPhoto?.uploaded_by_mobile === ownerPhone)) ||
+                  (isAdmin && !(userRole === 'coadmin' && currentPhoto?.uploaded_by_mobile === ownerPhone)) ||
                   (allowGuestDelete && currentPhoto != null && userPhotoIds.has(currentPhoto.id))
                 ) && (
                   <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>

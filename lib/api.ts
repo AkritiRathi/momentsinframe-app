@@ -1,17 +1,34 @@
 import { API_BASE_URL } from '../constants/config';
 
+function makeTimeout(ms: number) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  return { signal: controller.signal, clear: () => clearTimeout(id) };
+}
+
 async function post(path: string, body: object) {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return res.json();
+  const { signal, clear } = makeTimeout(15000);
+  try {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+    return res.json();
+  } finally {
+    clear();
+  }
 }
 
 async function get(path: string, headers: Record<string, string> = {}) {
-  const res = await fetch(`${API_BASE_URL}${path}`, { headers });
-  return res.json();
+  const { signal, clear } = makeTimeout(15000);
+  try {
+    const res = await fetch(`${API_BASE_URL}${path}`, { headers, signal });
+    return res.json();
+  } finally {
+    clear();
+  }
 }
 
 async function del(path: string, body: object) {

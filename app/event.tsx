@@ -682,7 +682,7 @@ export default function EventScreen() {
     setLoading(true);
     setUploadSummary(null);
     setNewlyUploadedIds(new Set());
-    try {
+    async function attempt() {
       const data = await getEventPhotos(slug, params.adminPhone || undefined);
       if (data.error) { setLoading(false); showAlert('Error', data.error); return; }
       const main: Photo[] = data.photos ?? [];
@@ -695,9 +695,18 @@ export default function EventScreen() {
       }
       setLoading(false);
       loadAllUrls([...main, ...other]);
-    } catch {
-      showAlert('Error', 'Could not load photos. Check your connection.');
-      setLoading(false);
+    }
+    try {
+      await attempt();
+    } catch (e) {
+      console.warn('[loadPhotos] first attempt failed:', e);
+      try {
+        await attempt();
+      } catch (e2) {
+        console.warn('[loadPhotos] second attempt failed:', e2);
+        showAlert('Error', 'Could not load photos. Check your connection.');
+        setLoading(false);
+      }
     }
   }
 

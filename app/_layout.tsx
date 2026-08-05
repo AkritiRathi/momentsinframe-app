@@ -157,7 +157,7 @@ const styles = StyleSheet.create({
   },
   featureGraphic: {
     width: '100%',
-    height: 180,
+    height: 240,
     marginBottom: 40,
   },
   spinner: {

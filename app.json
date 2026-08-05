@@ -17,9 +17,9 @@
       "checkAutomatically": "NEVER"
     },
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/feature_graphic.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#000000"
     },
     "ios": {
       "supportsTablet": true,

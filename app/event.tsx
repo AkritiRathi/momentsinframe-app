@@ -161,9 +161,8 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
           </View>
           {(isMain || showMyUploadsOnOther) && !hideMyUploads && (
             <TouchableOpacity
-              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode) && { opacity: 0.3 }]}
+              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive]}
               onPress={onMyUploadsToggle}
-              disabled={selectMode || deleteMode}
             >
               <Text style={[styles.myUploadsPillText, myUploadsFilter && styles.myUploadsPillTextActive]}>
                 My Uploads
@@ -1811,8 +1810,12 @@ export default function EventScreen() {
       ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone)
       : otherPhotos;
 
-    const baseMain = deleteMode ? deleteFilteredPhotos : myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos;
-    const baseOther = deleteMode ? deleteFilteredOther : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos;
+    const baseMain = deleteMode
+      ? (myUploadsFilter && userMobile ? deleteFilteredPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteFilteredPhotos)
+      : myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos;
+    const baseOther = deleteMode
+      ? (myUploadsFilter && userMobile ? deleteFilteredOther.filter(p => p.uploaded_by_mobile === userMobile) : deleteFilteredOther)
+      : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos;
 
     const orderedMain = sortOrder === 'desc' ? [...baseMain].reverse() : baseMain;
     const otherList = sortOrder === 'desc' ? [...baseOther].reverse() : baseOther;
@@ -1928,7 +1931,7 @@ export default function EventScreen() {
       <View style={styles.selectBar}>
         <Text style={styles.selectCount}>{selected.size}</Text>
         <View style={styles.selectBarBtns}>
-          <Pressable style={styles.selBtn} onPress={() => selectGroup([...photos, ...otherPhotos], !allSelected)}>
+          <Pressable style={styles.selBtn} onPress={() => selectGroup(deletablePhotos, !allSelected)}>
             <Text style={styles.selBtnText}>Select all</Text>
           </Pressable>
           <Pressable style={styles.selBtn} onPress={exitSelectMode}>
@@ -2158,7 +2161,7 @@ export default function EventScreen() {
               sortOrder={sortOrder}
               groupByDate={groupByDate}
               myUploadsFilter={myUploadsFilter}
-              showMyUploadsOnOther={item.section === 'other' && photos.length === 0}
+              showMyUploadsOnOther={item.section === 'other' && (photos.length === 0 || (myUploadsFilter && !!userMobile && !photos.some(p => p.uploaded_by_mobile === userMobile)))}
               hideMyUploads={viewOnly && !isAdmin}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
@@ -2175,11 +2178,12 @@ export default function EventScreen() {
         );
 
       case 'date_header': {
-        const allDateSelected = item.photos.every(p => selected.has(p.id));
+        const datePhotos = myUploadsFilter ? item.photos.filter(p => p.uploaded_by_mobile === userMobile) : item.photos;
+        const allDateSelected = datePhotos.length > 0 && datePhotos.every(p => selected.has(p.id));
         return (
           <View style={styles.dateHeaderRow}>
             {(selectMode || deleteMode) && (
-              <TouchableOpacity onPress={() => selectGroup(item.photos, !allDateSelected)} style={styles.dateHeaderCircle}>
+              <TouchableOpacity onPress={() => selectGroup(datePhotos, !allDateSelected)} style={styles.dateHeaderCircle}>
                 <View style={[styles.dateCircleInner, allDateSelected && styles.dateCircleSelected]}>
                   {allDateSelected && <Text style={styles.dateCircleCheck}>✓</Text>}
                 </View>
@@ -2612,7 +2616,7 @@ export default function EventScreen() {
               sortOrder={sortOrder}
               groupByDate={groupByDate}
               myUploadsFilter={myUploadsFilter}
-              showMyUploadsOnOther={stickySection === 'other' && photos.length === 0}
+              showMyUploadsOnOther={stickySection === 'other' && (photos.length === 0 || (myUploadsFilter && !!userMobile && !photos.some(p => p.uploaded_by_mobile === userMobile)))}
               hideMyUploads={viewOnly && !isAdmin}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();

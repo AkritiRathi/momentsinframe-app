@@ -688,6 +688,10 @@ export default function EventDetailScreen() {
 
         <View style={styles.divider} />
 
+        <View style={styles.bottomBtnRow}>
+        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
+          <Text style={styles.deleteBtnText}>Delete Event</Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={styles.openBtn}
           onPress={() => router.push({
@@ -707,12 +711,9 @@ export default function EventDetailScreen() {
             },
           })}
         >
-          <Text style={styles.openBtnText}>Open Event →</Text>
+          <Text style={styles.openBtnText}>Open Event</Text>
         </TouchableOpacity>
-
-        <TouchableOpacity style={styles.deleteBtn} onPress={handleDelete}>
-          <Text style={styles.deleteBtnText}>Delete event</Text>
-        </TouchableOpacity>
+        </View>
       </ScrollView>
 
       {deleteLoading && (
@@ -1234,9 +1235,10 @@ const styles = StyleSheet.create({
   removeBtnText: { fontSize: 12, fontWeight: '700', color: '#E53935' },
   addCoadminBtn: { flex: 0, marginTop: 4, borderColor: Colors.accent },
   divider: { height: 0.5, backgroundColor: '#222', marginVertical: 20 },
-  openBtn: { backgroundColor: Colors.accent, borderRadius: 12, padding: 16, alignItems: 'center', marginBottom: 10 },
+  bottomBtnRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  openBtn: { flex: 1, backgroundColor: Colors.accent, borderRadius: 12, padding: 16, alignItems: 'center' },
   openBtnText: { ...Typography.buttonText, color: Colors.background },
-  deleteBtn: { backgroundColor: '#2a2a2a', borderWidth: 1, borderColor: 'rgba(229,57,53,0.6)', borderRadius: 8, padding: 12, alignItems: 'center' },
+  deleteBtn: { flex: 1, backgroundColor: '#2a2a2a', borderWidth: 1, borderColor: 'rgba(229,57,53,0.6)', borderRadius: 8, padding: 12, alignItems: 'center', justifyContent: 'center' },
   deleteBtnText: { ...Typography.buttonText, color: '#E53935' },
   deletingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
   deletingText: { fontSize: 15, fontWeight: '700', color: Colors.white },

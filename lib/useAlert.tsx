@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, BackHandler } from 'react-native';
 import { Colors } from '../constants/colors';
 
 type AlertButton = {
@@ -13,17 +13,49 @@ type AlertConfig = {
   message?: string;
   detail?: string;
   buttons: AlertButton[];
+  rowButtons?: boolean;
 };
 
 export function useAlert() {
   const [config, setConfig] = useState<AlertConfig | null>(null);
 
-  function showAlert(title: string, message?: string, buttons: AlertButton[] = [{ text: 'OK' }], detail?: string) {
-    setConfig({ title, message, detail, buttons });
+  useEffect(() => {
+    if (!config) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, [config]);
+
+  function showAlert(title: string, message?: string, buttons: AlertButton[] = [{ text: 'OK' }], detail?: string, rowButtons?: boolean) {
+    setConfig({ title, message, detail, buttons, rowButtons });
   }
 
   const alertOverlay = config ? (() => {
     const primaryIdx = config.buttons.findIndex(b => b.style !== 'cancel' && b.style !== 'destructive');
+    const cancelBtns = config.rowButtons ? config.buttons.filter(b => b.style === 'cancel') : [];
+    const actionBtns = config.rowButtons ? config.buttons.filter(b => b.style !== 'cancel') : config.buttons;
+
+    const renderBtn = (btn: AlertButton, i: number, globalIdx: number) => (
+      <TouchableOpacity
+        key={i}
+        style={[
+          alertStyles.btn,
+          globalIdx === primaryIdx && alertStyles.btnPrimary,
+          btn.style === 'destructive' && alertStyles.btnDestructive,
+          btn.style === 'cancel' && alertStyles.btnCancel,
+        ]}
+        onPress={() => { setConfig(null); btn.onPress?.(); }}
+      >
+        <Text style={[
+          alertStyles.btnText,
+          globalIdx === primaryIdx && alertStyles.btnPrimaryText,
+          btn.style === 'cancel' && alertStyles.btnCancelText,
+          btn.style === 'destructive' && alertStyles.btnDestructiveText,
+        ]}>
+          {btn.text}
+        </Text>
+      </TouchableOpacity>
+    );
+
     return (
       <View style={alertStyles.overlay}>
         <View style={alertStyles.card}>
@@ -35,27 +67,22 @@ export function useAlert() {
             </View>
           ) : null}
           <View style={alertStyles.buttons}>
-            {config.buttons.map((btn, i) => (
-              <TouchableOpacity
-                key={i}
-                style={[
-                  alertStyles.btn,
-                  i === primaryIdx && alertStyles.btnPrimary,
-                  btn.style === 'destructive' && alertStyles.btnDestructive,
-                  btn.style === 'cancel' && alertStyles.btnCancel,
-                ]}
-                onPress={() => { setConfig(null); btn.onPress?.(); }}
-              >
-                <Text style={[
-                  alertStyles.btnText,
-                  i === primaryIdx && alertStyles.btnPrimaryText,
-                  btn.style === 'cancel' && alertStyles.btnCancelText,
-                  btn.style === 'destructive' && alertStyles.btnDestructiveText,
-                ]}>
-                  {btn.text}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            {config.rowButtons ? (
+              <>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {actionBtns.map((btn, i) => {
+                    const globalIdx = config.buttons.indexOf(btn);
+                    return <View key={i} style={{ flex: 1 }}>{renderBtn(btn, i, globalIdx)}</View>;
+                  })}
+                </View>
+                {cancelBtns.map((btn, i) => {
+                  const globalIdx = config.buttons.indexOf(btn);
+                  return renderBtn(btn, i, globalIdx);
+                })}
+              </>
+            ) : (
+              config.buttons.map((btn, i) => renderBtn(btn, i, i))
+            )}
           </View>
         </View>
       </View>
@@ -69,7 +96,7 @@ export const alertStyles = StyleSheet.create({
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.65)', zIndex: 300, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
   card: { width: '100%', backgroundColor: '#1c1c1e', borderRadius: 16, padding: 24, borderWidth: 0.5, borderColor: '#333' },
   title: { fontSize: 18, fontWeight: '600', color: Colors.white, textAlign: 'center', marginBottom: 8 },
-  message: { fontSize: 15, color: Colors.textMuted, lineHeight: 21, textAlign: 'center', marginBottom: 16 },
+  message: { fontSize: 15, color: Colors.textMuted, lineHeight: 21, textAlign: 'left', marginBottom: 16 },
   buttons: { gap: 8 },
   btn: { backgroundColor: '#2a2a2a', borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 0.5, borderColor: '#3a3a3a' },
   btnPrimary: { backgroundColor: Colors.accent, borderColor: Colors.accent },

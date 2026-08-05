@@ -2697,14 +2697,14 @@ export default function EventScreen() {
               selectTextOnFocus
               placeholderTextColor={Colors.textMuted}
             />
-            <View style={alertStyles.buttons}>
-              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnCancel]} onPress={() => {
+            <View style={[alertStyles.buttons, { flexDirection: 'row', gap: 8 }]}>
+              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnCancel, { flex: 1 }]} onPress={() => {
                 setFolderSetupVisible(false);
                 folderSetupResolveRef.current?.(null);
               }}>
                 <Text style={[alertStyles.btnText, alertStyles.btnCancelText]}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnPrimary]} onPress={() => {
+              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnPrimary, { flex: 1 }]} onPress={() => {
                 const name = folderNameDraft.trim() || 'MomentsInFrame';
                 setFolderSetupVisible(false);
                 folderSetupResolveRef.current?.(name);

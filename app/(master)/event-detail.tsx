@@ -130,15 +130,25 @@ export default function EventDetailScreen() {
     if (!pw || !params.organiserPhone) return;
     setAllowedGuestsLoading(true);
     try {
-      const result = await listAllowedGuests(params.slug, params.organiserPhone, pw);
-      if (result.guests) {
-        setAllowedGuests(result.guests);
+      const [allowedResult, joinedResult] = await Promise.all([
+        listAllowedGuests(params.slug, params.organiserPhone, pw),
+        listJoinedGuests(params.slug, params.organiserPhone, pw),
+      ]);
+      if (joinedResult.guests) {
+        const organiserName = (await getUserProfile())?.name ?? '';
+        const organiserPhone = params.organiserPhone;
+        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false };
+        const others = joinedResult.guests.filter(g => g.mobile !== organiserPhone);
+        setJoinedGuests([organiserEntry, ...others]);
+      }
+      if (allowedResult.guests) {
+        setAllowedGuests(allowedResult.guests);
         try {
           const { status } = await Contacts.getPermissionsAsync();
           if (status === 'granted') {
             const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
             const map: Record<string, string> = {};
-            for (const guest of result.guests) {
+            for (const guest of allowedResult.guests) {
               const match = allContacts.find(c =>
                 (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === guest.phone)
               );
@@ -258,21 +268,7 @@ export default function EventDetailScreen() {
           `${nonOrgGuests.length} guest${nonOrgGuests.length !== 1 ? 's' : ''} have already joined. They will lose access unless added to the allowed list.\n\nAdd them all now?`,
           [
             {
-              text: 'Yes, add them',
-              onPress: async () => {
-                setClosedUpdating(true);
-                await updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: true });
-                await addAllowedGuests(params.slug, params.organiserPhone!, pw,
-                  joinedGuests.filter(g => g.mobile !== params.organiserPhone).map(g => ({ phone: g.mobile, name: g.name }))
-                );
-                setIsClosed(true);
-                await loadAllowedGuests();
-                setClosedUpdating(false);
-                setShowGuestsPanel(true);
-              },
-            },
-            {
-              text: 'No, close without adding',
+              text: 'No',
               style: 'destructive',
               onPress: () => {
                 showAlert(
@@ -301,8 +297,24 @@ export default function EventDetailScreen() {
                 );
               },
             },
+            {
+              text: 'Yes',
+              onPress: async () => {
+                setClosedUpdating(true);
+                await updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: true });
+                await addAllowedGuests(params.slug, params.organiserPhone!, pw,
+                  joinedGuests.filter(g => g.mobile !== params.organiserPhone).map(g => ({ phone: g.mobile, name: g.name }))
+                );
+                setIsClosed(true);
+                await loadAllowedGuests();
+                setClosedUpdating(false);
+                setShowGuestsPanel(true);
+              },
+            },
             { text: 'Cancel', style: 'cancel' },
-          ]
+          ],
+          undefined,
+          true,
         );
       } else {
         setClosedUpdating(true);
@@ -513,12 +525,43 @@ export default function EventDetailScreen() {
       showAlert('Already in event', 'You are the organiser of this event and always have access.');
       return;
     }
-    if (allowedGuests.some(g => g.phone === phone)) {
-      showAlert('Already added', `${name ?? phone} is already in the allowed guests list.`);
-      return;
-    }
+    const displayName = name ?? phone;
     const pw = await getOrganiserPassword();
     if (!pw || !params.organiserPhone) return;
+    // Fetch fresh joined guests to get reliable blocked status
+    const freshJoined = await listJoinedGuests(params.slug, params.organiserPhone, pw);
+    const freshJoinedList = freshJoined.guests ?? [];
+    const alreadyInList = allowedGuests.some(g => g.phone === phone);
+    const blockedEntry = freshJoinedList.find(g => g.mobile === phone && g.is_blocked);
+    if (alreadyInList) {
+      if (blockedEntry) {
+        showAlert('Already in list', `${displayName} is already in the list but is currently blocked. Tap Unblock next to their name.`);
+      } else {
+        showAlert('Already added', `${displayName} is already in the allowed guests list.`);
+      }
+      return;
+    }
+    if (blockedEntry) {
+      showAlert(
+        'Guest is blocked',
+        `${displayName} is currently blocked. Adding them will also unblock them.`,
+        [
+          {
+            text: 'Unblock & Add',
+            onPress: async () => {
+              await Promise.all([
+                addAllowedGuests(params.slug, params.organiserPhone!, pw, [{ phone, name }]),
+                setGuestBlocked(params.slug, phone, false, params.organiserPhone!, pw),
+              ]);
+              setJoinedGuests(prev => prev.map(g => g.mobile === phone ? { ...g, is_blocked: false } : g));
+              await loadAllowedGuests();
+            },
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+      return;
+    }
     const result = await addAllowedGuests(params.slug, params.organiserPhone, pw, [{ phone, name }]);
     if (result.error) {
       showAlert('Error', result.error);
@@ -962,6 +1005,55 @@ export default function EventDetailScreen() {
                         );
                       })
                   }
+                  {/* Blocked guests not in allowed list */}
+                  {joinedGuests
+                    .filter(jg => jg.is_blocked && jg.mobile !== params.organiserPhone && !allowedGuests.some(ag => ag.phone === jg.mobile))
+                    .map(jg => {
+                      const contactName = guestContactMap[jg.mobile] ?? null;
+                      return (
+                        <View key={jg.mobile} style={styles.coadminRow}>
+                          <View style={styles.coadminInfo}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                              <Text style={styles.coadminName}>{jg.name || jg.mobile}</Text>
+                              <Text style={[styles.coadminPhone, { marginLeft: 6 }]}>· {jg.photo_count ?? 0} photos</Text>
+                            </View>
+                            <Text style={styles.coadminPhone}>{contactName || 'Number not in contacts'}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                              <Text style={styles.coadminPhone}>{jg.mobile}</Text>
+                              <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>
+                            </View>
+                          </View>
+                          <TouchableOpacity
+                            style={[styles.removeBtn, { backgroundColor: 'rgba(34,197,94,0.15)', borderColor: 'rgba(34,197,94,0.5)' }]}
+                            onPress={async () => {
+                              const pw = await getOrganiserPassword();
+                              if (!pw || !params.organiserPhone) return;
+                              showAlert(
+                                'Unblock & Add?',
+                                `${contactName || jg.name || jg.mobile} is currently blocked. Adding them will also unblock them.`,
+                                [
+                                  {
+                                    text: 'Unblock & Add',
+                                    onPress: async () => {
+                                      await Promise.all([
+                                        addAllowedGuests(params.slug, params.organiserPhone!, pw, [{ phone: jg.mobile, name: jg.name ?? undefined }]),
+                                        setGuestBlocked(params.slug, jg.mobile, false, params.organiserPhone!, pw),
+                                      ]);
+                                      setJoinedGuests(prev => prev.map(g => g.mobile === jg.mobile ? { ...g, is_blocked: false } : g));
+                                      await loadAllowedGuests();
+                                    },
+                                  },
+                                  { text: 'Cancel', style: 'cancel' },
+                                ]
+                              );
+                            }}
+                          >
+                            <Text style={[styles.removeBtnText, { color: '#22c55e' }]}>Unblock & Add</Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })
+                  }
                 </>
               )}
               <TouchableOpacity
@@ -1132,19 +1224,20 @@ export default function EventDetailScreen() {
               </>
             ) : (
               joinedGuests.map(guest => {
-                const contactName = guestContactMap[guest.mobile];
-                const displayName = contactName || guest.name || guest.mobile;
-                const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
+                const contactName = guestContactMap[guest.mobile] ?? null;
+                const appName = guest.name || guest.mobile;
                 return (
                   <View key={guest.mobile} style={[styles.coadminRow, guest.is_blocked && styles.blockedRow]}>
                     <View style={styles.coadminInfo}>
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Text style={[styles.coadminName, guest.is_blocked && styles.blockedText]}>{displayName}</Text>
+                        <Text style={[styles.coadminName, guest.is_blocked && styles.blockedText]}>{appName}</Text>
                         <Text style={[styles.coadminPhone, { marginLeft: 6 }, guest.is_blocked && styles.blockedText]}>· {guest.photo_count ?? 0} photos</Text>
                       </View>
-                      {subName ? <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{subName}</Text> : null}
-                      <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{guest.mobile}</Text>
-                      {guest.is_blocked && <Text style={styles.blockedBadge}>BLOCKED</Text>}
+                      <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{contactName || 'Number not in contacts'}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{guest.mobile}</Text>
+                        {guest.is_blocked && <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
+                      </View>
                     </View>
                     {guest.mobile === params.organiserPhone ? null : togglingGuest === guest.mobile ? (
                       <ActivityIndicator size="small" color={Colors.accent} />

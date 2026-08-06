@@ -805,7 +805,11 @@ export default function EventScreen() {
       batches.map(async (batch) => {
         try {
           const result = await getPhotoUrls(slug, batch, params.adminPhone || undefined);
-          if (result.urls) setPhotoUrls(prev => ({ ...prev, ...result.urls }));
+          if (result.urls) {
+            setPhotoUrls(prev => ({ ...prev, ...result.urls }));
+            const thumbs = Object.values(result.urls).map(u => u.thumbUrl).filter(Boolean) as string[];
+            if (thumbs.length > 0) ExpoImage.prefetch(thumbs);
+          }
         } catch { /* skip */ }
       })
     );

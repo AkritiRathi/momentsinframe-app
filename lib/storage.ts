@@ -106,6 +106,7 @@ export type JoinedEventEntry = {
   viewOnly?: boolean;
   isOrganiser?: boolean;
   ownerPhone?: string;
+  role?: string;
 };
 
 const JOINED_EVENTS_KEY = 'joined_events_list';
@@ -115,7 +116,8 @@ export async function saveJoinedEvent(entry: JoinedEventEntry): Promise<void> {
   try {
     const existing = await getJoinedEvents();
     const filtered = existing.filter(e => e.slug !== entry.slug);
-    const updated = [entry, ...filtered].slice(0, MAX_JOINED_EVENTS);
+    const role = entry.isOrganiser ? 'organiser' : (entry.role ?? 'user');
+    const updated = [{ ...entry, role }, ...filtered].slice(0, MAX_JOINED_EVENTS);
     await AsyncStorage.setItem(JOINED_EVENTS_KEY, JSON.stringify(updated));
   } catch {}
 }

@@ -137,6 +137,7 @@ export default function JoinEventScreen() {
         allowGuestDelete: result.event.allow_guest_delete ?? false,
         viewOnly: result.event.view_only ?? false,
         ownerPhone: result.event.owner_phone ?? '',
+        role: adminRole || 'user',
       });
       router.replace({
         pathname: '/event',
@@ -190,6 +191,7 @@ export default function JoinEventScreen() {
               allowGuestDelete: entry.allowGuestDelete,
               isOrganiser: entry.isOrganiser,
               ownerPhone,
+              role: adminRole || 'user',
             });
           }
         } catch {}
@@ -232,31 +234,37 @@ export default function JoinEventScreen() {
 
   function renderEventCard(item: JoinedEventEntry) {
     const expired = isExpired(item.expiresAt);
+    const isCoadminCard = item.role === 'coadmin';
+    const roleLabel = item.isOrganiser ? 'Organiser' : isCoadminCard ? 'Co-Admin' : 'Guest';
+    const canOpen = !expired || item.isOrganiser || isCoadminCard;
     return (
       <TouchableOpacity
         key={item.slug}
-        style={[styles.eventCard, expired && !item.isOrganiser && styles.eventCardExpired]}
+        style={[styles.eventCard, expired && !canOpen && styles.eventCardExpired]}
         onPress={() => {
-          if (!expired || item.isOrganiser) {
+          if (canOpen) {
             setEventsModalVisible(false);
             setTimeout(() => handleRejoin(item), 300);
           }
         }}
-        disabled={(!item.isOrganiser && expired) || rejoining === item.slug}
-        activeOpacity={expired ? 1 : 0.7}
+        disabled={!canOpen || rejoining === item.slug}
+        activeOpacity={canOpen ? 0.7 : 1}
       >
         <View style={styles.eventCardLeft}>
-          <Text style={[styles.eventName, expired && styles.eventNameExpired]} numberOfLines={1}>
+          <Text style={[styles.eventName, expired && !canOpen && styles.eventNameExpired]} numberOfLines={1}>
             {item.name}
           </Text>
+          <Text style={styles.eventExpiry}>Event Code: {item.joinCode}</Text>
           <Text style={styles.eventExpiry}>
-            {item.isOrganiser && <Text style={styles.organiserPrefix}>Organiser · </Text>}
-            {expired ? 'Expired' : `Active · expires ${formatExpiry(item.expiresAt)}`}
+            {!item.isOrganiser && item.role !== 'coadmin'
+              ? `${roleLabel} · ${expired ? 'Expired' : `expires ${formatExpiry(item.expiresAt)}`}`
+              : <><Text style={styles.organiserPrefix}>{roleLabel}</Text>{` · ${expired ? 'Expired' : `expires ${formatExpiry(item.expiresAt)}`}`}</>
+            }
           </Text>
         </View>
         {rejoining === item.slug
           ? <ActivityIndicator size="small" color={Colors.accent} />
-          : !expired && <Text style={styles.eventArrow}>›</Text>
+          : canOpen && <Text style={styles.eventArrow}>›</Text>
         }
         {expired && <View style={styles.expiredBadge}><Text style={styles.expiredBadgeText}>Expired</Text></View>}
       </TouchableOpacity>
@@ -266,11 +274,16 @@ export default function JoinEventScreen() {
   async function handleOpenEvents() {
     if (visibleEvents.length === 0) return;
     setCheckingEvents(true);
-    // Check non-organiser events still exist on server; remove deleted ones from cache
+    const profile = await getUserProfile();
     const guestEvents = visibleEvents.filter(e => !e.isOrganiser);
     await Promise.all(guestEvents.map(async (e) => {
       const exists = await checkEventExists(e.slug);
-      if (!exists) await removeJoinedEvent(e.slug);
+      if (!exists) { await removeJoinedEvent(e.slug); return; }
+      if (profile?.mobile) {
+        const adminCheck = await checkAdminStatus(e.slug, profile.mobile);
+        const freshRole = adminCheck.role ?? 'user';
+        await saveJoinedEvent({ ...e, role: freshRole });
+      }
     }));
     setJoinedEvents(await getJoinedEvents());
     setCheckingEvents(false);
@@ -324,7 +337,10 @@ export default function JoinEventScreen() {
     }
   }
 
-  const visibleEvents = joinedEvents.filter(e => !isExpired(e.expiresAt) || e.isOrganiser);
+  const roleOrder = (e: JoinedEventEntry) => e.isOrganiser ? 0 : e.role === 'coadmin' ? 1 : 2;
+  const visibleEvents = joinedEvents
+    .filter(e => !isExpired(e.expiresAt) || e.isOrganiser || e.role === 'coadmin')
+    .sort((a, b) => roleOrder(a) - roleOrder(b));
 
   return (
     <SafeAreaView style={styles.container}>

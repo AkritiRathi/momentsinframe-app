@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
-  Modal, ActivityIndicator, Dimensions, TextInput,
+  Modal, ActivityIndicator, Dimensions, TextInput, ScrollView,
   Platform, BackHandler, AppState, RefreshControl, Alert, InteractionManager,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
@@ -28,6 +28,7 @@ import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
   getPhotoDownloadUrl, prepareZip, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
+  listJoinedGuests, setGuestBlocked,
 } from '../lib/api';
 import { API_BASE_URL } from '../constants/config';
 import {
@@ -37,6 +38,8 @@ import {
   pruneUploadNotifications, UploadNotification,
   saveLastEvent, clearLastEvent,
 } from '../lib/storage';
+import { getOrganiserPassword } from '../lib/auth';
+import * as Contacts from 'expo-contacts';
 import { setupNotifications, showUploadCompleteNotification, showDownloadCompleteNotification } from '../lib/notifications';
 import * as Notifications from 'expo-notifications';
 import { showPermissionDeniedAlert, shouldShowDeniedAlert } from '../lib/priming';
@@ -176,7 +179,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
             {!isAdmin && (
               <Text style={styles.deleteNote}>You can only delete photos that you have uploaded.</Text>
             )}
-            {isCoadmin && (
+            {isCoadmin && !myUploadsFilter && (
               <Text style={styles.deleteNote}>You can delete any guest's photos, but not photos uploaded by the Organiser.</Text>
             )}
           </View>
@@ -444,12 +447,12 @@ export default function EventScreen() {
     isAdmin: string; adminPhone: string; allowGuestDelete: string; viewOnly?: string; joinCode: string; role?: string; ownerPhone?: string;
   }>();
 
-  const [isAdmin, setIsAdmin] = useState(params.isAdmin === 'true');
   const [userRole, setUserRole] = useState(params.role ?? '');
+  const isAdmin = userRole === 'organiser' || userRole === 'coadmin';
   const adminLabel = userRole === 'organiser' ? 'Organiser' : userRole === 'coadmin' ? 'Co-Admin' : 'Admin';
   const [allowGuestDelete, setAllowGuestDelete] = useState(params.allowGuestDelete === 'true');
   const [viewOnly, setViewOnly] = useState(params.viewOnly === 'true');
-  const [expiresAt, setExpiresAt] = useState(expiresAt ?? '');
+  const [expiresAt, setExpiresAt] = useState(params.expiresAt ?? '');
   const ownerPhone = params.ownerPhone ?? '';
   const slug = params.slug;
 
@@ -488,6 +491,13 @@ export default function EventScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const menuBtnRef = useRef<any>(null);
   const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
+  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number };
+  const [showManageGuests, setShowManageGuests] = useState(false);
+  const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
+  const [joinedGuestsLoading, setJoinedGuestsLoading] = useState(false);
+  const [joinedGuestsError, setJoinedGuestsError] = useState<string | null>(null);
+  const [togglingGuest, setTogglingGuest] = useState<string | null>(null);
+  const [guestContactMap, setGuestContactMap] = useState<Record<string, string>>({});
   const [draftSortOrder, setDraftSortOrder] = useState<'asc' | 'desc'>('asc');
   const [draftGroupByDate, setDraftGroupByDate] = useState(true);
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
@@ -585,9 +595,14 @@ export default function EventScreen() {
   }
 
   useEffect(() => {
-    loadPhotos();
     getUserProfile().then(async p => {
       const phone = p?.mobile ?? params.adminPhone ?? null;
+      if (p) {
+        setUserMobile(p.mobile);
+        userMobileRef.current = p.mobile;
+        setUserName(`${p.firstName} ${p.lastName}`.trim());
+      }
+      loadPhotos();
       const notifPerm = await Notifications.getPermissionsAsync();
       if (notifPerm.status === 'granted') {
         setupNotifications();
@@ -595,9 +610,6 @@ export default function EventScreen() {
         requestAppPermission('notifications', setupNotifications, phone);
       }
       if (p) {
-        setUserMobile(p.mobile);
-        userMobileRef.current = p.mobile;
-        setUserName(`${p.firstName} ${p.lastName}`.trim());
         refreshNotifications(p.mobile);
       } else {
         refreshNotifications();
@@ -628,11 +640,8 @@ export default function EventScreen() {
           if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
           if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
           if (data.event.expires_at) setExpiresAt(data.event.expires_at);
-          if (!params.adminPhone && userMobileRef.current) {
-            if (typeof data.event.isCoadmin === 'boolean') {
-              setIsAdmin(data.event.isCoadmin);
-              setUserRole(data.event.isCoadmin ? 'coadmin' : '');
-            }
+          if (userRole !== 'organiser' && userMobileRef.current) {
+            if (data.event.role) setUserRole(data.event.role);
             if (data.event.isBlocked === true) router.back();
           }
         }
@@ -687,6 +696,66 @@ export default function EventScreen() {
     prevSelectedSize.current = selected.size;
   }, [selected.size, selectMode, deleteMode]);
 
+  function normalizeIndianPhone(raw: string): string {
+    let n = raw.replace(/\D/g, '');
+    if (n.startsWith('0091')) n = n.slice(4);
+    else if (n.startsWith('91') && n.length === 12) n = n.slice(2);
+    else if (n.startsWith('0') && n.length === 11) n = n.slice(1);
+    return n;
+  }
+
+  async function loadManageGuests() {
+    const pw = await getOrganiserPassword();
+    if (!pw || !params.adminPhone) return;
+    setJoinedGuestsLoading(true);
+    setJoinedGuestsError(null);
+    try {
+      const result = await listJoinedGuests(slug, params.adminPhone, pw);
+      if (result.guests) {
+        const organiserPhone = params.adminPhone!;
+        const profile = await getUserProfile();
+        const organiserName = profile ? `${profile.firstName} ${profile.lastName}`.trim() : 'Organiser';
+        const others = result.guests.filter(g => g.mobile !== organiserPhone);
+        const organiserFromApi = result.guests.find(g => g.mobile === organiserPhone);
+        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false, photo_count: organiserFromApi?.photo_count ?? 0 };
+        setJoinedGuests([organiserEntry, ...others]);
+        try {
+          const { status } = await Contacts.getPermissionsAsync();
+          if (status === 'granted') {
+            const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
+            const map: Record<string, string> = {};
+            for (const guest of result.guests) {
+              const match = allContacts.find(c =>
+                (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === guest.mobile)
+              );
+              if (match?.name) map[guest.mobile] = match.name;
+            }
+            setGuestContactMap(prev => ({ ...prev, ...map }));
+          }
+        } catch {}
+      } else {
+        setJoinedGuestsError(result.error ?? 'Could not load guests.');
+      }
+    } catch {
+      setJoinedGuestsError('Network error. Please try again.');
+    } finally {
+      setJoinedGuestsLoading(false);
+    }
+  }
+
+  async function handleToggleGuestBlock(mobile: string, currentlyBlocked: boolean) {
+    const pw = await getOrganiserPassword();
+    if (!pw || !params.adminPhone) return;
+    setTogglingGuest(mobile);
+    const result = await setGuestBlocked(slug, mobile, !currentlyBlocked, params.adminPhone, pw);
+    setTogglingGuest(null);
+    if (result.error) {
+      showAlert('Error', result.error);
+    } else {
+      setJoinedGuests(prev => prev.map(g => g.mobile === mobile ? { ...g, is_blocked: !currentlyBlocked } : g));
+    }
+  }
+
   async function loadPhotos() {
     setLoading(true);
     setUploadSummary(null);
@@ -702,11 +771,8 @@ export default function EventScreen() {
         if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
         if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
         if (data.event.expires_at) setExpiresAt(data.event.expires_at);
-        if (!params.adminPhone && userMobileRef.current) {
-          if (typeof data.event.isCoadmin === 'boolean') {
-            setIsAdmin(data.event.isCoadmin);
-            setUserRole(data.event.isCoadmin ? 'coadmin' : '');
-          }
+        if (userRole !== 'organiser' && userMobileRef.current) {
+          if (data.event.role) setUserRole(data.event.role);
           if (data.event.isBlocked === true) {
             setLoading(false);
             router.back();
@@ -1786,7 +1852,8 @@ export default function EventScreen() {
 
   const daysLeft = expiresAt ? daysUntil(expiresAt) : 999;
   const totalPhotos = photos.length + otherPhotos.length;
-  const isCoadmin = isAdmin && userRole === 'coadmin';
+  const isCoadmin = userRole === 'coadmin';
+  const isEventExpired = expiresAt ? new Date(expiresAt) < new Date() : false;
   const deletablePhotos = myUploadsFilter && userMobile
     ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
     : deleteMode && !isAdmin && userMobile
@@ -1823,12 +1890,17 @@ export default function EventScreen() {
     }
 
     // In delete mode, only show photos uploaded by the current user (admin sees all except co-admin can't delete organiser's photos)
-    const deleteFilteredPhotos = deleteMode && !isAdmin && userMobile
+    // My Uploads filter overrides role — when active, everyone only sees their own photos
+    const deleteFilteredPhotos = deleteMode && myUploadsFilter && userMobile
+      ? photos.filter(p => p.uploaded_by_mobile === userMobile)
+      : deleteMode && !isAdmin && userMobile
       ? photos.filter(p => p.uploaded_by_mobile === userMobile)
       : deleteMode && isCoadmin && ownerPhone
       ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone)
       : photos;
-    const deleteFilteredOther = deleteMode && !isAdmin && userMobile
+    const deleteFilteredOther = deleteMode && myUploadsFilter && userMobile
+      ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile)
+      : deleteMode && !isAdmin && userMobile
       ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile)
       : deleteMode && isCoadmin && ownerPhone
       ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone)
@@ -2150,7 +2222,7 @@ export default function EventScreen() {
       case 'select_photos_btn':
         return (
           <View style={styles.selectPhotosRow}>
-            {(isAdmin || (allowGuestDelete && !(viewOnly && !isAdmin))) && (
+            {((isAdmin && !(isEventExpired && isCoadmin)) || (allowGuestDelete && !(viewOnly && !isAdmin))) && (
               <TouchableOpacity style={[styles.deleteModeBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setDeleteMode(true); setSelectMode(false); } }}>
                 <Text style={styles.deleteModeBtnText}>Delete Photos</Text>
               </TouchableOpacity>
@@ -2174,8 +2246,8 @@ export default function EventScreen() {
             <SectionHeader
               section={item.section}
               items={item.section === 'main'
-                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos)
-                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
+                ? (deleteMode && myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos)
+                : (deleteMode && myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
               selectMode={selectMode}
               deleteMode={deleteMode}
               selected={selected}
@@ -2494,7 +2566,7 @@ export default function EventScreen() {
               <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
               <View style={styles.lbActions}>
                 {(
-                  (isAdmin && !(userRole === 'coadmin' && currentPhoto?.uploaded_by_mobile === ownerPhone)) ||
+                  (isAdmin && !(isEventExpired && isCoadmin) && !(userRole === 'coadmin' && currentPhoto?.uploaded_by_mobile === ownerPhone)) ||
                   (allowGuestDelete && currentPhoto != null && userPhotoIds.has(currentPhoto.id))
                 ) && (
                   <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>
@@ -2629,8 +2701,8 @@ export default function EventScreen() {
             <SectionHeader
               section={stickySection}
               items={stickySection === 'main'
-                ? (deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos)
-                : (deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
+                ? (deleteMode && myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && !isAdmin && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? photos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? photos.filter(p => p.uploaded_by_mobile === userMobile) : photos)
+                : (deleteMode && myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin && ownerPhone ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone) : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
               selectMode={selectMode}
               deleteMode={deleteMode}
               selected={selected}
@@ -2664,11 +2736,94 @@ export default function EventScreen() {
             <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.4 }]} disabled={selectMode || deleteMode || myUploadsFilter} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}>
               <Text style={styles.menuItemText}>Sort & Display</Text>
             </TouchableOpacity>
+            {userRole === 'organiser' && (
+              <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); loadManageGuests(); setShowManageGuests(true); }}>
+                <Text style={styles.menuItemText}>Manage Guests</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </TouchableOpacity>
       </Modal>
 
       {alertOverlay}
+
+      {/* Manage Guests panel */}
+      <Modal visible={showManageGuests} animationType="slide" onRequestClose={() => setShowManageGuests(false)}>
+        <View style={{ flex: 1, backgroundColor: Colors.background, paddingTop: insets.top, paddingBottom: insets.bottom }}>
+          <View style={styles.mgPanelHeader}>
+            <Text style={styles.mgPanelTitle}>Manage Guests{joinedGuests.length > 1 ? ` (${joinedGuests.length - 1})` : ''}</Text>
+            <TouchableOpacity onPress={() => setShowManageGuests(false)}>
+              <Text style={styles.mgPanelClose}>×</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.mgPanelDesc}>Block a guest to remove their access to this event. They will not be able to rejoin. You can unblock them at any time.</Text>
+          <ScrollView contentContainerStyle={styles.mgPanelScroll}>
+            {joinedGuestsLoading ? (
+              <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
+            ) : joinedGuestsError ? (
+              <View style={styles.mgErrorBox}>
+                <Text style={styles.mgErrorText}>{joinedGuestsError}</Text>
+                <TouchableOpacity onPress={loadManageGuests} style={styles.mgRetryBtn}>
+                  <Text style={styles.mgRetryBtnText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : joinedGuests.length <= 1 ? (
+              <>
+                {joinedGuests.map(guest => {
+                  const contactName = guestContactMap[guest.mobile];
+                  const displayName = contactName || guest.name || guest.mobile;
+                  const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
+                  return (
+                    <View key={guest.mobile} style={styles.mgGuestRow}>
+                      <View style={styles.mgGuestInfo}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Text style={styles.mgGuestName}>{displayName}</Text>
+                          <Text style={[styles.mgGuestSub, { marginLeft: 6 }]}>· {guest.photo_count ?? 0} photos</Text>
+                        </View>
+                        {subName ? <Text style={styles.mgGuestSub}>{subName}</Text> : null}
+                        <Text style={styles.mgGuestSub}>{guest.mobile}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+                <Text style={[styles.mgEmptyText, { marginTop: 12 }]}>No guests have joined this event yet.</Text>
+              </>
+            ) : (
+              joinedGuests.map(guest => {
+                const contactName = guestContactMap[guest.mobile] ?? null;
+                const appName = guest.name || guest.mobile;
+                return (
+                  <View key={guest.mobile} style={[styles.mgGuestRow, guest.is_blocked && styles.mgBlockedRow]}>
+                    <View style={styles.mgGuestInfo}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.mgGuestName, guest.is_blocked && styles.mgBlockedText]}>{appName}</Text>
+                        <Text style={[styles.mgGuestSub, { marginLeft: 6 }, guest.is_blocked && styles.mgBlockedText]}>· {guest.photo_count ?? 0} photos</Text>
+                      </View>
+                      <Text style={[styles.mgGuestSub, guest.is_blocked && styles.mgBlockedText]}>{contactName || 'Number not in contacts'}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.mgGuestSub, guest.is_blocked && styles.mgBlockedText]}>{guest.mobile}</Text>
+                        {guest.is_blocked && <Text style={[styles.mgBlockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
+                      </View>
+                    </View>
+                    {guest.mobile === params.adminPhone ? null : togglingGuest === guest.mobile ? (
+                      <ActivityIndicator size="small" color={Colors.accent} />
+                    ) : (
+                      <TouchableOpacity
+                        style={[styles.mgBlockBtn, guest.is_blocked && styles.mgUnblockBtn]}
+                        onPress={() => handleToggleGuestBlock(guest.mobile, guest.is_blocked)}
+                      >
+                        <Text style={[styles.mgBlockBtnText, guest.is_blocked && styles.mgUnblockBtnText]}>
+                          {guest.is_blocked ? 'Unblock' : 'Block'}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                );
+              })
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
 
       {/* Sort panel */}
       <Modal visible={sortPanelVisible} transparent animationType="fade" onRequestClose={() => setSortPanelVisible(false)}>
@@ -3322,4 +3477,27 @@ const styles = StyleSheet.create({
   datePickerCancelText: { fontSize: 15, fontWeight: '600', color: '#555' },
   datePickerConfirmBtn: { flex: 1, backgroundColor: Colors.accent, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   datePickerConfirmText: { fontSize: 15, fontWeight: '700', color: Colors.background },
+
+  // Manage Guests panel
+  mgPanelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 0.5, borderBottomColor: '#222' },
+  mgPanelTitle: { fontSize: 18, fontWeight: '700', color: Colors.white },
+  mgPanelClose: { fontSize: 28, color: Colors.textMuted, paddingHorizontal: 4 },
+  mgPanelDesc: { fontSize: 13, color: Colors.textMuted, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, lineHeight: 19 },
+  mgPanelScroll: { padding: 16, gap: 8 },
+  mgGuestRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1A1A1A', borderRadius: 8, padding: 12, marginBottom: 8, borderWidth: 0.5, borderColor: '#2A2A2A' },
+  mgGuestInfo: { flex: 1 },
+  mgGuestName: { fontSize: 14, fontWeight: '700', color: Colors.white },
+  mgGuestSub: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  mgBlockedRow: { opacity: 0.6 },
+  mgBlockedText: { color: Colors.textMuted },
+  mgBlockedBadge: { fontSize: 10, fontWeight: '800', color: '#E53935' },
+  mgBlockBtn: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: 'rgba(229,57,53,0.1)', borderRadius: 6, borderWidth: 0.5, borderColor: 'rgba(229,57,53,0.4)' },
+  mgBlockBtnText: { fontSize: 12, fontWeight: '700', color: '#E53935' },
+  mgUnblockBtn: { backgroundColor: 'rgba(100,220,100,0.08)', borderColor: 'rgba(100,220,100,0.3)' },
+  mgUnblockBtnText: { color: '#4CAF50' },
+  mgEmptyText: { fontSize: 13, color: '#555', textAlign: 'center', marginTop: 32 },
+  mgErrorBox: { alignItems: 'center', paddingVertical: 24 },
+  mgErrorText: { fontSize: 13, color: '#E53935', textAlign: 'center', marginBottom: 12 },
+  mgRetryBtn: { borderWidth: 1, borderColor: '#444', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 8 },
+  mgRetryBtnText: { fontSize: 13, fontWeight: '600', color: Colors.textMuted },
 });

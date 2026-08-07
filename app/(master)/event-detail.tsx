@@ -11,7 +11,7 @@ import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
 import { showPermissionDeniedAlert, shouldShowDeniedAlert } from '../../lib/priming';
 import { useAppPermission } from '../../lib/permissions';
-import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, clearAllowedGuests, clearJoinedGuests, listJoinedGuests, setGuestBlocked } from '../../lib/api';
+import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, clearAllowedGuests, clearJoinedGuests, listJoinedGuestsForUser, setGuestBlocked } from '../../lib/api';
 import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -67,9 +67,10 @@ export default function EventDetailScreen() {
     });
   }, []);
 
-  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number };
+  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number; role?: 'organiser' | 'coadmin' | 'user' };
   const [showManageGuestsPanel, setShowManageGuestsPanel] = useState(false);
   const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
+  const [joinedGuestsTotalPhotos, setJoinedGuestsTotalPhotos] = useState<number | null>(null);
   const [joinedGuestsLoading, setJoinedGuestsLoading] = useState(false);
   const [joinedGuestsError, setJoinedGuestsError] = useState<string | null>(null);
   const [togglingGuest, setTogglingGuest] = useState<string | null>(null);
@@ -132,14 +133,15 @@ export default function EventDetailScreen() {
     try {
       const [allowedResult, joinedResult] = await Promise.all([
         listAllowedGuests(params.slug, params.organiserPhone, pw),
-        listJoinedGuests(params.slug, params.organiserPhone, pw),
+        listJoinedGuestsForUser(params.slug, params.organiserPhone),
       ]);
       if (joinedResult.guests) {
         const organiserName = (await getUserProfile())?.name ?? '';
         const organiserPhone = params.organiserPhone;
-        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false };
+        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false, role: 'organiser' };
         const others = joinedResult.guests.filter(g => g.mobile !== organiserPhone);
         setJoinedGuests([organiserEntry, ...others]);
+        setJoinedGuestsTotalPhotos(joinedResult.total_photo_count ?? null);
       }
       if (allowedResult.guests) {
         setAllowedGuests(allowedResult.guests);
@@ -171,7 +173,7 @@ export default function EventDetailScreen() {
     setJoinedGuestsLoading(true);
     setJoinedGuestsError(null);
     try {
-      const result = await listJoinedGuests(params.slug, params.organiserPhone, pw);
+      const result = await listJoinedGuestsForUser(params.slug, params.organiserPhone);
       if (result.guests) {
         // Pin organiser to top of the list, even if they haven't joined
         const organiserPhone = params.organiserPhone!;
@@ -180,8 +182,9 @@ export default function EventDetailScreen() {
         setOrganiserDisplayName(organiserName);
         const others = result.guests.filter(g => g.mobile !== organiserPhone);
         const organiserFromApi = result.guests.find(g => g.mobile === organiserPhone);
-        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false, photo_count: organiserFromApi?.photo_count ?? 0 };
+        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false, photo_count: organiserFromApi?.photo_count ?? 0, role: 'organiser' };
         setJoinedGuests([organiserEntry, ...others]);
+        setJoinedGuestsTotalPhotos(result.total_photo_count ?? null);
         // Look up each mobile in the organiser's contacts
         try {
           const { status } = await Contacts.getPermissionsAsync();
@@ -255,7 +258,7 @@ export default function EventDetailScreen() {
       setClosedUpdating(true);
       let joinedGuests: { name: string; mobile: string }[] = [];
       try {
-        const res = await listJoinedGuests(params.slug, params.organiserPhone, pw);
+        const res = await listJoinedGuestsForUser(params.slug, params.organiserPhone);
         joinedGuests = res.guests ?? [];
       } finally {
         setClosedUpdating(false);
@@ -529,7 +532,7 @@ export default function EventDetailScreen() {
     const pw = await getOrganiserPassword();
     if (!pw || !params.organiserPhone) return;
     // Fetch fresh joined guests to get reliable blocked status
-    const freshJoined = await listJoinedGuests(params.slug, params.organiserPhone, pw);
+    const freshJoined = await listJoinedGuestsForUser(params.slug, params.organiserPhone);
     const freshJoinedList = freshJoined.guests ?? [];
     const alreadyInList = allowedGuests.some(g => g.phone === phone);
     const blockedEntry = freshJoinedList.find(g => g.mobile === phone && g.is_blocked);
@@ -1185,7 +1188,7 @@ export default function EventDetailScreen() {
       <Modal visible={showManageGuestsPanel} animationType="slide" onRequestClose={() => setShowManageGuestsPanel(false)}>
         <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           <View style={styles.panelHeader}>
-            <Text style={styles.panelTitle}>Manage Guests{joinedGuests.length > 1 ? ` (${joinedGuests.length - 1})` : ''}</Text>
+            <Text style={styles.panelTitle}>Manage Guests{joinedGuests.filter(g => g.role === 'user').length > 0 ? ` (${joinedGuests.filter(g => g.role === 'user').length})` : ''}{joinedGuestsTotalPhotos != null ? ` · ${joinedGuestsTotalPhotos} photos` : ''}</Text>
             <TouchableOpacity onPress={() => setShowManageGuestsPanel(false)}>
               <Text style={styles.panelClose}>×</Text>
             </TouchableOpacity>
@@ -1239,17 +1242,22 @@ export default function EventDetailScreen() {
                         {guest.is_blocked && <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
                       </View>
                     </View>
-                    {guest.mobile === params.organiserPhone ? null : togglingGuest === guest.mobile ? (
-                      <ActivityIndicator size="small" color={Colors.accent} />
-                    ) : (
-                      <TouchableOpacity
-                        style={[styles.removeBtn, guest.is_blocked && styles.unblockBtn]}
-                        onPress={() => handleToggleBlock(guest.mobile, guest.is_blocked)}
-                      >
-                        <Text style={[styles.removeBtnText, guest.is_blocked && styles.unblockBtnText]}>
-                          {guest.is_blocked ? 'Unblock' : 'Block'}
-                        </Text>
-                      </TouchableOpacity>
+                    {guest.mobile === params.organiserPhone ? null : (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        {guest.role === 'coadmin' && <Text style={styles.coadminBadge}>Co-Admin</Text>}
+                        {togglingGuest === guest.mobile ? (
+                          <ActivityIndicator size="small" color={Colors.accent} />
+                        ) : (
+                          <TouchableOpacity
+                            style={[styles.removeBtn, guest.is_blocked && styles.unblockBtn]}
+                            onPress={() => handleToggleBlock(guest.mobile, guest.is_blocked)}
+                          >
+                            <Text style={[styles.removeBtnText, guest.is_blocked && styles.unblockBtnText]}>
+                              {guest.is_blocked ? 'Unblock' : 'Block'}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
                     )}
                   </View>
                 );
@@ -1324,6 +1332,7 @@ const styles = StyleSheet.create({
   coadminInfo: { flex: 1 },
   coadminName: { fontSize: 14, fontWeight: '700', color: Colors.white },
   coadminPhone: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  coadminBadge: { fontSize: 11, fontWeight: '700', color: Colors.accent, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 0.5, borderColor: Colors.accent, overflow: 'hidden' },
   removeBtn: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: 'rgba(229,57,53,0.1)', borderRadius: 6, borderWidth: 0.5, borderColor: 'rgba(229,57,53,0.4)' },
   removeBtnText: { fontSize: 12, fontWeight: '700', color: '#E53935' },
   addCoadminBtn: { flex: 0, marginTop: 4, borderColor: Colors.accent },

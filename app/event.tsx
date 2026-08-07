@@ -496,6 +496,7 @@ export default function EventScreen() {
   type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number; role: 'organiser' | 'coadmin' | 'user' };
   const [showManageGuests, setShowManageGuests] = useState(false);
   const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
+  const [joinedGuestsTotalPhotos, setJoinedGuestsTotalPhotos] = useState<number | null>(null);
   const [joinedGuestsLoading, setJoinedGuestsLoading] = useState(false);
   const [joinedGuestsError, setJoinedGuestsError] = useState<string | null>(null);
   const [togglingGuest, setTogglingGuest] = useState<string | null>(null);
@@ -731,6 +732,7 @@ export default function EventScreen() {
           }
         }
         setJoinedGuests(allGuests);
+        setJoinedGuestsTotalPhotos(result.total_photo_count ?? null);
         try {
           const { status } = await Contacts.getPermissionsAsync();
           if (status === 'granted') {
@@ -2765,7 +2767,7 @@ export default function EventScreen() {
       <Modal visible={showManageGuests} animationType="slide" onRequestClose={() => setShowManageGuests(false)}>
         <View style={{ flex: 1, backgroundColor: Colors.background, paddingTop: insets.top, paddingBottom: insets.bottom }}>
           <View style={styles.mgPanelHeader}>
-            <Text style={styles.mgPanelTitle}>Manage Guests{joinedGuests.filter(g => g.role === 'user').length > 0 ? ` (${joinedGuests.filter(g => g.role === 'user').length})` : ''}</Text>
+            <Text style={styles.mgPanelTitle}>Manage Guests{joinedGuests.filter(g => g.role === 'user').length > 0 ? ` (${joinedGuests.filter(g => g.role === 'user').length})` : ''}{joinedGuestsTotalPhotos != null ? ` · ${joinedGuestsTotalPhotos} photos` : ''}</Text>
             <TouchableOpacity onPress={() => setShowManageGuests(false)}>
               <Text style={styles.mgPanelClose}>×</Text>
             </TouchableOpacity>
@@ -2819,22 +2821,23 @@ export default function EventScreen() {
                         {guest.is_blocked && <Text style={[styles.mgBlockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
                       </View>
                     </View>
-                    {(guest.role !== 'user' || guest.mobile === userMobile) ? (
-                      guest.role === 'coadmin' ? (
-                        <Text style={styles.mgCoadminBadge}>Co-Admin</Text>
-                      ) : null
-                    ) : togglingGuest === guest.mobile ? (
-                      <ActivityIndicator size="small" color={Colors.accent} />
-                    ) : (
-                      <TouchableOpacity
-                        style={[styles.mgBlockBtn, guest.is_blocked && styles.mgUnblockBtn]}
-                        onPress={() => handleToggleGuestBlock(guest.mobile, guest.is_blocked)}
-                      >
-                        <Text style={[styles.mgBlockBtnText, guest.is_blocked && styles.mgUnblockBtnText]}>
-                          {guest.is_blocked ? 'Unblock' : 'Block'}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      {guest.role === 'coadmin' && <Text style={styles.mgCoadminBadge}>Co-Admin</Text>}
+                      {guest.role !== 'organiser' && guest.mobile !== userMobile && (userRole === 'organiser' || guest.role === 'user') && (
+                        togglingGuest === guest.mobile ? (
+                          <ActivityIndicator size="small" color={Colors.accent} />
+                        ) : (
+                          <TouchableOpacity
+                            style={[styles.mgBlockBtn, guest.is_blocked && styles.mgUnblockBtn]}
+                            onPress={() => handleToggleGuestBlock(guest.mobile, guest.is_blocked)}
+                          >
+                            <Text style={[styles.mgBlockBtnText, guest.is_blocked && styles.mgUnblockBtnText]}>
+                              {guest.is_blocked ? 'Unblock' : 'Block'}
+                            </Text>
+                          </TouchableOpacity>
+                        )
+                      )}
+                    </View>
                   </View>
                 );
               })

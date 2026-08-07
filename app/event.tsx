@@ -2767,7 +2767,7 @@ export default function EventScreen() {
       <Modal visible={showManageGuests} animationType="slide" onRequestClose={() => setShowManageGuests(false)}>
         <View style={{ flex: 1, backgroundColor: Colors.background, paddingTop: insets.top, paddingBottom: insets.bottom }}>
           <View style={styles.mgPanelHeader}>
-            <Text style={styles.mgPanelTitle}>Manage Guests{joinedGuests.filter(g => g.role === 'user').length > 0 ? ` (${joinedGuests.filter(g => g.role === 'user').length})` : ''}{joinedGuestsTotalPhotos != null ? ` · ${joinedGuestsTotalPhotos} photos` : ''}</Text>
+            <Text style={styles.mgPanelTitle}>Manage Guests{joinedGuests.filter(g => g.role !== 'organiser').length > 0 ? ` (${joinedGuests.filter(g => g.role !== 'organiser').length})` : ''}{joinedGuestsTotalPhotos != null ? ` · ${joinedGuestsTotalPhotos} photos` : ''}</Text>
             <TouchableOpacity onPress={() => setShowManageGuests(false)}>
               <Text style={styles.mgPanelClose}>×</Text>
             </TouchableOpacity>

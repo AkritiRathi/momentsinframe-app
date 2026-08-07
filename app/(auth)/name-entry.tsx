@@ -85,8 +85,8 @@ export default function NameEntryScreen() {
     }
 
     try {
-      const first = firstName.trim();
-      const last = lastName.trim();
+      const first = firstName.trim().replace(/\b\w/g, c => c.toUpperCase());
+      const last = lastName.trim().replace(/\b\w/g, c => c.toUpperCase());
       const name = `${first} ${last}`;
       await saveUserProfile({ firstName: first, lastName: last, mobile: mobile.trim() });
       await registerUser(mobile.trim(), name).catch(() => {});
@@ -158,8 +158,10 @@ export default function NameEntryScreen() {
                   placeholder="First name"
                   placeholderTextColor="#555"
                   value={firstName}
-                  onChangeText={setFirstName}
+                  onChangeText={v => setFirstName(v.replace(/[^a-zA-Z ]/g, ''))}
                   autoCorrect={false}
+                  autoCapitalize="words"
+                  maxLength={15}
                   editable={!isExisting}
                 />
 
@@ -170,8 +172,10 @@ export default function NameEntryScreen() {
                   placeholder="Last name"
                   placeholderTextColor="#555"
                   value={lastName}
-                  onChangeText={setLastName}
+                  onChangeText={v => setLastName(v.replace(/[^a-zA-Z ]/g, ''))}
                   autoCorrect={false}
+                  autoCapitalize="words"
+                  maxLength={15}
                   editable={!isExisting}
                 />
               </>

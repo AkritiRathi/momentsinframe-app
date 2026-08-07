@@ -28,7 +28,8 @@ import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
   getPhotoDownloadUrl, prepareZip, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
-  listJoinedGuests, setGuestBlocked,
+  listJoinedGuests, setGuestBlocked, listJoinedGuestsForUser, setGuestBlockedByUser,
+  checkAdminStatus,
 } from '../lib/api';
 import { API_BASE_URL } from '../constants/config';
 import {
@@ -164,7 +165,8 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
           </View>
           {(isMain || showMyUploadsOnOther) && !hideMyUploads && (
             <TouchableOpacity
-              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive]}
+              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode) && { opacity: 0.35 }]}
+              disabled={selectMode || deleteMode}
               onPress={onMyUploadsToggle}
             >
               <Text style={[styles.myUploadsPillText, myUploadsFilter && styles.myUploadsPillTextActive]}>
@@ -491,7 +493,7 @@ export default function EventScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const menuBtnRef = useRef<any>(null);
   const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
-  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number };
+  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number; role: 'organiser' | 'coadmin' | 'user' };
   const [showManageGuests, setShowManageGuests] = useState(false);
   const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
   const [joinedGuestsLoading, setJoinedGuestsLoading] = useState(false);
@@ -601,6 +603,7 @@ export default function EventScreen() {
         setUserMobile(p.mobile);
         userMobileRef.current = p.mobile;
         setUserName(`${p.firstName} ${p.lastName}`.trim());
+
       }
       loadPhotos();
       const notifPerm = await Notifications.getPermissionsAsync();
@@ -640,10 +643,8 @@ export default function EventScreen() {
           if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
           if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
           if (data.event.expires_at) setExpiresAt(data.event.expires_at);
-          if (userRole !== 'organiser' && userMobileRef.current) {
-            if (data.event.role) setUserRole(data.event.role);
-            if (data.event.isBlocked === true) router.back();
-          }
+          if (userMobileRef.current && data.event.isBlocked === true) router.back();
+          if (data.event.role && userMobileRef.current) setUserRole(data.event.role);
         }
       });
     }, [])
@@ -705,20 +706,31 @@ export default function EventScreen() {
   }
 
   async function loadManageGuests() {
-    const pw = await getOrganiserPassword();
-    if (!pw || !params.adminPhone) return;
+    const phone = userMobile ?? params.adminPhone;
+    if (!phone) return;
     setJoinedGuestsLoading(true);
     setJoinedGuestsError(null);
     try {
-      const result = await listJoinedGuests(slug, params.adminPhone, pw);
+      const result = await listJoinedGuestsForUser(slug, phone);
       if (result.guests) {
-        const organiserPhone = params.adminPhone!;
-        const profile = await getUserProfile();
-        const organiserName = profile ? `${profile.firstName} ${profile.lastName}`.trim() : 'Organiser';
-        const others = result.guests.filter(g => g.mobile !== organiserPhone);
-        const organiserFromApi = result.guests.find(g => g.mobile === organiserPhone);
-        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false, photo_count: organiserFromApi?.photo_count ?? 0 };
-        setJoinedGuests([organiserEntry, ...others]);
+        const ownerPhone = result.owner_phone ?? params.adminPhone!;
+        const roleOrder: Record<string, number> = { organiser: 0, coadmin: 1, user: 2 };
+        let allGuests: JoinedGuest[] = [...result.guests].sort((a, b) =>
+          (roleOrder[a.role] ?? 2) - (roleOrder[b.role] ?? 2)
+        );
+        // Fallback: ensure organiser entry exists if not in event_users
+        if (!allGuests.some(g => g.role === 'organiser') && ownerPhone) {
+          allGuests = [{ name: 'Organiser', mobile: ownerPhone, is_blocked: false, photo_count: 0, role: 'organiser' }, ...allGuests];
+        }
+        // Update organiser display name from local profile when the organiser is viewing
+        if (userRole === 'organiser') {
+          const profile = await getUserProfile();
+          if (profile) {
+            const organiserName = `${profile.firstName} ${profile.lastName}`.trim();
+            allGuests = allGuests.map(g => g.role === 'organiser' ? { ...g, name: organiserName } : g);
+          }
+        }
+        setJoinedGuests(allGuests);
         try {
           const { status } = await Contacts.getPermissionsAsync();
           if (status === 'granted') {
@@ -744,10 +756,10 @@ export default function EventScreen() {
   }
 
   async function handleToggleGuestBlock(mobile: string, currentlyBlocked: boolean) {
-    const pw = await getOrganiserPassword();
-    if (!pw || !params.adminPhone) return;
+    const phone = userMobile ?? params.adminPhone;
+    if (!phone) return;
     setTogglingGuest(mobile);
-    const result = await setGuestBlocked(slug, mobile, !currentlyBlocked, params.adminPhone, pw);
+    const result = await setGuestBlockedByUser(slug, mobile, !currentlyBlocked, phone);
     setTogglingGuest(null);
     if (result.error) {
       showAlert('Error', result.error);
@@ -771,14 +783,12 @@ export default function EventScreen() {
         if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
         if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
         if (data.event.expires_at) setExpiresAt(data.event.expires_at);
-        if (userRole !== 'organiser' && userMobileRef.current) {
-          if (data.event.role) setUserRole(data.event.role);
-          if (data.event.isBlocked === true) {
-            setLoading(false);
-            router.back();
-            return;
-          }
+        if (userMobileRef.current && data.event.isBlocked === true) {
+          setLoading(false);
+          router.back();
+          return;
         }
+        if (data.event.role && userMobileRef.current) setUserRole(data.event.role);
       }
       setLoading(false);
       loadAllUrls([...main, ...other]);
@@ -808,7 +818,7 @@ export default function EventScreen() {
           if (result.urls) {
             setPhotoUrls(prev => ({ ...prev, ...result.urls }));
             const thumbs = Object.values(result.urls).map(u => u.thumbUrl).filter(Boolean) as string[];
-            if (thumbs.length > 0) ExpoImage.prefetch(thumbs);
+            if (thumbs.length > 0 && Platform.OS === 'ios') ExpoImage.prefetch(thumbs);
           }
         } catch { /* skip */ }
       })
@@ -2127,7 +2137,7 @@ export default function EventScreen() {
                   <Text style={styles.adminGearIcon}>🔔</Text>
                   {hasUnread && <View style={styles.notifDot} />}
                 </TouchableOpacity>
-                <TouchableOpacity ref={menuBtnRef} style={styles.menuBtn} onPress={() => {
+                <TouchableOpacity ref={menuBtnRef} style={[styles.menuBtn, myUploadsFilter && { opacity: 0.35 }]} disabled={myUploadsFilter} onPress={() => {
                   menuBtnRef.current?.measure((_x: number, _y: number, width: number, height: number, pageX: number, pageY: number) => {
                     setMenuBtnLayout({ top: pageY + height, right: SCREEN_WIDTH - pageX - width });
                     setMenuVisible(true);
@@ -2737,10 +2747,10 @@ export default function EventScreen() {
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
           <View style={[styles.menuDropdown, menuBtnLayout ? { top: menuBtnLayout.top, right: menuBtnLayout.right } : {}]}>
-            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.4 }]} disabled={selectMode || deleteMode || myUploadsFilter} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}>
+            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode) && { opacity: 0.4 }]} disabled={selectMode || deleteMode} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}>
               <Text style={styles.menuItemText}>Sort & Display</Text>
             </TouchableOpacity>
-            {userRole === 'organiser' && (
+            {isAdmin && (
               <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); loadManageGuests(); setShowManageGuests(true); }}>
                 <Text style={styles.menuItemText}>Manage Guests</Text>
               </TouchableOpacity>
@@ -2755,7 +2765,7 @@ export default function EventScreen() {
       <Modal visible={showManageGuests} animationType="slide" onRequestClose={() => setShowManageGuests(false)}>
         <View style={{ flex: 1, backgroundColor: Colors.background, paddingTop: insets.top, paddingBottom: insets.bottom }}>
           <View style={styles.mgPanelHeader}>
-            <Text style={styles.mgPanelTitle}>Manage Guests{joinedGuests.length > 1 ? ` (${joinedGuests.length - 1})` : ''}</Text>
+            <Text style={styles.mgPanelTitle}>Manage Guests{joinedGuests.filter(g => g.role === 'user').length > 0 ? ` (${joinedGuests.filter(g => g.role === 'user').length})` : ''}</Text>
             <TouchableOpacity onPress={() => setShowManageGuests(false)}>
               <Text style={styles.mgPanelClose}>×</Text>
             </TouchableOpacity>
@@ -2809,7 +2819,11 @@ export default function EventScreen() {
                         {guest.is_blocked && <Text style={[styles.mgBlockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
                       </View>
                     </View>
-                    {guest.mobile === params.adminPhone ? null : togglingGuest === guest.mobile ? (
+                    {(guest.role !== 'user' || guest.mobile === userMobile) ? (
+                      guest.role === 'coadmin' ? (
+                        <Text style={styles.mgCoadminBadge}>Co-Admin</Text>
+                      ) : null
+                    ) : togglingGuest === guest.mobile ? (
                       <ActivityIndicator size="small" color={Colors.accent} />
                     ) : (
                       <TouchableOpacity
@@ -3495,6 +3509,7 @@ const styles = StyleSheet.create({
   mgBlockedRow: { opacity: 0.6 },
   mgBlockedText: { color: Colors.textMuted },
   mgBlockedBadge: { fontSize: 10, fontWeight: '800', color: '#E53935' },
+  mgCoadminBadge: { fontSize: 11, fontWeight: '700', color: Colors.accent, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 0.5, borderColor: Colors.accent, overflow: 'hidden' },
   mgBlockBtn: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: 'rgba(229,57,53,0.1)', borderRadius: 6, borderWidth: 0.5, borderColor: 'rgba(229,57,53,0.4)' },
   mgBlockBtnText: { fontSize: 12, fontWeight: '700', color: '#E53935' },
   mgUnblockBtn: { backgroundColor: 'rgba(100,220,100,0.08)', borderColor: 'rgba(100,220,100,0.3)' },

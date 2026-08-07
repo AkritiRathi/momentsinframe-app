@@ -282,7 +282,7 @@ export default function JoinEventScreen() {
       if (profile?.mobile) {
         const adminCheck = await checkAdminStatus(e.slug, profile.mobile);
         const freshRole = adminCheck.role ?? 'user';
-        await saveJoinedEvent({ ...e, role: freshRole });
+        await saveJoinedEvent({ ...e, role: freshRole, isOrganiser: e.isOrganiser || freshRole === 'organiser' });
       }
     }));
     setJoinedEvents(await getJoinedEvents());

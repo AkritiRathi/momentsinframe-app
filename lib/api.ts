@@ -229,7 +229,7 @@ export async function clearJoinedGuests(slug: string, organiserPhone: string, or
   return del(`/api/native/events/${slug}/joined-guests`, { organiserPhone, organiserPassword });
 }
 
-export async function listJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean; photo_count: number }[]; error?: string }> {
+export async function listJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean; photo_count: number; role: 'organiser' | 'coadmin' | 'user' }[]; owner_phone?: string; error?: string }> {
   return get(`/api/native/events/${slug}/joined-guests`, {
     'x-organiser-phone': organiserPhone,
     'x-organiser-password': organiserPassword,
@@ -244,6 +244,19 @@ export async function setGuestBlocked(slug: string, mobile: string, isBlocked: b
       'x-organiser-phone': organiserPhone,
       'x-organiser-password': organiserPassword,
     },
+    body: JSON.stringify({ is_blocked: isBlocked }),
+  });
+  return res.json();
+}
+
+export async function listJoinedGuestsForUser(slug: string, userPhone: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean; photo_count: number; role: 'organiser' | 'coadmin' | 'user' }[]; owner_phone?: string; error?: string }> {
+  return get(`/api/native/events/${slug}/joined-guests`, { 'x-user-phone': userPhone });
+}
+
+export async function setGuestBlockedByUser(slug: string, mobile: string, isBlocked: boolean, userPhone: string): Promise<{ success?: boolean; error?: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/guests/${mobile}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'x-user-phone': userPhone },
     body: JSON.stringify({ is_blocked: isBlocked }),
   });
   return res.json();

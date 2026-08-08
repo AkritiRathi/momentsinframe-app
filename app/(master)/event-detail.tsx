@@ -1171,10 +1171,6 @@ export default function EventDetailScreen() {
             <View style={[styles.dropdown, { position: 'absolute', top: gearDropPos.top, right: gearDropPos.right }]}>
               <TouchableOpacity style={styles.dropRow} onPress={() => {
                 setGearMenuVisible(false);
-                if (isClosed) {
-                  showAlert('Invite-Only Event', 'This event is invite-only. To manage who can join, use the Allowed Guests list in the Invite-Only section below.');
-                  return;
-                }
                 requestAppPermission('contacts', () => { loadJoinedGuests(); setShowManageGuestsPanel(true); }, params.organiserPhone);
               }}>
                 <Text style={styles.dropText}>Manage Guests</Text>

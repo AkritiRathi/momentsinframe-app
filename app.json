@@ -33,7 +33,6 @@
       }
     },
     "android": {
-      "minSdkVersion": 26,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.momentsinframe.app",
@@ -85,6 +84,7 @@
       "./plugins/withBackgroundUpload",
       "./plugins/withExcludeFromBackup",
       "expo-updates",
+      ["expo-build-properties", { "android": { "minSdkVersion": 26 } }],
       "@react-native-community/datetimepicker",
       [
         "expo-media-library",

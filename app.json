@@ -3,7 +3,7 @@
     "name": "Moments",
     "slug": "MomentsInFrame",
     "scheme": "momentsinframe",
-    "version": "2.0.3",
+    "version": "2.0.4",
     "orientation": "portrait",
     "icon": "./assets/Logo.png",
     "userInterfaceStyle": "light",
@@ -28,7 +28,7 @@
       "infoPlist": {
         "UIBackgroundModes": ["fetch"],
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Allow MomentsInFrame to use your camera to scan event QR codes."
+        "NSCameraUsageDescription": "Allow MomentsInFrame to use your camera to scan event QR codes and take selfies to find your photos."
       }
     },
     "android": {
@@ -67,6 +67,13 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermission": "Allow MomentsInFrame to use your camera to scan event QR codes and take selfies to find your photos.",
+          "enableFrameProcessors": true
+        }
+      ],
       [
         "expo-camera",
         {

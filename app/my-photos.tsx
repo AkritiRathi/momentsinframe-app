@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Camera, useCameraPermission, useCameraDevice, useFrameProcessor } from 'react-native-vision-camera';
+import { useFaceDetector } from 'react-native-vision-camera-face-detector';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
@@ -95,8 +96,16 @@ export default function MyPhotosScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showAlert, alertOverlay } = useAlert();
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const cameraRef = useRef<CameraView>(null);
+  const { hasPermission: cameraPermission, requestPermission: requestCameraPermission } = useCameraPermission();
+  const device = useCameraDevice('front');
+  const cameraRef = useRef<Camera>(null);
+  const [faceCount, setFaceCount] = useState(0);
+  const { detectFaces } = useFaceDetector({ performanceMode: 'fast', contourMode: 'none', landmarkMode: 'none', classificationMode: 'none' });
+  const frameProcessor = useFrameProcessor((frame) => {
+    'worklet';
+    const faces = detectFaces(frame);
+    runOnJS(setFaceCount)(faces.length);
+  }, [detectFaces]);
 
   const [mode, setMode] = useState<Mode>('camera');
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -333,7 +342,7 @@ export default function MyPhotosScreen() {
   // ── Init ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     async function init() {
-      if (!cameraPermission?.granted) await requestCameraPermission();
+      if (!cameraPermission) await requestCameraPermission();
       const seen = await AsyncStorage.getItem(PRIVACY_KEY);
       if (!seen) {
         showAlert(
@@ -350,10 +359,13 @@ export default function MyPhotosScreen() {
     if (!cameraRef.current || capturing) return;
     setCapturing(true);
     try {
-      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.5, exif: false });
-      if (!photo?.base64) { setCapturing(false); return; }
+      const photo = await cameraRef.current.takePhoto({ flash: 'off' });
+      const uri = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
+      const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+      await FileSystem.deleteAsync(uri, { idempotent: true });
+      if (!base64) { setCapturing(false); return; }
       setMode('searching');
-      const result = await findMyPhotos(slug, photo.base64, adminPhone, userMobile);
+      const result = await findMyPhotos(slug, base64, adminPhone, userMobile);
       if (result.error) {
         showAlert('Error', result.error, [{ text: 'Try Again', onPress: () => setMode('camera') }]);
         setMode('camera');
@@ -478,9 +490,24 @@ export default function MyPhotosScreen() {
   if (mode === 'camera') {
     return (
       <View style={{ flex: 1, backgroundColor: '#000' }}>
-        {cameraPermission?.granted
-          ? <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="front" />
-          : <View style={styles.permDenied}><Text style={styles.permDeniedText}>Camera access is needed to take a selfie.{'\n'}Please enable it in Settings.</Text></View>
+        {cameraPermission && device
+          ? <>
+              <Camera
+                ref={cameraRef}
+                style={StyleSheet.absoluteFill}
+                device={device}
+                isActive={true}
+                frameProcessor={frameProcessor}
+              />
+              <View style={styles.ovalContainer} pointerEvents="none">
+                <View style={[styles.oval, { borderColor: faceCount === 1 ? '#4CAF50' : '#F44336' }]} />
+              </View>
+            </>
+          : <View style={styles.permDenied}>
+              <Text style={styles.permDeniedText}>
+                {!device ? 'Front camera not available on this device.' : 'Camera access is needed to take a selfie.\nPlease enable it in Settings.'}
+              </Text>
+            </View>
         }
         <View style={[styles.cameraHeader, { paddingTop: insets.top + 12 }]}>
           <TouchableOpacity onPress={() => router.back()}>
@@ -490,8 +517,10 @@ export default function MyPhotosScreen() {
           <View style={{ width: 32 }} />
         </View>
         <View style={[styles.cameraFooter, { paddingBottom: insets.bottom + 32 }]}>
-          <Text style={styles.cameraHint}>Take a selfie to find photos of yourself</Text>
-          <TouchableOpacity style={styles.captureBtn} onPress={handleTakeSelfie} disabled={capturing || !cameraPermission?.granted}>
+          <Text style={styles.cameraHint}>
+            {faceCount === 1 ? 'Face detected — tap to search' : 'Position your face in the oval'}
+          </Text>
+          <TouchableOpacity style={styles.captureBtn} onPress={handleTakeSelfie} disabled={capturing || !cameraPermission}>
             {capturing ? <ActivityIndicator color="#000" /> : <View style={styles.captureBtnInner} />}
           </TouchableOpacity>
         </View>
@@ -693,6 +722,8 @@ const styles = StyleSheet.create({
   captureBtnInner: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#fff' },
   permDenied: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
   permDeniedText: { color: '#fff', textAlign: 'center', fontSize: 15, lineHeight: 22 },
+  ovalContainer: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
+  oval: { width: SCREEN_WIDTH * 0.65, height: SCREEN_WIDTH * 0.85, borderRadius: SCREEN_WIDTH * 0.5, borderWidth: 3 },
 
   // Searching
   centeredScreen: { flex: 1, backgroundColor: Colors.background, justifyContent: 'center', alignItems: 'center', gap: 16 },

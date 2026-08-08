@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, FlatList,
   ActivityIndicator, Dimensions, Platform, Modal, Image,
@@ -28,8 +28,21 @@ const THUMB_SIZE = Math.floor((SCREEN_WIDTH - GAP * (COLS + 1)) / COLS);
 const JPG_LIMIT = 40;
 const PRIVACY_KEY = 'myPhotosPrivacySeen';
 
+type MainPhoto = { id: string; taken_at: string };
+type OtherPhoto = { id: string; created_at: string };
 type PhotoUrls = { url?: string; thumbUrl?: string; displayUrl?: string };
 type Mode = 'camera' | 'searching' | 'results';
+
+type ListItem =
+  | { type: 'section_header'; label: string; key: string }
+  | { type: 'date_header'; date: string; key: string }
+  | { type: 'photo_row'; ids: string[]; startIndex: number; key: string };
+
+function formatDateLabel(iso: string) {
+  return new Date(iso).toLocaleDateString('en-IN', {
+    day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata',
+  });
+}
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -49,13 +62,13 @@ export default function MyPhotosScreen() {
   const cameraRef = useRef<CameraView>(null);
 
   const [mode, setMode] = useState<Mode>('camera');
-  const [photoIds, setPhotoIds] = useState<string[]>([]);
+  const [photos, setPhotos] = useState<MainPhoto[]>([]);
+  const [otherPhotos, setOtherPhotos] = useState<OtherPhoto[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, PhotoUrls>>({});
   const [capturing, setCapturing] = useState(false);
   const [downloadMode, setDownloadMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [actionLoading, setActionLoading] = useState(false);
-
   const [lightboxVisible, setLightboxVisible] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
@@ -64,6 +77,60 @@ export default function MyPhotosScreen() {
   const userMobile = params.userMobile || undefined;
   const totalPhotos = parseInt(params.totalPhotos ?? '0', 10);
 
+  // Combined flat list for lightbox indexing
+  const allIds = useMemo(() => [
+    ...photos.map(p => p.id),
+    ...otherPhotos.map(p => p.id),
+  ], [photos, otherPhotos]);
+
+  const totalFound = allIds.length;
+
+  // Build flat FlatList items
+  const listItems = useMemo((): ListItem[] => {
+    const items: ListItem[] = [];
+
+    if (photos.length > 0) {
+      items.push({ type: 'section_header', label: 'Photo Gallery', key: 'header_main' });
+      const groups: { date: string; ids: string[] }[] = [];
+      for (const p of photos) {
+        const d = formatDateLabel(p.taken_at);
+        const last = groups[groups.length - 1];
+        if (last && last.date === d) last.ids.push(p.id);
+        else groups.push({ date: d, ids: [p.id] });
+      }
+      let globalIdx = 0;
+      for (const g of groups) {
+        items.push({ type: 'date_header', date: g.date, key: `date_main_${g.date}` });
+        for (let i = 0; i < g.ids.length; i += COLS) {
+          items.push({ type: 'photo_row', ids: g.ids.slice(i, i + COLS), startIndex: globalIdx + i, key: `row_main_${g.date}_${i}` });
+        }
+        globalIdx += g.ids.length;
+      }
+    }
+
+    if (otherPhotos.length > 0) {
+      items.push({ type: 'section_header', label: 'Other Photos Gallery', key: 'header_other' });
+      const groups: { date: string; ids: string[] }[] = [];
+      const mainCount = photos.length;
+      for (const p of otherPhotos) {
+        const d = formatDateLabel(p.created_at);
+        const last = groups[groups.length - 1];
+        if (last && last.date === d) last.ids.push(p.id);
+        else groups.push({ date: d, ids: [p.id] });
+      }
+      let globalIdx = mainCount;
+      for (const g of groups) {
+        items.push({ type: 'date_header', date: g.date, key: `date_other_${g.date}` });
+        for (let i = 0; i < g.ids.length; i += COLS) {
+          items.push({ type: 'photo_row', ids: g.ids.slice(i, i + COLS), startIndex: globalIdx + i, key: `row_other_${g.date}_${i}` });
+        }
+        globalIdx += g.ids.length;
+      }
+    }
+
+    return items;
+  }, [photos, otherPhotos]);
+
   useEffect(() => {
     async function init() {
       if (!cameraPermission?.granted) await requestCameraPermission();
@@ -71,7 +138,7 @@ export default function MyPhotosScreen() {
       if (!seen) {
         showAlert(
           'Your selfie is never saved',
-          'Your selfie is only used to search this event\'s photos. It is never stored on our servers.',
+          "Your selfie is only used to search this event's photos. It is never stored on our servers.",
           [{ text: 'Got it', onPress: async () => { await AsyncStorage.setItem(PRIVACY_KEY, '1'); } }]
         );
       }
@@ -93,9 +160,12 @@ export default function MyPhotosScreen() {
         setCapturing(false);
         return;
       }
-      const ids = result.photoIds ?? [];
-      setPhotoIds(ids);
+      const main = result.photos ?? [];
+      const other = result.otherPhotos ?? [];
+      setPhotos(main);
+      setOtherPhotos(other);
       setMode('results');
+      const ids = [...main.map(p => p.id), ...other.map(p => p.id)];
       if (ids.length > 0) loadUrls(ids);
     } catch {
       showAlert('Error', 'Something went wrong. Please try again.', [{ text: 'OK', onPress: () => setMode('camera') }]);
@@ -144,7 +214,6 @@ export default function MyPhotosScreen() {
     try {
       const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? slug;
       let saved = 0;
-      let failed = 0;
       for (const id of ids) {
         try {
           const filename = `${slug}_${id}.jpg`;
@@ -165,7 +234,7 @@ export default function MyPhotosScreen() {
           }
           await FileSystem.deleteAsync(cacheUri, { idempotent: true });
           saved++;
-        } catch { failed++; }
+        } catch {}
       }
       setDownloadMode(false);
       setSelected(new Set());
@@ -215,14 +284,6 @@ export default function MyPhotosScreen() {
     }
   }
 
-  function openLightbox(index: number) {
-    setLightboxIndex(index);
-    setLightboxVisible(true);
-  }
-
-  const currentUrls = photoUrls[photoIds[lightboxIndex]];
-  const lightboxImageUrl = currentUrls?.displayUrl ?? currentUrls?.url ?? null;
-
   // ── Camera screen ──────────────────────────────────────────────────────────
   if (mode === 'camera') {
     return (
@@ -268,6 +329,10 @@ export default function MyPhotosScreen() {
   }
 
   // ── Results screen ──────────────────────────────────────────────────────────
+  const currentLbId = allIds[lightboxIndex];
+  const currentLbUrls = photoUrls[currentLbId];
+  const lightboxImageUrl = currentLbUrls?.displayUrl ?? currentLbUrls?.url ?? null;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }}>
       <View style={styles.header}>
@@ -279,14 +344,14 @@ export default function MyPhotosScreen() {
         </TouchableOpacity>
         <View style={{ alignItems: 'center' }}>
           <Text style={styles.headerTitle}>My Photos</Text>
-          {photoIds.length > 0 && (
-            <Text style={styles.headerSub}>{photoIds.length} photo{photoIds.length !== 1 ? 's' : ''} found</Text>
+          {totalFound > 0 && (
+            <Text style={styles.headerSub}>{totalFound} photo{totalFound !== 1 ? 's' : ''} found</Text>
           )}
         </View>
         <View style={{ width: 32 }} />
       </View>
 
-      {photoIds.length === 0 ? (
+      {totalFound === 0 ? (
         <View style={styles.emptyState}>
           <Text style={styles.emptyText}>No photos of you were found in this event.</Text>
           <TouchableOpacity style={styles.retryBtn} onPress={() => setMode('camera')}>
@@ -302,10 +367,10 @@ export default function MyPhotosScreen() {
           ) : (
             <View style={styles.selectBar}>
               <TouchableOpacity onPress={() => {
-                if (selected.size === photoIds.length) setSelected(new Set());
-                else setSelected(new Set(photoIds));
+                if (selected.size === totalFound) setSelected(new Set());
+                else setSelected(new Set(allIds));
               }}>
-                <Text style={styles.selectAllText}>{selected.size === photoIds.length ? 'Deselect All' : 'Select All'}</Text>
+                <Text style={styles.selectAllText}>{selected.size === totalFound ? 'Deselect All' : 'Select All'}</Text>
               </TouchableOpacity>
               <Text style={styles.selectCount}>{selected.size} selected</Text>
               <TouchableOpacity
@@ -322,36 +387,62 @@ export default function MyPhotosScreen() {
           )}
 
           <FlatList
-            data={photoIds}
-            numColumns={COLS}
-            keyExtractor={id => id}
-            contentContainerStyle={{ padding: GAP }}
-            renderItem={({ item: id, index }) => {
-              const urls = photoUrls[id];
-              const isSelected = selected.has(id);
+            data={listItems}
+            keyExtractor={item => item.key}
+            contentContainerStyle={{ paddingBottom: 20 }}
+            renderItem={({ item }) => {
+              if (item.type === 'section_header') {
+                return (
+                  <View style={styles.sectionHeader}>
+                    <Text style={styles.sectionHeaderText}>{item.label}</Text>
+                  </View>
+                );
+              }
+              if (item.type === 'date_header') {
+                return (
+                  <View style={styles.dateHeader}>
+                    <Text style={styles.dateHeaderText}>{item.date}</Text>
+                  </View>
+                );
+              }
+              // photo_row
               return (
-                <TouchableOpacity
-                  style={[styles.thumb, { marginRight: GAP, marginBottom: GAP }]}
-                  activeOpacity={0.8}
-                  onPress={() => downloadMode ? toggleSelect(id) : openLightbox(index)}
-                >
-                  {urls?.thumbUrl || urls?.url ? (
-                    <ExpoImage
-                      source={{ uri: urls.thumbUrl ?? urls.url }}
-                      style={{ width: THUMB_SIZE, height: THUMB_SIZE }}
-                      contentFit="cover"
-                    />
-                  ) : (
-                    <View style={[{ width: THUMB_SIZE, height: THUMB_SIZE }, styles.thumbPlaceholder]}>
-                      <ActivityIndicator color={Colors.accent} />
-                    </View>
-                  )}
-                  {downloadMode && (
-                    <View style={[styles.checkOverlay, isSelected && styles.checkOverlaySelected]}>
-                      {isSelected && <Text style={styles.checkMark}>✓</Text>}
-                    </View>
-                  )}
-                </TouchableOpacity>
+                <View style={styles.photoRow}>
+                  {item.ids.map((id, idx) => {
+                    const urls = photoUrls[id];
+                    const isSelected = selected.has(id);
+                    const globalIndex = item.startIndex + idx;
+                    return (
+                      <TouchableOpacity
+                        key={id}
+                        style={[styles.thumb, idx < COLS - 1 && { marginRight: GAP }]}
+                        activeOpacity={0.8}
+                        onPress={() => downloadMode ? toggleSelect(id) : (() => { setLightboxIndex(globalIndex); setLightboxVisible(true); })()}
+                      >
+                        {urls?.thumbUrl || urls?.url ? (
+                          <ExpoImage
+                            source={{ uri: urls.thumbUrl ?? urls.url }}
+                            style={{ width: THUMB_SIZE, height: THUMB_SIZE }}
+                            contentFit="cover"
+                          />
+                        ) : (
+                          <View style={[{ width: THUMB_SIZE, height: THUMB_SIZE }, styles.thumbPlaceholder]}>
+                            <ActivityIndicator color={Colors.accent} />
+                          </View>
+                        )}
+                        {downloadMode && (
+                          <View style={[styles.checkOverlay, isSelected && styles.checkOverlaySelected]}>
+                            {isSelected && <Text style={styles.checkMark}>✓</Text>}
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                  {/* Fill empty cells in last row */}
+                  {item.ids.length < COLS && Array.from({ length: COLS - item.ids.length }).map((_, i) => (
+                    <View key={`empty_${i}`} style={{ width: THUMB_SIZE, marginRight: i < COLS - item.ids.length - 1 ? GAP : 0 }} />
+                  ))}
+                </View>
               );
             }}
           />
@@ -365,7 +456,7 @@ export default function MyPhotosScreen() {
             <TouchableOpacity onPress={() => setLightboxVisible(false)}>
               <Text style={styles.lbBack}>←</Text>
             </TouchableOpacity>
-            <Text style={styles.lbCounter}>{lightboxIndex + 1} / {photoIds.length}</Text>
+            <Text style={styles.lbCounter}>{lightboxIndex + 1} / {totalFound}</Text>
             <View style={{ width: 40 }} />
           </View>
           <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -380,7 +471,7 @@ export default function MyPhotosScreen() {
                 <Text style={styles.lbArrowText}>‹</Text>
               </TouchableOpacity>
             )}
-            {lightboxIndex < photoIds.length - 1 && (
+            {lightboxIndex < totalFound - 1 && (
               <TouchableOpacity style={[styles.lbArrow, { right: 0 }]} onPress={() => setLightboxIndex(i => i + 1)}>
                 <Text style={styles.lbArrowText}>›</Text>
               </TouchableOpacity>
@@ -432,7 +523,33 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.white, letterSpacing: 0.3 },
   headerSub: { fontSize: 12, color: '#888', textAlign: 'center', marginTop: 2 },
 
-  // Download mode bar
+  // Section + date headers
+  sectionHeader: {
+    backgroundColor: Colors.background,
+    paddingHorizontal: 16, paddingTop: 16, paddingBottom: 6,
+    borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a',
+  },
+  sectionHeaderText: { fontSize: 13, fontWeight: '700', color: Colors.white, letterSpacing: 0.5, textTransform: 'uppercase' },
+  dateHeader: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 },
+  dateHeaderText: { fontSize: 12, color: '#888', fontWeight: '500' },
+
+  // Photo grid
+  photoRow: { flexDirection: 'row', paddingHorizontal: GAP, marginBottom: GAP },
+  thumb: { overflow: 'hidden' },
+  thumbPlaceholder: { backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' },
+  checkOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'transparent',
+    borderWidth: 2, borderColor: 'transparent',
+  },
+  checkOverlaySelected: {
+    backgroundColor: 'rgba(245,200,66,0.25)',
+    borderColor: Colors.accent,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  checkMark: { fontSize: 28, color: Colors.accent, fontWeight: '700' },
+
+  // Download bar
   downloadModeBtn: {
     marginHorizontal: 16, marginVertical: 10,
     backgroundColor: Colors.accent, borderRadius: 8,
@@ -449,25 +566,10 @@ const styles = StyleSheet.create({
   dlBtn: { borderWidth: 1.5, borderColor: Colors.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 6 },
   dlBtnText: { fontSize: 13, fontWeight: '600', color: Colors.accent },
 
-  // Grid
-  thumb: { overflow: 'hidden' },
-  thumbPlaceholder: { backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' },
-  checkOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'transparent',
-    borderWidth: 2, borderColor: 'transparent',
-  },
-  checkOverlaySelected: {
-    backgroundColor: 'rgba(245,200,66,0.25)',
-    borderColor: Colors.accent,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  checkMark: { fontSize: 28, color: Colors.accent, fontWeight: '700' },
-
   // Empty state
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32, gap: 20 },
   emptyText: { fontSize: 15, color: '#888', textAlign: 'center', lineHeight: 22 },
-  retryBtn: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: Colors.accent, borderRadius: 8, paddingHorizontal: 24, paddingVertical: 10 },
+  retryBtn: { borderWidth: 1.5, borderColor: Colors.accent, borderRadius: 8, paddingHorizontal: 24, paddingVertical: 10 },
   retryBtnText: { fontSize: 14, fontWeight: '600', color: Colors.accent },
 
   // Lightbox

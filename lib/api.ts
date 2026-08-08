@@ -275,7 +275,7 @@ export async function updateEventSettings(slug: string, organiserPhone: string, 
   return res.json();
 }
 
-export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string): Promise<{ photoIds?: string[]; error?: string }> {
+export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string): Promise<{ photos?: { id: string; taken_at: string }[]; otherPhotos?: { id: string; created_at: string }[]; error?: string }> {
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/find-my-photos`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

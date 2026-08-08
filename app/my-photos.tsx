@@ -28,8 +28,7 @@ const THUMB_SIZE = Math.floor((SCREEN_WIDTH - GAP * (COLS + 1)) / COLS);
 const JPG_LIMIT = 40;
 const PRIVACY_KEY = 'myPhotosPrivacySeen';
 
-type MainPhoto = { id: string; taken_at: string };
-type OtherPhoto = { id: string; created_at: string };
+type Photo = { id: string; taken_at: string };
 type PhotoUrls = { url?: string; thumbUrl?: string; displayUrl?: string };
 type Mode = 'camera' | 'searching' | 'results';
 
@@ -62,8 +61,8 @@ export default function MyPhotosScreen() {
   const cameraRef = useRef<CameraView>(null);
 
   const [mode, setMode] = useState<Mode>('camera');
-  const [photos, setPhotos] = useState<MainPhoto[]>([]);
-  const [otherPhotos, setOtherPhotos] = useState<OtherPhoto[]>([]);
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [otherPhotos, setOtherPhotos] = useState<Photo[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, PhotoUrls>>({});
   const [capturing, setCapturing] = useState(false);
   const [downloadMode, setDownloadMode] = useState(false);
@@ -113,7 +112,7 @@ export default function MyPhotosScreen() {
       const groups: { date: string; ids: string[] }[] = [];
       const mainCount = photos.length;
       for (const p of otherPhotos) {
-        const d = formatDateLabel(p.created_at);
+        const d = formatDateLabel(p.taken_at);
         const last = groups[groups.length - 1];
         if (last && last.date === d) last.ids.push(p.id);
         else groups.push({ date: d, ids: [p.id] });

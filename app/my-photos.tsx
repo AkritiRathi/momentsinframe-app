@@ -5,8 +5,7 @@ import {
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Camera, useCameraPermission, useCameraDevice, useFrameProcessor } from 'react-native-vision-camera';
-import { useFaceDetector } from 'react-native-vision-camera-face-detector';
+import { Camera, useCameraPermission, useCameraDevice } from 'react-native-vision-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
@@ -99,13 +98,7 @@ export default function MyPhotosScreen() {
   const { hasPermission: cameraPermission, requestPermission: requestCameraPermission } = useCameraPermission();
   const device = useCameraDevice('front');
   const cameraRef = useRef<Camera>(null);
-  const [faceCount, setFaceCount] = useState(0);
-  const { detectFaces } = useFaceDetector({ performanceMode: 'fast', contourMode: 'none', landmarkMode: 'none', classificationMode: 'none' });
-  const frameProcessor = useFrameProcessor((frame) => {
-    'worklet';
-    const faces = detectFaces(frame);
-    runOnJS(setFaceCount)(faces.length);
-  }, [detectFaces]);
+  const [cameraReady, setCameraReady] = useState(false);
 
   const [mode, setMode] = useState<Mode>('camera');
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -359,14 +352,15 @@ export default function MyPhotosScreen() {
     if (!cameraRef.current || capturing) return;
     setCapturing(true);
     try {
-      const photo = await cameraRef.current.takePhoto({ flash: 'off' });
+      const photo = await cameraRef.current.takePhoto();
       const uri = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
       const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-      await FileSystem.deleteAsync(uri, { idempotent: true });
+      try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
       if (!base64) { setCapturing(false); return; }
       setMode('searching');
       const result = await findMyPhotos(slug, base64, adminPhone, userMobile);
       if (result.error) {
+        setCameraReady(false);
         showAlert('Error', result.error, [{ text: 'Try Again', onPress: () => setMode('camera') }]);
         setMode('camera');
         setCapturing(false);
@@ -379,8 +373,9 @@ export default function MyPhotosScreen() {
       setMode('results');
       const ids = [...main.map(p => p.id), ...other.map(p => p.id)];
       if (ids.length > 0) loadUrls(ids);
-    } catch {
-      showAlert('Error', 'Something went wrong. Please try again.', [{ text: 'OK', onPress: () => setMode('camera') }]);
+    } catch (e: any) {
+      setCameraReady(false);
+      showAlert('Error', e?.message ?? 'Something went wrong. Please try again.', [{ text: 'OK', onPress: () => setMode('camera') }]);
       setMode('camera');
     }
     setCapturing(false);
@@ -497,10 +492,11 @@ export default function MyPhotosScreen() {
                 style={StyleSheet.absoluteFill}
                 device={device}
                 isActive={true}
-                frameProcessor={frameProcessor}
+                photo={true}
+                onInitialized={() => setCameraReady(true)}
               />
               <View style={styles.ovalContainer} pointerEvents="none">
-                <View style={[styles.oval, { borderColor: faceCount === 1 ? '#4CAF50' : '#F44336' }]} />
+                <View style={[styles.oval, { borderColor: 'rgba(255,255,255,0.8)' }]} />
               </View>
             </>
           : <View style={styles.permDenied}>
@@ -518,9 +514,9 @@ export default function MyPhotosScreen() {
         </View>
         <View style={[styles.cameraFooter, { paddingBottom: insets.bottom + 32 }]}>
           <Text style={styles.cameraHint}>
-            {faceCount === 1 ? 'Face detected — tap to search' : 'Position your face in the oval'}
+            Position your face in the oval and tap to search
           </Text>
-          <TouchableOpacity style={styles.captureBtn} onPress={handleTakeSelfie} disabled={capturing || !cameraPermission}>
+          <TouchableOpacity style={styles.captureBtn} onPress={handleTakeSelfie} disabled={capturing || !cameraPermission || !cameraReady}>
             {capturing ? <ActivityIndicator color="#000" /> : <View style={styles.captureBtnInner} />}
           </TouchableOpacity>
         </View>
@@ -562,7 +558,7 @@ export default function MyPhotosScreen() {
       {totalFound === 0 ? (
         <View style={styles.emptyState}>
           <Text style={styles.emptyText}>No photos of you were found in this event.</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={() => setMode('camera')}>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => { setCameraReady(false); setMode('camera'); }}>
             <Text style={styles.retryBtnText}>Try Again</Text>
           </TouchableOpacity>
         </View>

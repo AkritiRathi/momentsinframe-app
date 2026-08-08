@@ -28,8 +28,7 @@
       "infoPlist": {
         "UIBackgroundModes": ["fetch"],
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Allow MomentsInFrame to use your camera to scan event QR codes and take selfies to find your photos.",
-        "NSLocationWhenInUseUsageDescription": "This app does not use your location."
+        "NSCameraUsageDescription": "Allow MomentsInFrame to use your camera to scan event QR codes and take selfies to find your photos."
       }
     },
     "android": {
@@ -84,7 +83,7 @@
       "./plugins/withBackgroundUpload",
       "./plugins/withExcludeFromBackup",
       "expo-updates",
-      ["expo-build-properties", { "android": { "minSdkVersion": 26 } }],
+      ["expo-build-properties", { "android": { "minSdkVersion": 26 }, "ios": { "deploymentTarget": "15.5" } }],
       "@react-native-community/datetimepicker",
       [
         "expo-media-library",

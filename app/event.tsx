@@ -644,13 +644,14 @@ export default function EventScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      getEventPhotos(slug, params.adminPhone || undefined, userMobileRef.current ?? undefined).then(data => {
+      const mobileAtCallTime = userMobileRef.current;
+      getEventPhotos(slug, params.adminPhone || undefined, mobileAtCallTime ?? undefined).then(data => {
         if (data?.event) {
           if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
           if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
           if (data.event.expires_at) setExpiresAt(data.event.expires_at);
-          if (userMobileRef.current && data.event.isBlocked === true) router.back();
-          if (data.event.role && userMobileRef.current) setUserRole(data.event.role);
+          if (mobileAtCallTime && data.event.isBlocked === true) router.back();
+          if (data.event.role && mobileAtCallTime) setUserRole(data.event.role);
         }
       });
     }, [])
@@ -2784,7 +2785,7 @@ export default function EventScreen() {
                   totalPhotos: String([...photos, ...otherPhotos].length),
                 }});
               }}>
-                <Text style={styles.menuItemText}>My Photos</Text>
+                <Text style={styles.menuItemText}>View My Photos</Text>
               </TouchableOpacity>
             )}
           </View>

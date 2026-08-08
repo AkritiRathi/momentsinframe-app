@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, memo, forwardRef } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, FlatList,
+  View, Text, TouchableOpacity, Pressable, StyleSheet, FlatList,
   ActivityIndicator, Dimensions, Platform, Modal, Image,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as SecureStore from 'expo-secure-store';
@@ -34,10 +36,11 @@ type Mode = 'camera' | 'searching' | 'results';
 
 type ListItem =
   | { type: 'section_header'; label: string; key: string }
-  | { type: 'date_header'; date: string; key: string }
+  | { type: 'date_header'; date: string; ids: string[]; key: string }
   | { type: 'photo_row'; ids: string[]; startIndex: number; key: string };
 
 function formatDateLabel(iso: string) {
+  if (!iso) return '';
   return new Date(iso).toLocaleDateString('en-IN', {
     day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata',
   });
@@ -48,6 +51,41 @@ function chunk<T>(arr: T[], size: number): T[][] {
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 }
+
+// ── Thumbnail component with ref support ──────────────────────────────────────
+type ThumbProps = {
+  id: string;
+  thumbUrl?: string;
+  isSelected: boolean;
+  downloadMode: boolean;
+  onPress: () => void;
+  onLongPress: () => void;
+};
+const Thumb = memo(forwardRef<View, ThumbProps>(function Thumb(
+  { id, thumbUrl, isSelected, downloadMode, onPress, onLongPress }, ref
+) {
+  return (
+    <TouchableOpacity
+      ref={ref as any}
+      style={styles.thumb}
+      activeOpacity={0.85}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={350}
+    >
+      {thumbUrl
+        ? <ExpoImage source={{ uri: thumbUrl }} style={{ width: THUMB_SIZE, height: THUMB_SIZE }} contentFit="cover" recyclingKey={id} />
+        : <View style={styles.thumbPlaceholder}><ActivityIndicator color={Colors.accent} /></View>
+      }
+      {downloadMode && (
+        <View style={[styles.checkbox, isSelected && styles.checkboxSelected]}>
+          {isSelected && <Text style={styles.checkboxTick}>✓</Text>}
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}));
+Thumb.displayName = 'Thumb';
 
 export default function MyPhotosScreen() {
   const params = useLocalSearchParams<{
@@ -71,12 +109,22 @@ export default function MyPhotosScreen() {
   const [lightboxVisible, setLightboxVisible] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
+  // Drag select refs
+  const photoRefsMap = useRef<Map<string, View>>(new Map());
+  const longPressAnchorRef = useRef<{ anchorFlatIndex: number; anchorContentY: number } | null>(null);
+  const committedSelectionRef = useRef<Set<string>>(new Set());
+  const dragAnchorIndexRef = useRef<number | null>(null);
+  const dragModeRef = useRef<'select' | 'deselect' | null>(null);
+  const flatListLayoutRef = useRef({ x: 0, y: 0 });
+  const scrollOffsetRef = useRef(0);
+  const accumulatedHeights = useRef<Record<string, number>>({});
+  const listDataRef = useRef<ListItem[]>([]);
+
   const slug = params.slug;
   const adminPhone = params.adminPhone || undefined;
   const userMobile = params.userMobile || undefined;
   const totalPhotos = parseInt(params.totalPhotos ?? '0', 10);
 
-  // Combined flat list for lightbox indexing
   const allIds = useMemo(() => [
     ...photos.map(p => p.id),
     ...otherPhotos.map(p => p.id),
@@ -84,7 +132,6 @@ export default function MyPhotosScreen() {
 
   const totalFound = allIds.length;
 
-  // Build flat FlatList items
   const listItems = useMemo((): ListItem[] => {
     const items: ListItem[] = [];
 
@@ -99,7 +146,7 @@ export default function MyPhotosScreen() {
       }
       let globalIdx = 0;
       for (const g of groups) {
-        items.push({ type: 'date_header', date: g.date, key: `date_main_${g.date}` });
+        items.push({ type: 'date_header', date: g.date, ids: g.ids, key: `date_main_${g.date}` });
         for (let i = 0; i < g.ids.length; i += COLS) {
           items.push({ type: 'photo_row', ids: g.ids.slice(i, i + COLS), startIndex: globalIdx + i, key: `row_main_${g.date}_${i}` });
         }
@@ -119,7 +166,7 @@ export default function MyPhotosScreen() {
       }
       let globalIdx = mainCount;
       for (const g of groups) {
-        items.push({ type: 'date_header', date: g.date, key: `date_other_${g.date}` });
+        items.push({ type: 'date_header', date: g.date, ids: g.ids, key: `date_other_${g.date}` });
         for (let i = 0; i < g.ids.length; i += COLS) {
           items.push({ type: 'photo_row', ids: g.ids.slice(i, i + COLS), startIndex: globalIdx + i, key: `row_other_${g.date}_${i}` });
         }
@@ -127,9 +174,163 @@ export default function MyPhotosScreen() {
       }
     }
 
+    listDataRef.current = items;
     return items;
   }, [photos, otherPhotos]);
 
+  // ── Drag select helpers ─────────────────────────────────────────────────────
+  function getPhotoIdAtFlatIndex(index: number): string | null {
+    let flatIndex = 0;
+    for (const item of listDataRef.current) {
+      if (item.type === 'photo_row') {
+        if (index < flatIndex + item.ids.length) return item.ids[index - flatIndex];
+        flatIndex += item.ids.length;
+      }
+    }
+    return null;
+  }
+
+  function getPhotoIndexAtPosition(absX: number, absY: number): number | null {
+    if (!longPressAnchorRef.current) return null;
+    const fingerContentY = absY - flatListLayoutRef.current.y + scrollOffsetRef.current;
+    const contentX = absX - flatListLayoutRef.current.x;
+    const col = Math.min(Math.max(Math.floor(contentX / (THUMB_SIZE + GAP)), 0), COLS - 1);
+    let cumY = 0;
+    let photoFlatIndex = 0;
+    for (const item of listDataRef.current) {
+      const h = accumulatedHeights.current[item.key] ?? (item.type === 'photo_row' ? THUMB_SIZE + GAP : 0);
+      if (item.type === 'photo_row') {
+        if (fingerContentY >= cumY && fingerContentY < cumY + h) {
+          return Math.min(photoFlatIndex + col, photoFlatIndex + item.ids.length - 1);
+        }
+        photoFlatIndex += item.ids.length;
+      }
+      cumY += h;
+    }
+    return null;
+  }
+
+  function applyDragRange(anchorIndex: number, currentIndex: number, mode: 'select' | 'deselect') {
+    const lo = Math.min(anchorIndex, currentIndex);
+    const hi = Math.max(anchorIndex, currentIndex);
+    const next = new Set(committedSelectionRef.current);
+    for (let i = lo; i <= hi; i++) {
+      const id = getPhotoIdAtFlatIndex(i);
+      if (id) { if (mode === 'select') next.add(id); else next.delete(id); }
+    }
+    setSelected(next);
+  }
+
+  function setAnchorForPhoto(photoId: string) {
+    let flatIndex = 0;
+    let found = false;
+    for (const item of listDataRef.current) {
+      if (item.type === 'photo_row') {
+        const idx = item.ids.indexOf(photoId);
+        if (idx >= 0) { flatIndex += idx; found = true; break; }
+        flatIndex += item.ids.length;
+      }
+    }
+    if (!found) return;
+    const ref = photoRefsMap.current.get(photoId);
+    if (!ref) return;
+    (ref as any).measureInWindow((_x: number, y: number) => {
+      const contentY = y - flatListLayoutRef.current.y + scrollOffsetRef.current;
+      longPressAnchorRef.current = { anchorFlatIndex: flatIndex, anchorContentY: contentY };
+    });
+  }
+
+  function handleThumbPress(id: string, globalIndex: number) {
+    if (downloadMode) {
+      if (!longPressAnchorRef.current) setAnchorForPhoto(id);
+      setSelected(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        committedSelectionRef.current = next;
+        return next;
+      });
+    } else {
+      setLightboxIndex(globalIndex);
+      setLightboxVisible(true);
+    }
+  }
+
+  function handleThumbLongPress(id: string) {
+    if (!downloadMode) {
+      setDownloadMode(true);
+      setAnchorForPhoto(id);
+      setSelected(new Set([id]));
+      committedSelectionRef.current = new Set([id]);
+    }
+  }
+
+  const onDragStart = useCallback((absX: number, absY: number) => {
+    if (!longPressAnchorRef.current) return;
+    committedSelectionRef.current = new Set(selected);
+    const index = getPhotoIndexAtPosition(absX, absY);
+    if (index === null) return;
+    const anchorId = getPhotoIdAtFlatIndex(index);
+    const mode = anchorId && committedSelectionRef.current.has(anchorId) ? 'deselect' : 'select';
+    dragAnchorIndexRef.current = index;
+    dragModeRef.current = mode;
+    applyDragRange(index, index, mode);
+  }, [selected]);
+
+  const onDragUpdate = useCallback((absX: number, absY: number) => {
+    if (!longPressAnchorRef.current) return;
+    const currentIndex = getPhotoIndexAtPosition(absX, absY);
+    if (currentIndex === null) return;
+    if (dragAnchorIndexRef.current === null) {
+      const anchorId = getPhotoIdAtFlatIndex(currentIndex);
+      dragAnchorIndexRef.current = currentIndex;
+      dragModeRef.current = committedSelectionRef.current.has(anchorId ?? '') ? 'deselect' : 'select';
+    }
+    applyDragRange(dragAnchorIndexRef.current, currentIndex, dragModeRef.current!);
+  }, []);
+
+  const onDragEnd = useCallback(() => {
+    dragAnchorIndexRef.current = null;
+    dragModeRef.current = null;
+  }, []);
+
+  const dragGesture = useMemo(() => Gesture.Pan()
+    .enabled(downloadMode)
+    .activeOffsetX([-8, 8])
+    .onStart((e) => { 'worklet'; runOnJS(onDragStart)(e.absoluteX, e.absoluteY); })
+    .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
+    .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
+  , [downloadMode, onDragStart, onDragUpdate, onDragEnd]);
+
+  function exitDownloadMode() {
+    setDownloadMode(false);
+    setSelected(new Set());
+    committedSelectionRef.current = new Set();
+    longPressAnchorRef.current = null;
+    dragAnchorIndexRef.current = null;
+    dragModeRef.current = null;
+  }
+
+  function selectAll() {
+    const next = new Set(allIds);
+    setSelected(next);
+    committedSelectionRef.current = next;
+  }
+
+  function deselectAll() {
+    setSelected(new Set());
+    committedSelectionRef.current = new Set();
+  }
+
+  function selectGroup(ids: string[], on: boolean) {
+    setSelected(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => { if (on) next.add(id); else next.delete(id); });
+      committedSelectionRef.current = next;
+      return next;
+    });
+  }
+
+  // ── Init ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     async function init() {
       if (!cameraPermission?.granted) await requestCameraPermission();
@@ -183,14 +384,6 @@ export default function MyPhotosScreen() {
     }));
   }
 
-  function toggleSelect(id: string) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-
   async function handleDownload() {
     const ids = [...selected];
     if (ids.length === 0) return;
@@ -235,8 +428,7 @@ export default function MyPhotosScreen() {
           saved++;
         } catch {}
       }
-      setDownloadMode(false);
-      setSelected(new Set());
+      exitDownloadMode();
       const msg = Platform.OS === 'ios'
         ? `${saved} photo${saved !== 1 ? 's' : ''} saved to your Photos.`
         : `${saved} photo${saved !== 1 ? 's' : ''} saved to Downloads.`;
@@ -270,8 +462,7 @@ export default function MyPhotosScreen() {
         }
         await FileSystem.deleteAsync(cacheUri, { idempotent: true });
       }
-      setDownloadMode(false);
-      setSelected(new Set());
+      exitDownloadMode();
       const msg = Platform.OS === 'ios'
         ? (batches.length > 1 ? `${batches.length} ZIPs shared.` : 'ZIP shared.')
         : (batches.length > 1 ? `${batches.length} ZIPs saved to Downloads.` : 'ZIP saved to Downloads.');
@@ -287,13 +478,10 @@ export default function MyPhotosScreen() {
   if (mode === 'camera') {
     return (
       <View style={{ flex: 1, backgroundColor: '#000' }}>
-        {cameraPermission?.granted ? (
-          <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="front" />
-        ) : (
-          <View style={styles.permDenied}>
-            <Text style={styles.permDeniedText}>Camera access is needed to take a selfie.{'\n'}Please enable it in Settings.</Text>
-          </View>
-        )}
+        {cameraPermission?.granted
+          ? <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="front" />
+          : <View style={styles.permDenied}><Text style={styles.permDeniedText}>Camera access is needed to take a selfie.{'\n'}Please enable it in Settings.</Text></View>
+        }
         <View style={[styles.cameraHeader, { paddingTop: insets.top + 12 }]}>
           <TouchableOpacity onPress={() => router.back()}>
             <Text style={styles.camBackText}>←</Text>
@@ -304,10 +492,7 @@ export default function MyPhotosScreen() {
         <View style={[styles.cameraFooter, { paddingBottom: insets.bottom + 32 }]}>
           <Text style={styles.cameraHint}>Take a selfie to find photos of yourself</Text>
           <TouchableOpacity style={styles.captureBtn} onPress={handleTakeSelfie} disabled={capturing || !cameraPermission?.granted}>
-            {capturing
-              ? <ActivityIndicator color="#000" />
-              : <View style={styles.captureBtnInner} />
-            }
+            {capturing ? <ActivityIndicator color="#000" /> : <View style={styles.captureBtnInner} />}
           </TouchableOpacity>
         </View>
         {alertOverlay}
@@ -320,9 +505,7 @@ export default function MyPhotosScreen() {
     return (
       <View style={styles.centeredScreen}>
         <ActivityIndicator size="large" color={Colors.accent} />
-        <Text style={styles.searchingText}>
-          Searching through {totalPhotos} photo{totalPhotos !== 1 ? 's' : ''}…
-        </Text>
+        <Text style={styles.searchingText}>Searching through {totalPhotos} photo{totalPhotos !== 1 ? 's' : ''}…</Text>
       </View>
     );
   }
@@ -331,21 +514,18 @@ export default function MyPhotosScreen() {
   const currentLbId = allIds[lightboxIndex];
   const currentLbUrls = photoUrls[currentLbId];
   const lightboxImageUrl = currentLbUrls?.displayUrl ?? currentLbUrls?.url ?? null;
+  const allSelected = selected.size === totalFound;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }}>
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => {
-          if (downloadMode) { setDownloadMode(false); setSelected(new Set()); return; }
-          router.back();
-        }}>
+        <TouchableOpacity onPress={() => { if (downloadMode) { exitDownloadMode(); return; } router.back(); }}>
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
         <View style={{ alignItems: 'center' }}>
           <Text style={styles.headerTitle}>My Photos</Text>
-          {totalFound > 0 && (
-            <Text style={styles.headerSub}>{totalFound} photo{totalFound !== 1 ? 's' : ''} found</Text>
-          )}
+          {totalFound > 0 && <Text style={styles.headerSub}>{totalFound} photo{totalFound !== 1 ? 's' : ''} found</Text>}
         </View>
         <View style={{ width: 32 }} />
       </View>
@@ -359,92 +539,109 @@ export default function MyPhotosScreen() {
         </View>
       ) : (
         <>
+          {/* Action row / select bar */}
           {!downloadMode ? (
-            <TouchableOpacity style={styles.downloadModeBtn} onPress={() => setDownloadMode(true)}>
-              <Text style={styles.downloadModeBtnText}>Download Photos</Text>
-            </TouchableOpacity>
+            <View style={styles.actionRow}>
+              <TouchableOpacity style={styles.downloadPhotosBtn} onPress={() => setDownloadMode(true)}>
+                <Text style={styles.downloadPhotosBtnText}>Download Photos</Text>
+              </TouchableOpacity>
+            </View>
           ) : (
             <View style={styles.selectBar}>
-              <TouchableOpacity onPress={() => {
-                if (selected.size === totalFound) setSelected(new Set());
-                else setSelected(new Set(allIds));
-              }}>
-                <Text style={styles.selectAllText}>{selected.size === totalFound ? 'Deselect All' : 'Select All'}</Text>
-              </TouchableOpacity>
-              <Text style={styles.selectCount}>{selected.size} selected</Text>
-              <TouchableOpacity
-                style={[styles.dlBtn, selected.size === 0 && { opacity: 0.4 }]}
-                disabled={selected.size === 0 || actionLoading}
-                onPress={handleDownload}
-              >
-                {actionLoading
-                  ? <ActivityIndicator size="small" color={Colors.accent} />
-                  : <Text style={styles.dlBtnText}>Download</Text>
-                }
-              </TouchableOpacity>
+              <Text style={styles.selectCount}>{selected.size}</Text>
+              <View style={styles.selectBarBtns}>
+                <Pressable style={styles.selBtn} onPress={() => allSelected ? deselectAll() : selectAll()}>
+                  <Text style={styles.selBtnText}>Select all</Text>
+                </Pressable>
+                <Pressable style={styles.selBtn} onPress={exitDownloadMode}>
+                  <Text style={styles.selBtnText}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.selBtn, selected.size === 0 && { opacity: 0.4 }]}
+                  disabled={selected.size === 0 || actionLoading}
+                  onPress={handleDownload}
+                >
+                  {actionLoading
+                    ? <ActivityIndicator size="small" color={Colors.accent} />
+                    : <Text style={[styles.selBtnText, { color: Colors.accent }]}>Download</Text>
+                  }
+                </Pressable>
+              </View>
             </View>
           )}
 
-          <FlatList
-            data={listItems}
-            keyExtractor={item => item.key}
-            contentContainerStyle={{ paddingBottom: 20 }}
-            renderItem={({ item }) => {
-              if (item.type === 'section_header') {
+          {/* Photo grid */}
+          <GestureDetector gesture={dragGesture}>
+            <FlatList
+              data={listItems}
+              keyExtractor={item => item.key}
+              contentContainerStyle={{ paddingBottom: 20 }}
+              onLayout={e => { flatListLayoutRef.current = { x: e.nativeEvent.layout.x, y: e.nativeEvent.layout.y }; }}
+              onScroll={e => { scrollOffsetRef.current = e.nativeEvent.contentOffset.y; }}
+              scrollEventThrottle={16}
+              renderItem={({ item }) => {
+                if (item.type === 'section_header') {
+                  return (
+                    <View
+                      style={styles.sectionHeader}
+                      onLayout={e => { accumulatedHeights.current[item.key] = e.nativeEvent.layout.height; }}
+                    >
+                      <Text style={styles.sectionHeaderText}>{item.label}</Text>
+                    </View>
+                  );
+                }
+                if (item.type === 'date_header') {
+                  const allGroupSelected = item.ids.every(id => selected.has(id));
+                  return (
+                    <View
+                      style={styles.dateHeaderRow}
+                      onLayout={e => { accumulatedHeights.current[item.key] = e.nativeEvent.layout.height; }}
+                    >
+                      {downloadMode && (
+                        <TouchableOpacity
+                          style={styles.dateHeaderCircle}
+                          onPress={() => selectGroup(item.ids, !allGroupSelected)}
+                        >
+                          <View style={[styles.groupCircle, allGroupSelected && styles.groupCircleSelected]}>
+                            {allGroupSelected && <Text style={styles.groupCircleTick}>✓</Text>}
+                          </View>
+                        </TouchableOpacity>
+                      )}
+                      <Text style={styles.dateHeaderText}>{item.date}</Text>
+                    </View>
+                  );
+                }
+                // photo_row
                 return (
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionHeaderText}>{item.label}</Text>
-                  </View>
-                );
-              }
-              if (item.type === 'date_header') {
-                return (
-                  <View style={styles.dateHeader}>
-                    <Text style={styles.dateHeaderText}>{item.date}</Text>
-                  </View>
-                );
-              }
-              // photo_row
-              return (
-                <View style={styles.photoRow}>
-                  {item.ids.map((id, idx) => {
-                    const urls = photoUrls[id];
-                    const isSelected = selected.has(id);
-                    const globalIndex = item.startIndex + idx;
-                    return (
-                      <TouchableOpacity
-                        key={id}
-                        style={[styles.thumb, idx < COLS - 1 && { marginRight: GAP }]}
-                        activeOpacity={0.8}
-                        onPress={() => downloadMode ? toggleSelect(id) : (() => { setLightboxIndex(globalIndex); setLightboxVisible(true); })()}
-                      >
-                        {urls?.thumbUrl || urls?.url ? (
-                          <ExpoImage
-                            source={{ uri: urls.thumbUrl ?? urls.url }}
-                            style={{ width: THUMB_SIZE, height: THUMB_SIZE }}
-                            contentFit="cover"
+                  <View
+                    style={styles.photoRow}
+                    onLayout={e => { accumulatedHeights.current[item.key] = e.nativeEvent.layout.height; }}
+                  >
+                    {item.ids.map((id, idx) => {
+                      const urls = photoUrls[id];
+                      const globalIndex = item.startIndex + idx;
+                      return (
+                        <View key={id} style={[styles.thumbWrap, idx < COLS - 1 && { marginRight: GAP }]}>
+                          <Thumb
+                            ref={r => { if (r) photoRefsMap.current.set(id, r as View); else photoRefsMap.current.delete(id); }}
+                            id={id}
+                            thumbUrl={urls?.thumbUrl ?? urls?.url}
+                            isSelected={selected.has(id)}
+                            downloadMode={downloadMode}
+                            onPress={() => handleThumbPress(id, globalIndex)}
+                            onLongPress={() => handleThumbLongPress(id)}
                           />
-                        ) : (
-                          <View style={[{ width: THUMB_SIZE, height: THUMB_SIZE }, styles.thumbPlaceholder]}>
-                            <ActivityIndicator color={Colors.accent} />
-                          </View>
-                        )}
-                        {downloadMode && (
-                          <View style={[styles.checkOverlay, isSelected && styles.checkOverlaySelected]}>
-                            {isSelected && <Text style={styles.checkMark}>✓</Text>}
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  })}
-                  {/* Fill empty cells in last row */}
-                  {item.ids.length < COLS && Array.from({ length: COLS - item.ids.length }).map((_, i) => (
-                    <View key={`empty_${i}`} style={{ width: THUMB_SIZE, marginRight: i < COLS - item.ids.length - 1 ? GAP : 0 }} />
-                  ))}
-                </View>
-              );
-            }}
-          />
+                        </View>
+                      );
+                    })}
+                    {item.ids.length < COLS && Array.from({ length: COLS - item.ids.length }).map((_, i) => (
+                      <View key={`empty_${i}`} style={{ width: THUMB_SIZE, marginRight: i < COLS - item.ids.length - 1 ? GAP : 0 }} />
+                    ))}
+                  </View>
+                );
+              }}
+            />
+          </GestureDetector>
         </>
       )}
 
@@ -487,23 +684,12 @@ export default function MyPhotosScreen() {
 
 const styles = StyleSheet.create({
   // Camera
-  cameraHeader: {
-    position: 'absolute', top: 0, left: 0, right: 0,
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16,
-  },
+  cameraHeader: { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16 },
   camBackText: { fontSize: 24, color: '#fff' },
   cameraTitle: { fontSize: 18, fontWeight: '800', color: '#fff', letterSpacing: 0.3 },
-  cameraFooter: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    alignItems: 'center', gap: 20,
-  },
+  cameraFooter: { position: 'absolute', bottom: 0, left: 0, right: 0, alignItems: 'center', gap: 20 },
   cameraHint: { fontSize: 14, color: 'rgba(255,255,255,0.8)', textAlign: 'center' },
-  captureBtn: {
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center',
-    borderWidth: 4, borderColor: 'rgba(255,255,255,0.4)',
-  },
+  captureBtn: { width: 72, height: 72, borderRadius: 36, backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center', borderWidth: 4, borderColor: 'rgba(255,255,255,0.4)' },
   captureBtnInner: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#fff' },
   permDenied: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 },
   permDeniedText: { color: '#fff', textAlign: 'center', fontSize: 15, lineHeight: 22 },
@@ -513,57 +699,41 @@ const styles = StyleSheet.create({
   searchingText: { fontSize: 15, color: Colors.textMuted, textAlign: 'center' },
 
   // Results header
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12,
-    borderBottomWidth: 0.5, borderBottomColor: '#222',
-  },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12, borderBottomWidth: 0.5, borderBottomColor: '#222' },
   backText: { fontSize: 24, color: Colors.textMuted },
   headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.white, letterSpacing: 0.3 },
   headerSub: { fontSize: 12, color: '#888', textAlign: 'center', marginTop: 2 },
 
+  // Action row — matches event screen button style
+  actionRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, paddingVertical: 8 },
+  downloadPhotosBtn: { backgroundColor: Colors.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
+  downloadPhotosBtnText: { ...Typography.buttonText, color: Colors.background },
+
+  // Select bar — matches event screen
+  selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8, backgroundColor: Colors.background, gap: 8 },
+  selectCount: { fontSize: 22, fontWeight: '500', color: Colors.white, lineHeight: 24 },
+  selectBarBtns: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap' },
+  selBtn: { borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 9 },
+  selBtnText: { fontSize: 13, color: Colors.textMuted },
+
   // Section + date headers
-  sectionHeader: {
-    backgroundColor: Colors.background,
-    paddingHorizontal: 16, paddingTop: 16, paddingBottom: 6,
-    borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a',
-  },
+  sectionHeader: { backgroundColor: Colors.background, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   sectionHeaderText: { fontSize: 13, fontWeight: '700', color: Colors.white, letterSpacing: 0.5, textTransform: 'uppercase' },
-  dateHeader: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 6 },
-  dateHeaderText: { fontSize: 12, color: '#888', fontWeight: '500' },
+  dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 18, paddingBottom: 8, backgroundColor: Colors.background, gap: 10 },
+  dateHeaderText: { fontSize: 15, fontWeight: '700', color: Colors.white },
+  dateHeaderCircle: { padding: 2 },
+  groupCircle: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.8)', backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  groupCircleSelected: { backgroundColor: Colors.background, borderColor: Colors.white },
+  groupCircleTick: { fontSize: 11, fontWeight: '800', color: Colors.white },
 
   // Photo grid
   photoRow: { flexDirection: 'row', paddingHorizontal: GAP, marginBottom: GAP },
-  thumb: { overflow: 'hidden' },
-  thumbPlaceholder: { backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' },
-  checkOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'transparent',
-    borderWidth: 2, borderColor: 'transparent',
-  },
-  checkOverlaySelected: {
-    backgroundColor: 'rgba(245,200,66,0.25)',
-    borderColor: Colors.accent,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  checkMark: { fontSize: 28, color: Colors.accent, fontWeight: '700' },
-
-  // Download bar
-  downloadModeBtn: {
-    marginHorizontal: 16, marginVertical: 10,
-    backgroundColor: Colors.accent, borderRadius: 8,
-    paddingHorizontal: 14, paddingVertical: 10, alignItems: 'center',
-  },
-  downloadModeBtnText: { ...Typography.buttonText, color: Colors.background },
-  selectBar: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 8,
-    borderBottomWidth: 0.5, borderBottomColor: '#222',
-  },
-  selectAllText: { fontSize: 13, color: Colors.accent, fontWeight: '600' },
-  selectCount: { fontSize: 13, color: '#888' },
-  dlBtn: { borderWidth: 1.5, borderColor: Colors.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 6 },
-  dlBtnText: { fontSize: 13, fontWeight: '600', color: Colors.accent },
+  thumbWrap: { overflow: 'hidden' },
+  thumb: { width: THUMB_SIZE, height: THUMB_SIZE },
+  thumbPlaceholder: { width: THUMB_SIZE, height: THUMB_SIZE, backgroundColor: '#1a1a1a', justifyContent: 'center', alignItems: 'center' },
+  checkbox: { position: 'absolute', top: 5, right: 5, width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.8)', backgroundColor: 'rgba(255,255,255,0.5)', alignItems: 'center', justifyContent: 'center' },
+  checkboxSelected: { backgroundColor: Colors.background, borderColor: Colors.white },
+  checkboxTick: { fontSize: 11, fontWeight: '800', color: Colors.white },
 
   // Empty state
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32, gap: 20 },
@@ -573,10 +743,7 @@ const styles = StyleSheet.create({
 
   // Lightbox
   lightbox: { flex: 1, backgroundColor: '#000' },
-  lbHeader: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingBottom: 12,
-  },
+  lbHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12 },
   lbBack: { fontSize: 24, color: '#fff' },
   lbCounter: { fontSize: 14, color: 'rgba(255,255,255,0.7)' },
   lbImg: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },

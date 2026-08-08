@@ -22,6 +22,7 @@ type Event = {
   is_closed: boolean;
   allow_guest_delete: boolean;
   view_only: boolean;
+  find_my_photos_enabled: boolean;
   photo_count: number;
 };
 
@@ -133,6 +134,7 @@ export default function DashboardScreen() {
         is_closed: item.is_closed ? 'true' : 'false',
         allow_guest_delete: item.allow_guest_delete ? 'true' : 'false',
         view_only: item.view_only ? 'true' : 'false',
+        find_my_photos: item.find_my_photos_enabled ? 'true' : 'false',
         organiserPhone: organiserPhone ?? '',
       },
     });

@@ -31,7 +31,7 @@ export default function EventDetailScreen() {
   const params = useLocalSearchParams<{
     id: string; name: string; slug: string; join_code: string;
     created_at: string; expires_at: string; photo_count: string;
-    is_closed: string; allow_guest_delete: string; view_only: string; organiserPhone: string;
+    is_closed: string; allow_guest_delete: string; view_only: string; find_my_photos: string; organiserPhone: string;
   }>();
 
   const [showExtendPicker, setShowExtendPicker] = useState(false);
@@ -44,6 +44,7 @@ export default function EventDetailScreen() {
   const [allowGuestDelete, setAllowGuestDelete] = useState(params.allow_guest_delete === 'true');
   const [viewOnly, setViewOnly] = useState(params.view_only === 'true');
   const [isClosed, setIsClosed] = useState(params.is_closed === 'true');
+  const [findMyPhotos, setFindMyPhotos] = useState(params.find_my_photos === 'true');
   const [settingsUpdating, setSettingsUpdating] = useState(false);
   const [closedUpdating, setClosedUpdating] = useState(false);
   const [coadmins, setCoadmins] = useState<Coadmin[]>([]);
@@ -246,6 +247,19 @@ export default function EventDetailScreen() {
       showAlert('Error', result.error);
     } else {
       setViewOnly(value);
+    }
+  }
+
+  async function handleToggleFindMyPhotos(value: boolean) {
+    const pw = await getOrganiserPassword();
+    if (!pw || !params.organiserPhone) return;
+    setSettingsUpdating(true);
+    const result = await updateEventSettings(params.slug, params.organiserPhone, pw, { findMyPhotosEnabled: value });
+    setSettingsUpdating(false);
+    if (result.error) {
+      showAlert('Error', result.error);
+    } else {
+      setFindMyPhotos(value);
     }
   }
 
@@ -726,6 +740,21 @@ export default function EventDetailScreen() {
             : <Switch
                 value={viewOnly}
                 onValueChange={handleToggleViewOnly}
+                trackColor={{ false: '#333', true: Colors.accent }}
+                thumbColor={Colors.white}
+              />
+          }
+        </View>
+        <View style={styles.settingRow}>
+          <View style={styles.settingInfo}>
+            <Text style={styles.settingLabel}>My Photos</Text>
+            <Text style={styles.settingDesc}>{findMyPhotos ? 'Guests can find photos of themselves using a selfie' : 'My Photos is disabled for this event'}</Text>
+          </View>
+          {settingsUpdating
+            ? <ActivityIndicator color={Colors.accent} />
+            : <Switch
+                value={findMyPhotos}
+                onValueChange={handleToggleFindMyPhotos}
                 trackColor={{ false: '#333', true: Colors.accent }}
                 thumbColor={Colors.white}
               />

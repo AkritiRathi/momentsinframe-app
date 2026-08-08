@@ -266,11 +266,20 @@ export async function joinEvent(joinCode: string, phone?: string) {
   return post('/api/native/events/join', { joinCode, phone });
 }
 
-export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean; viewOnly?: boolean }) {
+export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean; viewOnly?: boolean; findMyPhotosEnabled?: boolean }) {
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/settings`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ organiserPhone, organiserPassword, ...settings }),
+  });
+  return res.json();
+}
+
+export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string): Promise<{ photoIds?: string[]; error?: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/find-my-photos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selfieBase64, ...(adminPhone ? { adminPhone } : {}), ...(userMobile ? { userMobile } : {}) }),
   });
   return res.json();
 }

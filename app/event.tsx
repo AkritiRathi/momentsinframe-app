@@ -29,7 +29,7 @@ import {
   getPhotoDownloadUrl, prepareZip, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
   listJoinedGuests, setGuestBlocked, listJoinedGuestsForUser, setGuestBlockedByUser,
-  checkAdminStatus,
+  checkAdminStatus, findMyPhotos,
 } from '../lib/api';
 import { API_BASE_URL } from '../constants/config';
 import {
@@ -492,6 +492,7 @@ export default function EventScreen() {
   const [sortPanelVisible, setSortPanelVisible] = useState(false);
   const [myUploadsFilter, setMyUploadsFilter] = useState(false);
   const [coadminPhones, setCoadminPhones] = useState<Set<string>>(new Set());
+  const [findMyPhotosEnabled, setFindMyPhotosEnabled] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const menuBtnRef = useRef<any>(null);
   const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
@@ -805,6 +806,7 @@ export default function EventScreen() {
         }
         if (data.event.role && userMobileRef.current) setUserRole(data.event.role);
         if (Array.isArray(data.event.coadminPhones)) setCoadminPhones(new Set(data.event.coadminPhones));
+        if (typeof data.event.find_my_photos_enabled === 'boolean') setFindMyPhotosEnabled(data.event.find_my_photos_enabled);
       }
       setLoading(false);
       loadAllUrls([...main, ...other]);
@@ -2769,6 +2771,20 @@ export default function EventScreen() {
             {isAdmin && (
               <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); loadManageGuests(); setShowManageGuests(true); }}>
                 <Text style={styles.menuItemText}>Manage Guests</Text>
+              </TouchableOpacity>
+            )}
+            {findMyPhotosEnabled && (
+              <TouchableOpacity style={styles.menuItem} onPress={() => {
+                setMenuVisible(false);
+                router.push({ pathname: '/my-photos', params: {
+                  slug,
+                  adminPhone: params.adminPhone ?? '',
+                  userMobile: userMobile ?? '',
+                  eventName: params.name ?? '',
+                  totalPhotos: String([...photos, ...otherPhotos].length),
+                }});
+              }}>
+                <Text style={styles.menuItemText}>My Photos</Text>
               </TouchableOpacity>
             )}
           </View>

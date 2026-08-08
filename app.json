@@ -28,10 +28,12 @@
       "infoPlist": {
         "UIBackgroundModes": ["fetch"],
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Allow MomentsInFrame to use your camera to scan event QR codes and take selfies to find your photos."
+        "NSCameraUsageDescription": "Allow MomentsInFrame to use your camera to scan event QR codes and take selfies to find your photos.",
+        "NSLocationWhenInUseUsageDescription": "This app does not use your location."
       }
     },
     "android": {
+      "minSdkVersion": 26,
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.momentsinframe.app",

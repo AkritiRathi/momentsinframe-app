@@ -1004,7 +1004,7 @@ export default function EventScreen() {
         if (item.section === 'main') mainHeaderY.current = y;
         else otherHeaderY.current = y;
       }
-      y += accumulatedHeights.current[item.key] ?? 0;
+      y += accumulatedHeights.current[item.key] ?? (item.type === 'photo_row' ? THUMB_SIZE + GAP : 0);
     }
   }
 

@@ -99,6 +99,12 @@ export default function MyPhotosScreen() {
   const { showAlert, alertOverlay } = useAlert();
   const { hasPermission: cameraPermission, requestPermission: requestCameraPermission } = useCameraPermission();
   const device = useCameraDevice('front');
+  const format = useMemo(() => {
+    if (!device || Platform.OS !== 'android') return undefined;
+    return device.formats
+      .filter((f: any) => f.photoWidth <= 1280)
+      .sort((a: any, b: any) => b.photoWidth - a.photoWidth)[0];
+  }, [device]);
   const cameraRef = useRef<Camera>(null);
   const [cameraReady, setCameraReady] = useState(false);
 
@@ -645,6 +651,7 @@ export default function MyPhotosScreen() {
                 device={device}
                 isActive={true}
                 photo={true}
+                format={format}
                 onInitialized={() => setCameraReady(true)}
               />
               <View style={styles.ovalContainer} pointerEvents="none">

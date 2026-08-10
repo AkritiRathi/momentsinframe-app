@@ -281,7 +281,8 @@ export async function findMyPhotos(slug: string, selfieBase64: string, adminPhon
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ selfieBase64, ...(adminPhone ? { adminPhone } : {}), ...(userMobile ? { userMobile } : {}) }),
   });
-  return res.json();
+  const text = await res.text();
+  try { return JSON.parse(text); } catch { return { error: 'Server returned an unexpected response. Please try again.' }; }
 }
 
 export async function deleteAccount(phone: string): Promise<{ success?: boolean; error?: string }> {

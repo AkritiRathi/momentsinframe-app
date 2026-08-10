@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, memo, forwardRef } from 'react';
 import {
-  View, Text, TouchableOpacity, Pressable, StyleSheet, FlatList,
+  View, Text, TouchableOpacity, Pressable, StyleSheet,
   ActivityIndicator, Dimensions, Platform, Modal, Image,
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Camera, useCameraPermission, useCameraDevice } from 'react-native-vision-camera';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
+import { FlashList } from '@shopify/flash-list';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as SecureStore from 'expo-secure-store';
@@ -18,6 +19,7 @@ const MediaStore = Platform.OS === 'android' ? require('media-store').default : 
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
 import { findMyPhotos, getPhotoUrls, prepareZip } from '../lib/api';
+import { buildDownloadFilename } from '../lib/downloadFilename';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
@@ -118,8 +120,17 @@ export default function MyPhotosScreen() {
   const dragAnchorIndexRef = useRef<number | null>(null);
   const dragModeRef = useRef<'select' | 'deselect' | null>(null);
   const flatListLayoutRef = useRef({ x: 0, y: 0 });
+  const flatListContainerRef = useRef<any>(null);
   const scrollOffsetRef = useRef(0);
   const accumulatedHeights = useRef<Record<string, number>>({});
+
+  // Lightbox zoom shared values
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+  const translateX = useSharedValue(0);
+  const translateY = useSharedValue(0);
+  const savedTranslateX = useSharedValue(0);
+  const savedTranslateY = useSharedValue(0);
   const listDataRef = useRef<ListItem[]>([]);
 
   const slug = params.slug;
@@ -295,6 +306,86 @@ export default function MyPhotosScreen() {
     dragModeRef.current = null;
   }, []);
 
+  // Reset zoom whenever lightbox photo changes
+  useEffect(() => {
+    scale.value = 1;
+    savedScale.value = 1;
+    translateX.value = 0;
+    translateY.value = 0;
+    savedTranslateX.value = 0;
+    savedTranslateY.value = 0;
+  }, [lightboxIndex]);
+
+  function navigateLightbox(dir: number) {
+    setLightboxIndex(prev => {
+      const next = prev + dir;
+      if (next < 0 || next >= totalFound) return prev;
+      return next;
+    });
+  }
+
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((e) => {
+      scale.value = Math.max(1, Math.min(savedScale.value * e.scale, 5));
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+      if (scale.value < 1.05) {
+        scale.value = withSpring(1);
+        savedScale.value = 1;
+        translateX.value = withSpring(0);
+        translateY.value = withSpring(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      }
+    });
+
+  const lbPanGesture = Gesture.Pan()
+    .onUpdate((e) => {
+      if (savedScale.value > 1) {
+        translateX.value = savedTranslateX.value + e.translationX;
+        translateY.value = savedTranslateY.value + e.translationY;
+      }
+    })
+    .onEnd((e) => {
+      if (savedScale.value > 1) {
+        savedTranslateX.value = translateX.value;
+        savedTranslateY.value = translateY.value;
+      } else {
+        if (Math.abs(e.translationX) > 50 && Math.abs(e.translationX) > Math.abs(e.translationY)) {
+          if (e.translationX < 0) runOnJS(navigateLightbox)(1);
+          else runOnJS(navigateLightbox)(-1);
+        }
+      }
+    });
+
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDuration(250)
+    .onEnd(() => {
+      if (savedScale.value > 1) {
+        scale.value = withSpring(1);
+        savedScale.value = 1;
+        translateX.value = withSpring(0);
+        translateY.value = withSpring(0);
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      } else {
+        scale.value = withSpring(2.5);
+        savedScale.value = 2.5;
+      }
+    });
+
+  const zoomGesture = Gesture.Simultaneous(doubleTapGesture, lbPanGesture, pinchGesture);
+
+  const zoomStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: translateX.value },
+      { translateY: translateY.value },
+      { scale: scale.value },
+    ],
+  }));
+
   const dragGesture = useMemo(() => Gesture.Pan()
     .enabled(downloadMode)
     .activeOffsetX([-8, 8])
@@ -302,6 +393,59 @@ export default function MyPhotosScreen() {
     .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
     .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
   , [downloadMode, onDragStart, onDragUpdate, onDragEnd]);
+
+  async function handleLightboxDownload() {
+    const id = allIds[lightboxIndex];
+    if (!id) return;
+    setActionLoading(true);
+    try {
+      const photo = [...photos, ...otherPhotos].find(p => p.id === id);
+      const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
+      const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
+      const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
+      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+      const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
+      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+      if (Platform.OS === 'android') {
+        const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? slug;
+        const localPath = dlResult.uri.replace('file://', '');
+        await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', 0);
+      } else {
+        if (PhotoSaver) {
+          await PhotoSaver.saveToPhotos(cacheUri, 0, slug);
+        } else {
+          await MediaLibrary.saveToLibraryAsync(cacheUri);
+        }
+      }
+      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+      showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : 'Photo saved to Downloads.');
+    } catch (e: any) {
+      showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function handleLightboxShare() {
+    const id = allIds[lightboxIndex];
+    if (!id) return;
+    setActionLoading(true);
+    try {
+      const photo = [...photos, ...otherPhotos].find(p => p.id === id);
+      const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
+      const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
+      const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
+      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+      const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
+      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+      await Sharing.shareAsync(cacheUri, { mimeType: 'image/jpeg', dialogTitle: 'Share Photo' });
+      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+    } catch (e: any) {
+      showAlert('Error', `Share failed: ${e?.message ?? 'unknown error'}`);
+    } finally {
+      setActionLoading(false);
+    }
+  }
 
   function exitDownloadMode() {
     setDownloadMode(false);
@@ -415,7 +559,8 @@ export default function MyPhotosScreen() {
       let saved = 0;
       for (const id of ids) {
         try {
-          const filename = `${slug}_${id}.jpg`;
+          const photo = [...photos, ...otherPhotos].find(p => p.id === id);
+          const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
           const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
           const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
           const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
@@ -453,8 +598,8 @@ export default function MyPhotosScreen() {
       const batches = chunk(ids, 50);
       for (let i = 0; i < batches.length; i++) {
         const filename = batches.length > 1
-          ? `${slug}-my-photos-part${i + 1}of${batches.length}.zip`
-          : `${slug}-my-photos.zip`;
+          ? `${slug}-photos-part${i + 1}of${batches.length}.zip`
+          : `${slug}-photos.zip`;
         const zipRes = await prepareZip(slug, batches[i], adminPhone);
         if (zipRes.error) throw new Error(zipRes.error);
         const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
@@ -596,12 +741,21 @@ export default function MyPhotosScreen() {
           )}
 
           {/* Photo grid */}
+          <View
+            style={{ flex: 1 }}
+            ref={flatListContainerRef}
+            onLayout={() => {
+              flatListContainerRef.current?.measure((_x: number, _y: number, _w: number, _h: number, pageX: number, pageY: number) => {
+                flatListLayoutRef.current = { x: pageX, y: pageY };
+              });
+            }}
+          >
           <GestureDetector gesture={dragGesture}>
-            <FlatList
+            <FlashList
               data={listItems}
               keyExtractor={item => item.key}
+              estimatedItemSize={THUMB_SIZE + GAP}
               contentContainerStyle={{ paddingBottom: 20 }}
-              onLayout={e => { flatListLayoutRef.current = { x: e.nativeEvent.layout.x, y: e.nativeEvent.layout.y }; }}
               onScroll={e => { scrollOffsetRef.current = e.nativeEvent.contentOffset.y; }}
               scrollEventThrottle={16}
               renderItem={({ item }) => {
@@ -667,26 +821,36 @@ export default function MyPhotosScreen() {
               }}
             />
           </GestureDetector>
+          </View>
         </>
       )}
 
       {/* Lightbox */}
       <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
-        <View style={styles.lightbox}>
+        <GestureHandlerRootView style={styles.lightboxInner}>
           <View style={[styles.lbHeader, { paddingTop: insets.top + 12 }]}>
             <TouchableOpacity onPress={() => setLightboxVisible(false)}>
               <Text style={styles.lbBack}>←</Text>
             </TouchableOpacity>
             <Text style={styles.lbCounter}>{lightboxIndex + 1} / {totalFound}</Text>
-            <View style={{ width: 40 }} />
+            <View style={styles.lbActions}>
+              <TouchableOpacity style={styles.lbBtn} onPress={handleLightboxDownload} disabled={actionLoading}>
+                <Text style={styles.lbBtnText}>Download</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.lbBtn} onPress={handleLightboxShare} disabled={actionLoading}>
+                <Text style={styles.lbBtnText}>Share</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            {lightboxImageUrl
-              ? <Image source={{ uri: lightboxImageUrl }} style={styles.lbImg} resizeMode="contain" />
-              : <ActivityIndicator color={Colors.accent} />
-            }
-          </View>
-          <View style={[styles.lbFooter, { paddingBottom: insets.bottom + 12 }]}>
+          <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
+            <GestureDetector gesture={zoomGesture}>
+              <Animated.View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }, zoomStyle]}>
+                {lightboxImageUrl
+                  ? <Image source={{ uri: lightboxImageUrl }} style={styles.lbImg} resizeMode="contain" />
+                  : <ActivityIndicator color={Colors.accent} />
+                }
+              </Animated.View>
+            </GestureDetector>
             {lightboxIndex > 0 && (
               <TouchableOpacity style={[styles.lbArrow, { left: 0 }]} onPress={() => setLightboxIndex(i => i - 1)}>
                 <Text style={styles.lbArrowText}>‹</Text>
@@ -699,7 +863,7 @@ export default function MyPhotosScreen() {
             )}
           </View>
           {alertOverlay}
-        </View>
+        </GestureHandlerRootView>
       </Modal>
 
       {alertOverlay}
@@ -769,12 +933,15 @@ const styles = StyleSheet.create({
   retryBtnText: { fontSize: 14, fontWeight: '600', color: Colors.accent },
 
   // Lightbox
-  lightbox: { flex: 1, backgroundColor: '#000' },
-  lbHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12 },
-  lbBack: { fontSize: 24, color: '#fff' },
-  lbCounter: { fontSize: 14, color: 'rgba(255,255,255,0.7)' },
+  lightboxInner: { flex: 1, backgroundColor: '#000' },
+  lbHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
+  lbBack: { fontSize: 22, color: Colors.textMuted, marginRight: 12 },
+  lbCounter: { fontSize: 13, color: '#666', flex: 1 },
+  lbActions: { flexDirection: 'row', gap: 8 },
+  lbBtn: { borderWidth: 0.5, borderColor: '#2a2a2a', borderRadius: 7, paddingHorizontal: 12, paddingVertical: 6 },
+  lbBtnText: { fontSize: 13, fontWeight: '500', color: '#888' },
   lbImg: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },
-  lbFooter: { position: 'relative', height: 60 },
-  lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 60, justifyContent: 'center', alignItems: 'center' },
-  lbArrowText: { fontSize: 40, color: '#fff' },
+  lbImgWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', position: 'relative' },
+  lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },
+  lbArrowText: { fontSize: 36, color: 'rgba(255,255,255,0.35)' },
 });

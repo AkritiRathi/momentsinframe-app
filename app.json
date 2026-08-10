@@ -68,13 +68,6 @@
     "plugins": [
       "expo-router",
       [
-        "react-native-vision-camera",
-        {
-          "cameraPermission": "Allow MomentsInFrame to use your camera to scan event QR codes and take selfies to find your photos.",
-          "enableFrameProcessors": true
-        }
-      ],
-      [
         "expo-camera",
         {
           "cameraPermission": "Allow MomentsInFrame to use your camera to scan event QR codes."

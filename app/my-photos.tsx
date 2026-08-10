@@ -129,6 +129,7 @@ export default function MyPhotosScreen() {
   const flatListContainerRef = useRef<any>(null);
   const scrollOffsetRef = useRef(0);
   const accumulatedHeights = useRef<Record<string, number>>({});
+  const prevSelectedSize = useRef(0);
 
   // Lightbox zoom shared values
   const scale = useSharedValue(1);
@@ -399,6 +400,17 @@ export default function MyPhotosScreen() {
     .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
     .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
   , [downloadMode, onDragStart, onDragUpdate, onDragEnd]);
+
+  useEffect(() => {
+    if (downloadMode && prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
+      showAlert(
+        'Downloading as ZIP',
+        `You've selected more than ${JPG_LIMIT} photos. When you tap Download, all selected photos will be bundled into a ZIP file — not downloaded as individual JPGs.\n\nTo download as individual JPGs instead, select ${JPG_LIMIT} or fewer photos.`,
+        [{ text: 'Got it' }]
+      );
+    }
+    prevSelectedSize.current = selected.size;
+  }, [selected.size, downloadMode]);
 
   async function handleLightboxDownload() {
     const id = allIds[lightboxIndex];
@@ -697,6 +709,7 @@ export default function MyPhotosScreen() {
   // ── Results screen ──────────────────────────────────────────────────────────
   const currentLbId = allIds[lightboxIndex];
   const currentLbUrls = photoUrls[currentLbId];
+  const currentLbPhoto = lightboxIndex < photos.length ? photos[lightboxIndex] : otherPhotos[lightboxIndex - photos.length];
   const lightboxImageUrl = currentLbUrls?.displayUrl ?? currentLbUrls?.url ?? null;
   const allSelected = selected.size === totalFound;
 
@@ -818,7 +831,7 @@ export default function MyPhotosScreen() {
                           <Thumb
                             ref={r => { if (r) photoRefsMap.current.set(id, r as View); else photoRefsMap.current.delete(id); }}
                             id={id}
-                            thumbUrl={urls?.thumbUrl ?? urls?.url}
+                            thumbUrl={urls?.thumbUrl ?? null}
                             isSelected={selected.has(id)}
                             downloadMode={downloadMode}
                             onPress={() => handleThumbPress(id, globalIndex)}
@@ -874,6 +887,16 @@ export default function MyPhotosScreen() {
               <TouchableOpacity style={[styles.lbArrow, { right: 0 }]} onPress={() => setLightboxIndex(i => i + 1)}>
                 <Text style={styles.lbArrowText}>›</Text>
               </TouchableOpacity>
+            )}
+          </View>
+          <View style={[styles.lbFooter, { paddingBottom: insets.bottom + 12 }]}>
+            {currentLbPhoto?.taken_at && (
+              <Text style={styles.lbFooterLine2}>
+                {'Taken on '}{new Date(currentLbPhoto.taken_at).toLocaleString('en-IN', {
+                  day: '2-digit', month: 'short', year: 'numeric',
+                  hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
+                })}
+              </Text>
             )}
           </View>
           {alertOverlay}
@@ -958,4 +981,7 @@ const styles = StyleSheet.create({
   lbImgWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },
   lbArrowText: { fontSize: 36, color: 'rgba(255,255,255,0.35)' },
+  lbFooter: { paddingHorizontal: 16, paddingTop: 10 },
+  lbFooterLine1: { fontSize: 13, color: '#ccc', marginBottom: 2 },
+  lbFooterLine2: { fontSize: 12, color: '#888' },
 });

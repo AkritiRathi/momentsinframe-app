@@ -37,7 +37,7 @@ type GuestPhotoItem = {
   takenAt: string;
   date: string;
   thumbUrl: string | null;
-  fullUrl: string | null;
+  displayUrl: string | null;
 };
 
 type ListItem =
@@ -206,14 +206,14 @@ export default function GuestUploadsScreen() {
       const batches: string[][] = [];
       for (let i = 0; i < ids.length; i += 20) batches.push(ids.slice(i, i + 20));
       const urlResults = await Promise.all(batches.map(b => getPhotoUrls(eventSlug, b, adminPhone)));
-      const urls: Record<string, { thumbUrl?: string; url?: string }> = Object.assign({}, ...urlResults.map(r => r.urls ?? {}));
+      const urls: Record<string, { thumbUrl?: string; displayUrl?: string; url?: string }> = Object.assign({}, ...urlResults.map(r => r.urls ?? {}));
 
       const items: GuestPhotoItem[] = mine.map(p => ({
         id: p.id,
         takenAt: p.taken_at,
         date: formatDate(p.taken_at),
         thumbUrl: urls[p.id]?.thumbUrl ?? null,
-        fullUrl: urls[p.id]?.url ?? null,
+        displayUrl: urls[p.id]?.displayUrl ?? null,
       }));
       setPhotos(items);
       return items.length;
@@ -253,7 +253,7 @@ export default function GuestUploadsScreen() {
 
   const flatListExtraData = useMemo(() => ({ selected, mode }), [selected, mode]);
 
-  const lightboxImageUrl = photos[lightboxIndex]?.fullUrl ?? photos[lightboxIndex]?.thumbUrl ?? null;
+  const lightboxImageUrl = photos[lightboxIndex]?.displayUrl ?? photos[lightboxIndex]?.thumbUrl ?? null;
   const showDeleteBtn = viewerRole === 'organiser' || guest.role === 'user' || guest.mobile === adminPhone;
 
   // Lightbox zoom gestures
@@ -959,6 +959,17 @@ export default function GuestUploadsScreen() {
               </TouchableOpacity>
             )}
           </View>
+          <View style={[styles.lbFooter, { paddingBottom: insets.bottom + 12 }]}>
+            <Text style={styles.lbFooterLine1}>Uploaded by {guest.name || 'Unknown User'}</Text>
+            {photos[lightboxIndex]?.takenAt && (
+              <Text style={styles.lbFooterLine2}>
+                {'Taken on '}{new Date(photos[lightboxIndex].takenAt).toLocaleString('en-IN', {
+                  day: '2-digit', month: 'short', year: 'numeric',
+                  hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
+                })}
+              </Text>
+            )}
+          </View>
           {downloadingPhoto && (
             <View style={styles.lbDownloadOverlay}>
               <ActivityIndicator color={Colors.white} size="large" />
@@ -1042,6 +1053,9 @@ const styles = StyleSheet.create({
   lbImg: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },
   lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },
   lbArrowText: { fontSize: 36, color: 'rgba(255,255,255,0.35)' },
+  lbFooter: { paddingHorizontal: 16, paddingTop: 10 },
+  lbFooterLine1: { fontSize: 13, color: '#ccc', marginBottom: 2 },
+  lbFooterLine2: { fontSize: 12, color: '#888' },
   lbDeletingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', gap: 12 },
   lbDeletingText: { fontSize: 14, fontWeight: '700', color: Colors.white },
   lbDownloadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 10, justifyContent: 'center', alignItems: 'center', gap: 12 },

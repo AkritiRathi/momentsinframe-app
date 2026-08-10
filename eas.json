@@ -24,7 +24,7 @@
       "autoIncrement": true,
       "ios": {
         "simulator": false,
-        "image": "macos-sequoia-15.2-xcode-16.2"
+        "image": "macos-sequoia-15.6-xcode-16.4"
       },
       "env": {
         "NPM_CONFIG_LEGACY_PEER_DEPS": "true"

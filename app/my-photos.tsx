@@ -397,33 +397,40 @@ export default function MyPhotosScreen() {
   async function handleLightboxDownload() {
     const id = allIds[lightboxIndex];
     if (!id) return;
-    setActionLoading(true);
-    try {
-      const photo = [...photos, ...otherPhotos].find(p => p.id === id);
-      const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
-      const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
-      const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
-      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-      const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
-      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-      if (Platform.OS === 'android') {
-        const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? slug;
-        const localPath = dlResult.uri.replace('file://', '');
-        await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', 0);
-      } else {
-        if (PhotoSaver) {
-          await PhotoSaver.saveToPhotos(cacheUri, 0, slug);
-        } else {
-          await MediaLibrary.saveToLibraryAsync(cacheUri);
-        }
-      }
-      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-      showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : 'Photo saved to Downloads.');
-    } catch (e: any) {
-      showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
-    } finally {
-      setActionLoading(false);
-    }
+    showAlert('Download photo', 'Save this photo to your Downloads folder?', [
+      {
+        text: 'Download', onPress: async () => {
+          setActionLoading(true);
+          try {
+            const photo = [...photos, ...otherPhotos].find(p => p.id === id);
+            const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
+            const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
+            const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
+            const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+            const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
+            if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+            if (Platform.OS === 'android') {
+              const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? slug;
+              const localPath = dlResult.uri.replace('file://', '');
+              await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', 0);
+            } else {
+              if (PhotoSaver) {
+                await PhotoSaver.saveToPhotos(cacheUri, 0, slug);
+              } else {
+                await MediaLibrary.saveToLibraryAsync(cacheUri);
+              }
+            }
+            await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+            showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : 'Photo saved to Downloads.');
+          } catch (e: any) {
+            showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
+          } finally {
+            setActionLoading(false);
+          }
+        },
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   }
 
   async function handleLightboxShare() {

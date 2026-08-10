@@ -58,7 +58,7 @@ interface Props {
 
 type ListItem =
   | { type: 'gallery_header'; key: string }
-  | { type: 'date_header'; date: string; key: string }
+  | { type: 'date_header'; date: string; key: string; ids: string[] }
   | { type: 'photo_row'; photos: GuestPhotoItem[]; startIndex: number; key: string };
 
 function formatDate(iso: string): string {
@@ -240,7 +240,7 @@ export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, 
 
     let flatIndex = 0;
     for (const group of groups) {
-      items.push({ type: 'date_header', date: group.date, key: `date_${group.date}` });
+      items.push({ type: 'date_header', date: group.date, key: `date_${group.date}`, ids: group.photos.map(p => p.id) });
       const rows = chunk(group.photos, 3);
       for (let r = 0; r < rows.length; r++) {
         const row = rows[r];
@@ -513,33 +513,40 @@ export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, 
   async function handleLightboxDownload() {
     const photo = photos[lightboxIndex];
     if (!photo) return;
-    setDownloadingPhoto(true);
-    try {
-      const filename = buildDownloadFilename(photo.id, photo.takenAt ?? null, 'jpg');
-      const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
-      const downloadUrl = `${API_BASE_URL}/api/native/photos/${photo.id}/download${adminParam}`;
-      const dateTakenMs = photo.takenAt ? new Date(photo.takenAt).getTime() : 0;
-      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-      const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
-      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-      if (Platform.OS === 'android') {
-        const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`) ?? eventSlug;
-        const localPath = dlResult.uri.replace('file://', '');
-        await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', dateTakenMs);
-      } else {
-        if (PhotoSaver) {
-          await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs, eventSlug);
-        } else {
-          await MediaLibrary.saveToLibraryAsync(cacheUri);
-        }
-      }
-      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-      showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : 'Photo saved to Downloads.');
-    } catch (e: any) {
-      showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
-    } finally {
-      setDownloadingPhoto(false);
-    }
+    showAlert('Download photo', 'Save this photo to your Downloads folder?', [
+      {
+        text: 'Download', onPress: async () => {
+          setDownloadingPhoto(true);
+          try {
+            const filename = buildDownloadFilename(photo.id, photo.takenAt ?? null, 'jpg');
+            const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
+            const downloadUrl = `${API_BASE_URL}/api/native/photos/${photo.id}/download${adminParam}`;
+            const dateTakenMs = photo.takenAt ? new Date(photo.takenAt).getTime() : 0;
+            const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+            const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
+            if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+            if (Platform.OS === 'android') {
+              const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`) ?? eventSlug;
+              const localPath = dlResult.uri.replace('file://', '');
+              await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', dateTakenMs);
+            } else {
+              if (PhotoSaver) {
+                await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs, eventSlug);
+              } else {
+                await MediaLibrary.saveToLibraryAsync(cacheUri);
+              }
+            }
+            await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+            showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : 'Photo saved to Downloads.');
+          } catch (e: any) {
+            showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
+          } finally {
+            setDownloadingPhoto(false);
+          }
+        },
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   }
 
   async function handleLightboxShare() {
@@ -770,7 +777,33 @@ export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, 
       );
     }
     if (item.type === 'date_header') {
-      return <Text style={styles.dateHeader}>{item.date}</Text>;
+      const allGroupSelected = item.ids.length > 0 && item.ids.every(id => selected.has(id));
+      return (
+        <View style={styles.dateHeaderRow}>
+          {mode !== 'normal' && (
+            <TouchableOpacity
+              style={styles.dateHeaderCircle}
+              onPress={() => {
+                setSelected(prev => {
+                  const next = new Set(prev);
+                  if (allGroupSelected) {
+                    item.ids.forEach(id => next.delete(id));
+                  } else {
+                    item.ids.forEach(id => next.add(id));
+                  }
+                  committedSelectionRef.current = next;
+                  return next;
+                });
+              }}
+            >
+              <View style={[styles.groupCircle, allGroupSelected && styles.groupCircleSelected]}>
+                {allGroupSelected && <Text style={styles.groupCircleTick}>✓</Text>}
+              </View>
+            </TouchableOpacity>
+          )}
+          <Text style={styles.dateHeader}>{item.date}</Text>
+        </View>
+      );
     }
     if (item.type === 'photo_row') {
       return (
@@ -988,7 +1021,12 @@ const styles = StyleSheet.create({
   galleryTitle: { fontSize: 18, fontWeight: '700', color: Colors.white },
   galleryCount: { fontSize: 16, fontWeight: '400', color: '#777' },
   gallerySub: { fontSize: 12, color: '#555', paddingHorizontal: 16, marginBottom: 8 },
-  dateHeader: { fontSize: 14, fontWeight: '700', color: Colors.white, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6 },
+  dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6, gap: 8 },
+  dateHeader: { fontSize: 14, fontWeight: '700', color: Colors.white },
+  dateHeaderCircle: { padding: 2 },
+  groupCircle: { width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.8)', backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
+  groupCircleSelected: { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  groupCircleTick: { fontSize: 11, fontWeight: '800', color: '#fff' },
   photoRow: { flexDirection: 'row', gap: GAP, marginTop: GAP },
   thumb: { width: THUMB_SIZE, height: THUMB_SIZE, backgroundColor: '#1a1a1a' },
   thumbImage: { width: '100%', height: '100%' },

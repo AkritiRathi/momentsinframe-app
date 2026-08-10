@@ -2808,7 +2808,7 @@ export default function EventScreen() {
                   const displayName = contactName || guest.name || guest.mobile;
                   const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
                   return (
-                    <TouchableOpacity key={guest.mobile} style={styles.mgGuestRow} activeOpacity={0.7} onPress={() => { setShowManageGuests(false); _reopenManageGuests = true; router.push({ pathname: '/guest-uploads', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: guestContactMap[guest.mobile] ?? '' } }); }}>
+                    <TouchableOpacity key={guest.mobile} style={styles.mgGuestRow} activeOpacity={0.7} onPress={() => { _reopenManageGuests = true; router.push({ pathname: '/guest-uploads', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: guestContactMap[guest.mobile] ?? '' } }); }}>
                       <View style={styles.mgGuestInfo}>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                           <Text style={styles.mgGuestName}>{displayName}</Text>
@@ -2827,7 +2827,7 @@ export default function EventScreen() {
                 const contactName = guestContactMap[guest.mobile] ?? null;
                 const appName = guest.name || guest.mobile;
                 return (
-                  <TouchableOpacity key={guest.mobile} style={[styles.mgGuestRow, guest.is_blocked && styles.mgBlockedRow]} activeOpacity={0.7} onPress={() => { setShowManageGuests(false); _reopenManageGuests = true; router.push({ pathname: '/guest-uploads', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: guestContactMap[guest.mobile] ?? '' } }); }}>
+                  <TouchableOpacity key={guest.mobile} style={[styles.mgGuestRow, guest.is_blocked && styles.mgBlockedRow]} activeOpacity={0.7} onPress={() => { _reopenManageGuests = true; router.push({ pathname: '/guest-uploads', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: guestContactMap[guest.mobile] ?? '' } }); }}>
                     <View style={styles.mgGuestInfo}>
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <Text style={[styles.mgGuestName, guest.is_blocked && styles.mgBlockedText]}>{appName}</Text>

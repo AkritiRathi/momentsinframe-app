@@ -107,7 +107,7 @@ export default function RootLayout() {
       <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <View style={styles.splash}>
-          <Image source={require('../assets/feature_graphic.png')} style={styles.featureGraphic} resizeMode="contain" />
+          <Image source={require('../assets/Logo.png')} style={styles.featureGraphic} resizeMode="contain" />
 
           {updateStage === 'checking' && (
             <ActivityIndicator color="#F5C842" style={styles.spinner} />
@@ -156,9 +156,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: Platform.OS === 'android' ? 16 : 32,
   },
   featureGraphic: {
-    width: '100%',
-    aspectRatio: 2124 / 849,
-    marginBottom: 16,
+    width: 150,
+    height: 150,
+    marginBottom: 40,
   },
   spinner: {
     marginTop: 8,

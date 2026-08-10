@@ -48,7 +48,6 @@ import { useAppPermission } from '../lib/permissions';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { useAlert, alertStyles } from '../lib/useAlert';
-import GuestUploadsPanel, { GuestUploadsGuest } from '../components/GuestUploadsPanel';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const GAP = 2;
@@ -434,6 +433,8 @@ const PhotoThumb = memo(forwardRef<View, PhotoThumbProps>(function PhotoThumb({
 
 PhotoThumb.displayName = 'PhotoThumb';
 
+let _reopenManageGuests = false;
+
 export default function EventScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -491,8 +492,6 @@ export default function EventScreen() {
   type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number; role: 'organiser' | 'coadmin' | 'user' };
   const [showManageGuests, setShowManageGuests] = useState(false);
   const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
-  const [showGuestUploads, setShowGuestUploads] = useState(false);
-  const [guestUploadsGuest, setGuestUploadsGuest] = useState<GuestUploadsGuest | null>(null);
   const [joinedGuestsTotalPhotos, setJoinedGuestsTotalPhotos] = useState<number | null>(null);
   const [joinedGuestsLoading, setJoinedGuestsLoading] = useState(false);
   const [joinedGuestsError, setJoinedGuestsError] = useState<string | null>(null);
@@ -636,6 +635,11 @@ export default function EventScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (_reopenManageGuests) {
+        _reopenManageGuests = false;
+        setShowManageGuests(true);
+        loadManageGuests();
+      }
       const mobileAtCallTime = userMobileRef.current;
       getEventPhotos(slug, params.adminPhone || undefined, mobileAtCallTime ?? undefined).then(data => {
         if (data?.event) {
@@ -702,15 +706,6 @@ export default function EventScreen() {
     else if (n.startsWith('91') && n.length === 12) n = n.slice(2);
     else if (n.startsWith('0') && n.length === 11) n = n.slice(1);
     return n;
-  }
-
-  function handleGuestPhotosDeleted(mobile: string, remainingCount: number) {
-    setJoinedGuests(prev => {
-      const updated = prev.map(g => g.mobile === mobile ? { ...g, photo_count: remainingCount } : g);
-      const newTotal = updated.reduce((sum, g) => sum + (g.photo_count ?? 0), 0);
-      setJoinedGuestsTotalPhotos(newTotal);
-      return updated;
-    });
   }
 
   async function loadManageGuests() {
@@ -2813,7 +2808,7 @@ export default function EventScreen() {
                   const displayName = contactName || guest.name || guest.mobile;
                   const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
                   return (
-                    <TouchableOpacity key={guest.mobile} style={styles.mgGuestRow} activeOpacity={0.7} onPress={() => { setShowManageGuests(false); setGuestUploadsGuest({ mobile: guest.mobile, name: guest.name || guest.mobile, role: guest.role, contactName: guestContactMap[guest.mobile] ?? null }); setShowGuestUploads(true); }}>
+                    <TouchableOpacity key={guest.mobile} style={styles.mgGuestRow} activeOpacity={0.7} onPress={() => { setShowManageGuests(false); _reopenManageGuests = true; router.push({ pathname: '/guest-uploads', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: guestContactMap[guest.mobile] ?? '' } }); }}>
                       <View style={styles.mgGuestInfo}>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                           <Text style={styles.mgGuestName}>{displayName}</Text>
@@ -2832,7 +2827,7 @@ export default function EventScreen() {
                 const contactName = guestContactMap[guest.mobile] ?? null;
                 const appName = guest.name || guest.mobile;
                 return (
-                  <TouchableOpacity key={guest.mobile} style={[styles.mgGuestRow, guest.is_blocked && styles.mgBlockedRow]} activeOpacity={0.7} onPress={() => { setShowManageGuests(false); setGuestUploadsGuest({ mobile: guest.mobile, name: guest.name || guest.mobile, role: guest.role, contactName: guestContactMap[guest.mobile] ?? null }); setShowGuestUploads(true); }}>
+                  <TouchableOpacity key={guest.mobile} style={[styles.mgGuestRow, guest.is_blocked && styles.mgBlockedRow]} activeOpacity={0.7} onPress={() => { setShowManageGuests(false); _reopenManageGuests = true; router.push({ pathname: '/guest-uploads', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: guestContactMap[guest.mobile] ?? '' } }); }}>
                     <View style={styles.mgGuestInfo}>
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <Text style={[styles.mgGuestName, guest.is_blocked && styles.mgBlockedText]}>{appName}</Text>
@@ -2868,17 +2863,6 @@ export default function EventScreen() {
           </ScrollView>
         </View>
       </Modal>
-
-      {/* Guest Uploads panel */}
-      <GuestUploadsPanel
-        visible={showGuestUploads}
-        guest={guestUploadsGuest}
-        onClose={() => { setShowGuestUploads(false); setShowManageGuests(true); }}
-        eventSlug={slug}
-        adminPhone={userMobile ?? params.adminPhone ?? ''}
-        viewerRole={userRole === 'organiser' ? 'organiser' : 'coadmin'}
-        onPhotosDeleted={handleGuestPhotosDeleted}
-      />
 
       {/* Sort panel */}
       <Modal visible={sortPanelVisible} transparent animationType="fade" onRequestClose={() => setSortPanelVisible(false)}>

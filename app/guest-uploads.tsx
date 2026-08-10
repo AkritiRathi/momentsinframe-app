@@ -3,6 +3,7 @@ import {
   View, Text, TouchableOpacity, Pressable, Modal, ActivityIndicator,
   Image, Dimensions, Platform, StyleSheet,
 } from 'react-native';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Image as ExpoImage } from 'expo-image';
 import { FlashList } from '@shopify/flash-list';
 import {
@@ -38,23 +39,6 @@ type GuestPhotoItem = {
   thumbUrl: string | null;
   fullUrl: string | null;
 };
-
-export type GuestUploadsGuest = {
-  mobile: string;
-  name: string;
-  role: 'organiser' | 'coadmin' | 'user';
-  contactName: string | null;
-};
-
-interface Props {
-  visible: boolean;
-  guest: GuestUploadsGuest | null;
-  onClose: () => void;
-  eventSlug: string;
-  adminPhone: string;
-  viewerRole: 'organiser' | 'coadmin';
-  onPhotosDeleted: (mobile: string, remainingCount: number) => void;
-}
 
 type ListItem =
   | { type: 'gallery_header'; key: string }
@@ -108,9 +92,29 @@ const PhotoThumb = memo(forwardRef<View, ThumbProps>(function PhotoThumb({
 }));
 PhotoThumb.displayName = 'PhotoThumb';
 
-export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, adminPhone, viewerRole, onPhotosDeleted }: Props) {
+export default function GuestUploadsScreen() {
+  const params = useLocalSearchParams<{
+    slug: string;
+    adminPhone: string;
+    viewerRole: string;
+    guestMobile: string;
+    guestName: string;
+    guestRole: string;
+    guestContactName: string;
+  }>();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showAlert, alertOverlay } = useAlert();
+
+  const eventSlug = params.slug;
+  const adminPhone = params.adminPhone;
+  const viewerRole = params.viewerRole as 'organiser' | 'coadmin';
+  const guest = {
+    mobile: params.guestMobile,
+    name: params.guestName,
+    role: params.guestRole as 'organiser' | 'coadmin' | 'user',
+    contactName: params.guestContactName || null,
+  };
 
   const [photos, setPhotos] = useState<GuestPhotoItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -160,15 +164,10 @@ export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, 
     prevSelectedSize.current = selected.size;
   }, [selected.size, mode]);
 
-  // Reset on panel open
+  // Fetch on mount
   useEffect(() => {
-    if (!visible || !guest) return;
-    setMode('normal');
-    setSelected(new Set());
-    setLightboxVisible(false);
-    longPressAnchorRef.current = null;
     fetchPhotos();
-  }, [visible, guest?.mobile]);
+  }, []);
 
   // Reset imageLoading when lightbox photo changes
   useEffect(() => {
@@ -189,7 +188,6 @@ export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, 
   }, [lightboxIndex]);
 
   async function fetchPhotos(): Promise<number> {
-    if (!guest) return 0;
     setLoading(true);
     setError(null);
     try {
@@ -256,7 +254,7 @@ export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, 
   const flatListExtraData = useMemo(() => ({ selected, mode }), [selected, mode]);
 
   const lightboxImageUrl = photos[lightboxIndex]?.fullUrl ?? photos[lightboxIndex]?.thumbUrl ?? null;
-  const showDeleteBtn = viewerRole === 'organiser' || guest?.role === 'user' || guest?.mobile === adminPhone;
+  const showDeleteBtn = viewerRole === 'organiser' || guest.role === 'user' || guest.mobile === adminPhone;
 
   // Lightbox zoom gestures
   const pinchGesture = Gesture.Pinch()
@@ -499,7 +497,6 @@ export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, 
                 setLightboxIndex(prev => Math.min(prev, newPhotos.length - 1));
               }
               setPhotos(newPhotos);
-              if (guest) onPhotosDeleted(guest.mobile, newPhotos.length);
             } finally {
               setDeletingPhoto(false);
             }
@@ -585,8 +582,7 @@ export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, 
               if (result.error) { showAlert('Error', result.error); return; }
               setMode('normal');
               setSelected(new Set());
-              const remaining = await fetchPhotos();
-              if (guest) onPhotosDeleted(guest.mobile, remaining);
+              await fetchPhotos();
             } finally {
               setActionLoading(false);
             }
@@ -835,80 +831,71 @@ export default function GuestUploadsPanel({ visible, guest, onClose, eventSlug, 
 
   return (
     <>
-      <Modal
-        visible={visible}
-        animationType="slide"
-        onRequestClose={() => {
-          if (lightboxVisible) { setLightboxVisible(false); return; }
-          if (mode !== 'normal') { cancelMode(); return; }
-          onClose();
-        }}
-      >
-        <GestureHandlerRootView style={{ flex: 1, backgroundColor: Colors.background }}>
-          <View style={{ paddingTop: insets.top }}>
-            <View style={styles.eventHeader}>
-              <View style={styles.eventHeaderTopRow}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <TouchableOpacity onPress={() => {
-                    if (mode !== 'normal') { cancelMode(); return; }
-                    onClose();
-                  }}>
-                    <Text style={styles.backText}>←</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.appNameText}>Guest Uploads</Text>
-                </View>
+      <Stack.Screen options={{ presentation: 'modal', headerShown: false }} />
+      <GestureHandlerRootView style={{ flex: 1, backgroundColor: Colors.background }}>
+        <View style={{ paddingTop: insets.top }}>
+          <View style={styles.eventHeader}>
+            <View style={styles.eventHeaderTopRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <TouchableOpacity onPress={() => {
+                  if (mode !== 'normal') { cancelMode(); return; }
+                  router.back();
+                }}>
+                  <Text style={styles.backText}>←</Text>
+                </TouchableOpacity>
+                <Text style={styles.appNameText}>Guest Uploads</Text>
               </View>
-              <View style={styles.eventHeaderBody}>
-                <Text style={styles.guestName} numberOfLines={1}>{guest?.name || guest?.mobile}</Text>
-                <Text style={styles.guestContactLine}>{guest?.contactName ?? 'Number not in contacts'}</Text>
-                <Text style={styles.guestMetaLine}>{guest?.mobile}{photos.length > 0 ? ` · ${photos.length} photo${photos.length !== 1 ? 's' : ''}` : ''}</Text>
-              </View>
+            </View>
+            <View style={styles.eventHeaderBody}>
+              <Text style={styles.guestName} numberOfLines={1}>{guest.name || guest.mobile}</Text>
+              <Text style={styles.guestContactLine}>{guest.contactName ?? 'Number not in contacts'}</Text>
+              <Text style={styles.guestMetaLine}>{guest.mobile}{photos.length > 0 ? ` · ${photos.length} photo${photos.length !== 1 ? 's' : ''}` : ''}</Text>
             </View>
           </View>
+        </View>
 
-          {!loading && !error && photos.length > 0 && renderActionRow()}
+        {!loading && !error && photos.length > 0 && renderActionRow()}
 
-          {loading ? (
-            <ActivityIndicator color={Colors.accent} style={{ marginTop: 40 }} />
-          ) : error ? (
-            <View style={styles.centerBox}>
-              <Text style={styles.errorText}>{error}</Text>
-              <TouchableOpacity onPress={() => fetchPhotos()} style={styles.retryBtn}>
-                <Text style={styles.retryBtnText}>Retry</Text>
-              </TouchableOpacity>
-            </View>
-          ) : photos.length === 0 ? (
-            <View style={styles.centerBox}>
-              <Text style={styles.emptyText}>No photos uploaded yet.</Text>
-            </View>
-          ) : (
-            <View
-              ref={flatListContainerRef}
-              style={{ flex: 1 }}
-              onLayout={() => {
-                flatListContainerRef.current?.measure((_x: number, _y: number, _w: number, _h: number, pageX: number, pageY: number) => {
-                  flatListLayoutRef.current = { x: pageX, y: pageY };
-                });
-              }}
-            >
-              <GestureDetector gesture={dragGesture}>
-                <FlashList
-                  data={listItems}
-                  keyExtractor={item => item.key}
-                  renderItem={renderItem}
-                  extraData={flatListExtraData}
-                  estimatedItemSize={THUMB_SIZE + GAP}
-                  onScroll={handleScroll}
-                  scrollEventThrottle={16}
-                  contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
-                />
-              </GestureDetector>
-            </View>
-          )}
+        {loading ? (
+          <ActivityIndicator color={Colors.accent} style={{ marginTop: 40 }} />
+        ) : error ? (
+          <View style={styles.centerBox}>
+            <Text style={styles.errorText}>{error}</Text>
+            <TouchableOpacity onPress={() => fetchPhotos()} style={styles.retryBtn}>
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : photos.length === 0 ? (
+          <View style={styles.centerBox}>
+            <Text style={styles.emptyText}>No photos uploaded yet.</Text>
+          </View>
+        ) : (
+          <View
+            ref={flatListContainerRef}
+            style={{ flex: 1 }}
+            onLayout={() => {
+              flatListContainerRef.current?.measure((_x: number, _y: number, _w: number, _h: number, pageX: number, pageY: number) => {
+                flatListLayoutRef.current = { x: pageX, y: pageY };
+              });
+            }}
+          >
+            <GestureDetector gesture={dragGesture}>
+              <FlashList
+                data={listItems}
+                keyExtractor={item => item.key}
+                renderItem={renderItem}
+                extraData={flatListExtraData}
+                estimatedItemSize={THUMB_SIZE + GAP}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+                contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
+              />
+            </GestureDetector>
+          </View>
+        )}
 
-          {alertOverlay}
-        </GestureHandlerRootView>
-      </Modal>
+        {alertOverlay}
+      </GestureHandlerRootView>
 
       <Modal
         visible={lightboxVisible}
@@ -1042,7 +1029,7 @@ const styles = StyleSheet.create({
   retryBtn: { paddingHorizontal: 20, paddingVertical: 8, borderRadius: 8, borderWidth: 0.5, borderColor: '#333' },
   retryBtnText: { fontSize: 13, color: Colors.textMuted },
 
-  // Lightbox — matches event.tsx verbatim
+  // Lightbox
   lightboxInner: { flex: 1, backgroundColor: '#000' },
   lbHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
   lbBack: { fontSize: 22, color: Colors.textMuted, marginRight: 12 },

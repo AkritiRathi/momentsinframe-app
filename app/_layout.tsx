@@ -94,7 +94,7 @@ export default function RootLayout() {
 
       // Event screen, organiser screens, and deep link handler are accessible to authenticated users
       const inJoin = segments[0] === 'join';
-      if (inEvent || inMaster || inJoin || segments[0] === 'my-photos') return;
+      if (inEvent || inMaster || inJoin || segments[0] === 'my-photos' || segments[0] === 'guest-uploads') return;
 
       if (!inAuth) {
         router.replace('/(auth)/home');

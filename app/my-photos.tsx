@@ -5,12 +5,14 @@ import {
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Camera, useCameraPermission, useCameraDevice } from 'react-native-vision-camera';
+import { useCameraPermission, useCameraDevice, usePhotoOutput } from 'react-native-vision-camera';
+import { Camera } from 'react-native-vision-camera-face-detector';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
 import { FlashList } from '@shopify/flash-list';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as Sharing from 'expo-sharing';
 import * as SecureStore from 'expo-secure-store';
 import * as MediaLibrary from 'expo-media-library';
@@ -25,14 +27,16 @@ import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { useAlert } from '../lib/useAlert';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const OVAL_W = SCREEN_WIDTH * 0.65;
+const OVAL_H = SCREEN_WIDTH * 0.85;
 const COLS = 3;
 const GAP = 2;
 const THUMB_SIZE = Math.floor((SCREEN_WIDTH - GAP * (COLS + 1)) / COLS);
 const JPG_LIMIT = 40;
 const PRIVACY_KEY = 'myPhotosPrivacySeen';
 
-type Photo = { id: string; taken_at: string };
+type Photo = { id: string; taken_at: string; uploaded_by_name?: string };
 type PhotoUrls = { url?: string; thumbUrl?: string; displayUrl?: string };
 type Mode = 'camera' | 'searching' | 'results';
 
@@ -99,14 +103,10 @@ export default function MyPhotosScreen() {
   const { showAlert, alertOverlay } = useAlert();
   const { hasPermission: cameraPermission, requestPermission: requestCameraPermission } = useCameraPermission();
   const device = useCameraDevice('front');
-  const format = useMemo(() => {
-    if (!device || Platform.OS !== 'android') return undefined;
-    return device.formats
-      .filter((f: any) => f.photoWidth <= 1280)
-      .sort((a: any, b: any) => b.photoWidth - a.photoWidth)[0];
-  }, [device]);
-  const cameraRef = useRef<Camera>(null);
+  const photoOutput = usePhotoOutput();
   const [cameraReady, setCameraReady] = useState(false);
+  const [faceDetected, setFaceDetected] = useState(false);
+  const faceInOvalRef = useRef(false);
 
   const [mode, setMode] = useState<Mode>('camera');
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -517,14 +517,37 @@ export default function MyPhotosScreen() {
     init();
   }, []);
 
+  function isFaceInOval(bounds: { x: number; y: number; width: number; height: number }) {
+    const cx = bounds.x + bounds.width / 2;
+    const cy = bounds.y + bounds.height / 2;
+    const dx = (cx - SCREEN_WIDTH / 2) / (OVAL_W / 2);
+    const dy = (cy - SCREEN_HEIGHT / 2) / (OVAL_H / 2);
+    return dx * dx + dy * dy <= 1;
+  }
+
   async function handleTakeSelfie() {
-    if (!cameraRef.current || capturing) return;
+    if (capturing) return;
     setCapturing(true);
     try {
-      const photo = await cameraRef.current.takePhoto();
-      const uri = photo.path.startsWith('file://') ? photo.path : `file://${photo.path}`;
-      const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+      const { filePath } = await photoOutput.capturePhotoToFile();
+      const uri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
+      const { width: imgW, height: imgH } = await new Promise<{ width: number; height: number }>((resolve) =>
+        Image.getSize(uri, (w, h) => resolve({ width: w, height: h }))
+      );
+      const scaleX = imgW / SCREEN_WIDTH;
+      const scaleY = imgH / SCREEN_HEIGHT;
+      const originX = Math.max(0, Math.round(((SCREEN_WIDTH - OVAL_W) / 2) * scaleX));
+      const originY = Math.max(0, Math.round(((SCREEN_HEIGHT - OVAL_H) / 2) * scaleY));
+      const cropW = Math.min(Math.round(OVAL_W * scaleX), imgW - originX);
+      const cropH = Math.min(Math.round(OVAL_H * scaleY), imgH - originY);
+      const cropped = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ crop: { originX, originY, width: cropW, height: cropH } }],
+        { base64: true, format: ImageManipulator.SaveFormat.JPEG }
+      );
       try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+      try { if (cropped.uri !== uri) await FileSystem.deleteAsync(cropped.uri, { idempotent: true }); } catch {}
+      const base64 = cropped.base64;
       if (!base64) { setCapturing(false); return; }
       setMode('searching');
       const result = await findMyPhotos(slug, base64, adminPhone, userMobile);
@@ -658,16 +681,27 @@ export default function MyPhotosScreen() {
         {cameraPermission && device
           ? <>
               <Camera
-                ref={cameraRef}
                 style={StyleSheet.absoluteFill}
                 device={device}
                 isActive={true}
-                photo={true}
-                format={format}
+                outputs={[photoOutput]}
                 onInitialized={() => setCameraReady(true)}
+                onFacesDetected={(faces) => {
+                  const inOval = faces.length === 1 && isFaceInOval(faces[0].bounds);
+                  if (inOval !== faceInOvalRef.current) {
+                    faceInOvalRef.current = inOval;
+                    setFaceDetected(inOval);
+                  }
+                }}
+                autoMode={true}
+                cameraFacing="front"
+                performanceMode="fast"
+                trackingEnabled={true}
+                windowWidth={SCREEN_WIDTH}
+                windowHeight={SCREEN_HEIGHT}
               />
               <View style={styles.ovalContainer} pointerEvents="none">
-                <View style={[styles.oval, { borderColor: 'rgba(255,255,255,0.8)' }]} />
+                <View style={[styles.oval, { borderColor: faceDetected ? '#22c55e' : '#ef4444' }]} />
               </View>
             </>
           : <View style={styles.permDenied}>
@@ -890,6 +924,9 @@ export default function MyPhotosScreen() {
             )}
           </View>
           <View style={[styles.lbFooter, { paddingBottom: insets.bottom + 12 }]}>
+            {currentLbPhoto?.uploaded_by_name ? (
+              <Text style={styles.lbFooterLine1}>Uploaded by {currentLbPhoto.uploaded_by_name}</Text>
+            ) : null}
             {currentLbPhoto?.taken_at && (
               <Text style={styles.lbFooterLine2}>
                 {'Taken on '}{new Date(currentLbPhoto.taken_at).toLocaleString('en-IN', {

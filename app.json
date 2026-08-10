@@ -3,7 +3,7 @@
     "name": "Moments",
     "slug": "MomentsInFrame",
     "scheme": "momentsinframe",
-    "version": "2.0.4",
+    "version": "2.0.5",
     "orientation": "portrait",
     "icon": "./assets/Logo.png",
     "userInterfaceStyle": "light",
@@ -17,8 +17,8 @@
       "checkAutomatically": "NEVER"
     },
     "splash": {
-      "image": "./assets/feature_graphic.png",
-      "resizeMode": "contain",
+      "image": "./assets/splash-screen.png",
+      "resizeMode": "cover",
       "backgroundColor": "#000000"
     },
     "ios": {
@@ -83,7 +83,7 @@
       "./plugins/withBackgroundUpload",
       "./plugins/withExcludeFromBackup",
       "expo-updates",
-      ["expo-build-properties", { "android": { "minSdkVersion": 26 }, "ios": { "deploymentTarget": "15.5" } }],
+      ["expo-build-properties", { "android": { "minSdkVersion": 26 }, "ios": { "deploymentTarget": "18.0" } }],
       "@react-native-community/datetimepicker",
       [
         "expo-media-library",

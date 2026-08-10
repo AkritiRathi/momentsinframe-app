@@ -28,7 +28,6 @@ import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
   getPhotoDownloadUrl, prepareZip, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
-  listJoinedGuests, setGuestBlocked, listJoinedGuestsForUser, setGuestBlockedByUser,
   checkAdminStatus, findMyPhotos,
 } from '../lib/api';
 import { API_BASE_URL } from '../constants/config';
@@ -40,7 +39,6 @@ import {
   saveLastEvent, clearLastEvent,
 } from '../lib/storage';
 import { getOrganiserPassword } from '../lib/auth';
-import * as Contacts from 'expo-contacts';
 import { setupNotifications, showUploadCompleteNotification, showDownloadCompleteNotification } from '../lib/notifications';
 import * as Notifications from 'expo-notifications';
 import { showPermissionDeniedAlert, shouldShowDeniedAlert } from '../lib/priming';
@@ -433,8 +431,6 @@ const PhotoThumb = memo(forwardRef<View, PhotoThumbProps>(function PhotoThumb({
 
 PhotoThumb.displayName = 'PhotoThumb';
 
-let _reopenManageGuests = false;
-
 export default function EventScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -489,14 +485,6 @@ export default function EventScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const menuBtnRef = useRef<any>(null);
   const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
-  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number; role: 'organiser' | 'coadmin' | 'user' };
-  const [showManageGuests, setShowManageGuests] = useState(false);
-  const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
-  const [joinedGuestsTotalPhotos, setJoinedGuestsTotalPhotos] = useState<number | null>(null);
-  const [joinedGuestsLoading, setJoinedGuestsLoading] = useState(false);
-  const [joinedGuestsError, setJoinedGuestsError] = useState<string | null>(null);
-  const [togglingGuest, setTogglingGuest] = useState<string | null>(null);
-  const [guestContactMap, setGuestContactMap] = useState<Record<string, string>>({});
   const [draftSortOrder, setDraftSortOrder] = useState<'asc' | 'desc'>('asc');
   const [draftGroupByDate, setDraftGroupByDate] = useState(true);
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
@@ -635,11 +623,6 @@ export default function EventScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      if (_reopenManageGuests) {
-        _reopenManageGuests = false;
-        setShowManageGuests(true);
-        loadManageGuests();
-      }
       const mobileAtCallTime = userMobileRef.current;
       getEventPhotos(slug, params.adminPhone || undefined, mobileAtCallTime ?? undefined).then(data => {
         if (data?.event) {
@@ -699,78 +682,6 @@ export default function EventScreen() {
     }
     prevSelectedSize.current = selected.size;
   }, [selected.size, selectMode, deleteMode]);
-
-  function normalizeIndianPhone(raw: string): string {
-    let n = raw.replace(/\D/g, '');
-    if (n.startsWith('0091')) n = n.slice(4);
-    else if (n.startsWith('91') && n.length === 12) n = n.slice(2);
-    else if (n.startsWith('0') && n.length === 11) n = n.slice(1);
-    return n;
-  }
-
-  async function loadManageGuests() {
-    const phone = userMobile ?? params.adminPhone;
-    if (!phone) return;
-    setJoinedGuestsLoading(true);
-    setJoinedGuestsError(null);
-    try {
-      const result = await listJoinedGuestsForUser(slug, phone);
-      if (result.guests) {
-        const ownerPhone = result.owner_phone ?? params.adminPhone!;
-        const roleOrder: Record<string, number> = { organiser: 0, coadmin: 1, user: 2 };
-        let allGuests: JoinedGuest[] = [...result.guests].sort((a, b) =>
-          (roleOrder[a.role] ?? 2) - (roleOrder[b.role] ?? 2)
-        );
-        // Fallback: ensure organiser entry exists if not in event_users
-        if (!allGuests.some(g => g.role === 'organiser') && ownerPhone) {
-          allGuests = [{ name: 'Organiser', mobile: ownerPhone, is_blocked: false, photo_count: 0, role: 'organiser' }, ...allGuests];
-        }
-        // Update organiser display name from local profile when the organiser is viewing
-        if (userRole === 'organiser') {
-          const profile = await getUserProfile();
-          if (profile) {
-            const organiserName = `${profile.firstName} ${profile.lastName}`.trim();
-            allGuests = allGuests.map(g => g.role === 'organiser' ? { ...g, name: organiserName } : g);
-          }
-        }
-        setJoinedGuests(allGuests);
-        setJoinedGuestsTotalPhotos(result.total_photo_count ?? null);
-        try {
-          const { status } = await Contacts.getPermissionsAsync();
-          if (status === 'granted') {
-            const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
-            const map: Record<string, string> = {};
-            for (const guest of result.guests) {
-              const match = allContacts.find(c =>
-                (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === guest.mobile)
-              );
-              if (match?.name) map[guest.mobile] = match.name;
-            }
-            setGuestContactMap(prev => ({ ...prev, ...map }));
-          }
-        } catch {}
-      } else {
-        setJoinedGuestsError(result.error ?? 'Could not load guests.');
-      }
-    } catch {
-      setJoinedGuestsError('Network error. Please try again.');
-    } finally {
-      setJoinedGuestsLoading(false);
-    }
-  }
-
-  async function handleToggleGuestBlock(mobile: string, currentlyBlocked: boolean) {
-    const phone = userMobile ?? params.adminPhone;
-    if (!phone) return;
-    setTogglingGuest(mobile);
-    const result = await setGuestBlockedByUser(slug, mobile, !currentlyBlocked, phone);
-    setTogglingGuest(null);
-    if (result.error) {
-      showAlert('Error', result.error);
-    } else {
-      setJoinedGuests(prev => prev.map(g => g.mobile === mobile ? { ...g, is_blocked: !currentlyBlocked } : g));
-    }
-  }
 
   async function loadPhotos() {
     setLoading(true);
@@ -2757,7 +2668,7 @@ export default function EventScreen() {
               <Text style={styles.menuItemText}>Sort & Display</Text>
             </TouchableOpacity>
             {isAdmin && (
-              <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); loadManageGuests(); setShowManageGuests(true); }}>
+              <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); requestAppPermission('contacts', () => router.push({ pathname: '/manage-guests', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', userMobile: userMobile ?? '' } }), userMobile ?? params.adminPhone ?? null); }}>
                 <Text style={styles.menuItemText}>Manage Guests</Text>
               </TouchableOpacity>
             )}
@@ -2780,89 +2691,6 @@ export default function EventScreen() {
       </Modal>
 
       {alertOverlay}
-
-      {/* Manage Guests panel */}
-      <Modal visible={showManageGuests} animationType="slide" onRequestClose={() => setShowManageGuests(false)}>
-        <View style={{ flex: 1, backgroundColor: Colors.background, paddingTop: insets.top, paddingBottom: insets.bottom }}>
-          <View style={styles.mgPanelHeader}>
-            <Text style={styles.mgPanelTitle}>Manage Guests{joinedGuests.filter(g => g.role !== 'organiser').length > 0 ? ` (${joinedGuests.filter(g => g.role !== 'organiser').length})` : ''}{joinedGuestsTotalPhotos != null ? ` · ${joinedGuestsTotalPhotos} photos` : ''}</Text>
-            <TouchableOpacity onPress={() => setShowManageGuests(false)}>
-              <Text style={styles.mgPanelClose}>×</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.mgPanelDesc}>Block a guest to remove their access to this event. They will not be able to rejoin. You can unblock them at any time.</Text>
-          <ScrollView contentContainerStyle={styles.mgPanelScroll}>
-            {joinedGuestsLoading ? (
-              <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
-            ) : joinedGuestsError ? (
-              <View style={styles.mgErrorBox}>
-                <Text style={styles.mgErrorText}>{joinedGuestsError}</Text>
-                <TouchableOpacity onPress={loadManageGuests} style={styles.mgRetryBtn}>
-                  <Text style={styles.mgRetryBtnText}>Retry</Text>
-                </TouchableOpacity>
-              </View>
-            ) : joinedGuests.length <= 1 ? (
-              <>
-                {joinedGuests.map(guest => {
-                  const contactName = guestContactMap[guest.mobile];
-                  const displayName = contactName || guest.name || guest.mobile;
-                  const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
-                  return (
-                    <TouchableOpacity key={guest.mobile} style={styles.mgGuestRow} activeOpacity={0.7} onPress={() => { _reopenManageGuests = true; router.push({ pathname: '/guest-uploads', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: guestContactMap[guest.mobile] ?? '' } }); }}>
-                      <View style={styles.mgGuestInfo}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <Text style={styles.mgGuestName}>{displayName}</Text>
-                          <Text style={[styles.mgGuestSub, { marginLeft: 6 }]}>· {guest.photo_count ?? 0} photos</Text>
-                        </View>
-                        {subName ? <Text style={styles.mgGuestSub}>{subName}</Text> : null}
-                        <Text style={styles.mgGuestSub}>{guest.mobile}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-                <Text style={[styles.mgEmptyText, { marginTop: 12 }]}>No guests have joined this event yet.</Text>
-              </>
-            ) : (
-              joinedGuests.map(guest => {
-                const contactName = guestContactMap[guest.mobile] ?? null;
-                const appName = guest.name || guest.mobile;
-                return (
-                  <TouchableOpacity key={guest.mobile} style={[styles.mgGuestRow, guest.is_blocked && styles.mgBlockedRow]} activeOpacity={0.7} onPress={() => { _reopenManageGuests = true; router.push({ pathname: '/guest-uploads', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: guestContactMap[guest.mobile] ?? '' } }); }}>
-                    <View style={styles.mgGuestInfo}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Text style={[styles.mgGuestName, guest.is_blocked && styles.mgBlockedText]}>{appName}</Text>
-                        <Text style={[styles.mgGuestSub, { marginLeft: 6 }, guest.is_blocked && styles.mgBlockedText]}>· {guest.photo_count ?? 0} photos</Text>
-                      </View>
-                      <Text style={[styles.mgGuestSub, guest.is_blocked && styles.mgBlockedText]}>{contactName || 'Number not in contacts'}</Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Text style={[styles.mgGuestSub, guest.is_blocked && styles.mgBlockedText]}>{guest.mobile}</Text>
-                        {guest.is_blocked && <Text style={[styles.mgBlockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
-                      </View>
-                    </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {guest.role === 'coadmin' && <Text style={styles.mgCoadminBadge}>Co-Admin</Text>}
-                      {guest.role !== 'organiser' && guest.mobile !== userMobile && (userRole === 'organiser' || guest.role === 'user') && (
-                        togglingGuest === guest.mobile ? (
-                          <ActivityIndicator size="small" color={Colors.accent} />
-                        ) : (
-                          <TouchableOpacity
-                            style={[styles.mgBlockBtn, guest.is_blocked && styles.mgUnblockBtn]}
-                            onPress={(e) => { e.stopPropagation(); handleToggleGuestBlock(guest.mobile, guest.is_blocked); }}
-                          >
-                            <Text style={[styles.mgBlockBtnText, guest.is_blocked && styles.mgUnblockBtnText]}>
-                              {guest.is_blocked ? 'Unblock' : 'Block'}
-                            </Text>
-                          </TouchableOpacity>
-                        )
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })
-            )}
-          </ScrollView>
-        </View>
-      </Modal>
 
       {/* Sort panel */}
       <Modal visible={sortPanelVisible} transparent animationType="fade" onRequestClose={() => setSortPanelVisible(false)}>
@@ -3517,27 +3345,4 @@ const styles = StyleSheet.create({
   datePickerConfirmBtn: { flex: 1, backgroundColor: Colors.accent, borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
   datePickerConfirmText: { fontSize: 15, fontWeight: '700', color: Colors.background },
 
-  // Manage Guests panel
-  mgPanelHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 0.5, borderBottomColor: '#222' },
-  mgPanelTitle: { fontSize: 18, fontWeight: '700', color: Colors.white },
-  mgPanelClose: { fontSize: 28, color: Colors.textMuted, paddingHorizontal: 4 },
-  mgPanelDesc: { fontSize: 13, color: Colors.textMuted, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, lineHeight: 19 },
-  mgPanelScroll: { padding: 16, gap: 8 },
-  mgGuestRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1A1A1A', borderRadius: 8, padding: 12, marginBottom: 8, borderWidth: 0.5, borderColor: '#2A2A2A' },
-  mgGuestInfo: { flex: 1 },
-  mgGuestName: { fontSize: 14, fontWeight: '700', color: Colors.white },
-  mgGuestSub: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
-  mgBlockedRow: { opacity: 0.6 },
-  mgBlockedText: { color: Colors.textMuted },
-  mgBlockedBadge: { fontSize: 10, fontWeight: '800', color: '#E53935' },
-  mgCoadminBadge: { fontSize: 11, fontWeight: '700', color: Colors.accent, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 0.5, borderColor: Colors.accent, overflow: 'hidden' },
-  mgBlockBtn: { paddingHorizontal: 10, paddingVertical: 6, backgroundColor: 'rgba(229,57,53,0.1)', borderRadius: 6, borderWidth: 0.5, borderColor: 'rgba(229,57,53,0.4)' },
-  mgBlockBtnText: { fontSize: 12, fontWeight: '700', color: '#E53935' },
-  mgUnblockBtn: { backgroundColor: 'rgba(100,220,100,0.08)', borderColor: 'rgba(100,220,100,0.3)' },
-  mgUnblockBtnText: { color: '#4CAF50' },
-  mgEmptyText: { fontSize: 13, color: '#555', textAlign: 'center', marginTop: 32 },
-  mgErrorBox: { alignItems: 'center', paddingVertical: 24 },
-  mgErrorText: { fontSize: 13, color: '#E53935', textAlign: 'center', marginBottom: 12 },
-  mgRetryBtn: { borderWidth: 1, borderColor: '#444', borderRadius: 8, paddingHorizontal: 16, paddingVertical: 8 },
-  mgRetryBtnText: { fontSize: 13, fontWeight: '600', color: Colors.textMuted },
 });

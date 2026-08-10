@@ -1,6 +1,6 @@
 import { Slot, useRouter, useSegments } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import OfflineBanner from '../components/OfflineBanner';
@@ -153,12 +153,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#000000',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 32,
+    paddingHorizontal: Platform.OS === 'android' ? 16 : 32,
   },
   featureGraphic: {
     width: '100%',
-    height: 240,
-    marginBottom: 40,
+    aspectRatio: 2124 / 849,
+    marginBottom: 16,
   },
   spinner: {
     marginTop: 8,

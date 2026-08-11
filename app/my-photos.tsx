@@ -5,8 +5,8 @@ import {
 } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useCameraPermission, useCameraDevice, usePhotoOutput } from 'react-native-vision-camera';
-import { Camera } from 'react-native-vision-camera-face-detector';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
@@ -101,12 +101,9 @@ export default function MyPhotosScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showAlert, alertOverlay } = useAlert();
-  const { hasPermission: cameraPermission, requestPermission: requestCameraPermission } = useCameraPermission();
-  const device = useCameraDevice('front');
-  const photoOutput = usePhotoOutput();
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  const [faceDetected, setFaceDetected] = useState(false);
-  const faceInOvalRef = useRef(false);
 
   const [mode, setMode] = useState<Mode>('camera');
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -504,7 +501,7 @@ export default function MyPhotosScreen() {
   // ── Init ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     async function init() {
-      if (!cameraPermission) await requestCameraPermission();
+      if (!permission?.granted) await requestPermission();
       const seen = await AsyncStorage.getItem(PRIVACY_KEY);
       if (!seen) {
         showAlert(
@@ -517,23 +514,19 @@ export default function MyPhotosScreen() {
     init();
   }, []);
 
-  function isFaceInOval(bounds: { x: number; y: number; width: number; height: number }) {
-    const cx = bounds.x + bounds.width / 2;
-    const cy = bounds.y + bounds.height / 2;
-    const dx = (cx - SCREEN_WIDTH / 2) / (OVAL_W / 2);
-    const dy = (cy - SCREEN_HEIGHT / 2) / (OVAL_H / 2);
-    return dx * dx + dy * dy <= 1;
-  }
-
   async function handleTakeSelfie() {
     if (capturing) return;
     setCapturing(true);
     try {
-      const { filePath } = await photoOutput.capturePhotoToFile();
-      const uri = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
-      const { width: imgW, height: imgH } = await new Promise<{ width: number; height: number }>((resolve) =>
-        Image.getSize(uri, (w, h) => resolve({ width: w, height: h }))
-      );
+      const photo = await cameraRef.current!.takePictureAsync({ quality: 0.9 });
+      const uri = photo!.uri;
+      // Normalize EXIF rotation first — Image.getSize returns raw file dims on Android
+      // which can be landscape even for a portrait selfie, making crop coords wrong.
+      const norm = await ImageManipulator.manipulateAsync(uri, [], {
+        format: ImageManipulator.SaveFormat.JPEG,
+      });
+      const imgW = norm.width;
+      const imgH = norm.height;
       const scaleX = imgW / SCREEN_WIDTH;
       const scaleY = imgH / SCREEN_HEIGHT;
       const originX = Math.max(0, Math.round(((SCREEN_WIDTH - OVAL_W) / 2) * scaleX));
@@ -541,16 +534,19 @@ export default function MyPhotosScreen() {
       const cropW = Math.min(Math.round(OVAL_W * scaleX), imgW - originX);
       const cropH = Math.min(Math.round(OVAL_H * scaleY), imgH - originY);
       const cropped = await ImageManipulator.manipulateAsync(
-        uri,
+        norm.uri,
         [{ crop: { originX, originY, width: cropW, height: cropH } }],
         { base64: true, format: ImageManipulator.SaveFormat.JPEG }
       );
       try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
-      try { if (cropped.uri !== uri) await FileSystem.deleteAsync(cropped.uri, { idempotent: true }); } catch {}
+      try { await FileSystem.deleteAsync(norm.uri, { idempotent: true }); } catch {}
+      try { if (cropped.uri !== norm.uri) await FileSystem.deleteAsync(cropped.uri, { idempotent: true }); } catch {}
       const base64 = cropped.base64;
       if (!base64) { setCapturing(false); return; }
+      await activateKeepAwakeAsync();
       setMode('searching');
       const result = await findMyPhotos(slug, base64, adminPhone, userMobile);
+      deactivateKeepAwake();
       if (result.error) {
         setCameraReady(false);
         showAlert('Error', result.error, [{ text: 'Try Again', onPress: () => setMode('camera') }]);
@@ -566,6 +562,7 @@ export default function MyPhotosScreen() {
       const ids = [...main.map(p => p.id), ...other.map(p => p.id)];
       if (ids.length > 0) loadUrls(ids);
     } catch (e: any) {
+      deactivateKeepAwake();
       setCameraReady(false);
       showAlert('Error', e?.message ?? 'Something went wrong. Please try again.', [{ text: 'OK', onPress: () => setMode('camera') }]);
       setMode('camera');
@@ -678,35 +675,21 @@ export default function MyPhotosScreen() {
   if (mode === 'camera') {
     return (
       <View style={{ flex: 1, backgroundColor: '#000' }}>
-        {cameraPermission && device
+        {permission?.granted
           ? <>
-              <Camera
+              <CameraView
+                ref={cameraRef}
                 style={StyleSheet.absoluteFill}
-                device={device}
-                isActive={true}
-                outputs={[photoOutput]}
-                onInitialized={() => setCameraReady(true)}
-                onFacesDetected={(faces) => {
-                  const inOval = faces.length === 1 && isFaceInOval(faces[0].bounds);
-                  if (inOval !== faceInOvalRef.current) {
-                    faceInOvalRef.current = inOval;
-                    setFaceDetected(inOval);
-                  }
-                }}
-                autoMode={true}
-                cameraFacing="front"
-                performanceMode="fast"
-                trackingEnabled={true}
-                windowWidth={SCREEN_WIDTH}
-                windowHeight={SCREEN_HEIGHT}
+                facing="front"
+                onCameraReady={() => setCameraReady(true)}
               />
               <View style={styles.ovalContainer} pointerEvents="none">
-                <View style={[styles.oval, { borderColor: faceDetected ? '#22c55e' : '#ef4444' }]} />
+                <View style={[styles.oval, { borderColor: '#fff' }]} />
               </View>
             </>
           : <View style={styles.permDenied}>
               <Text style={styles.permDeniedText}>
-                {!device ? 'Front camera not available on this device.' : 'Camera access is needed to take a selfie.\nPlease enable it in Settings.'}
+                Camera access is needed to take a selfie.{'\n'}Please enable it in Settings.
               </Text>
             </View>
         }
@@ -721,7 +704,7 @@ export default function MyPhotosScreen() {
           <Text style={styles.cameraHint}>
             Position your face in the oval and tap to search
           </Text>
-          <TouchableOpacity style={styles.captureBtn} onPress={handleTakeSelfie} disabled={capturing || !cameraPermission || !cameraReady}>
+          <TouchableOpacity style={styles.captureBtn} onPress={handleTakeSelfie} disabled={capturing || !permission?.granted || !cameraReady}>
             {capturing ? <ActivityIndicator color="#000" /> : <View style={styles.captureBtnInner} />}
           </TouchableOpacity>
         </View>

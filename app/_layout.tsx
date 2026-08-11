@@ -1,6 +1,6 @@
 import { Slot, useRouter, useSegments } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Dimensions, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import OfflineBanner from '../components/OfflineBanner';
@@ -107,7 +107,7 @@ export default function RootLayout() {
       <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <View style={styles.splash}>
-          <Image source={require('../assets/Logo.png')} style={styles.featureGraphic} resizeMode="contain" />
+          <Image source={require('../assets/feature_graphic.png')} style={styles.featureGraphic} resizeMode="contain" />
 
           {updateStage === 'checking' && (
             <ActivityIndicator color="#F5C842" style={styles.spinner} />
@@ -156,8 +156,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: Platform.OS === 'android' ? 16 : 32,
   },
   featureGraphic: {
-    width: 150,
-    height: 150,
+    width: Dimensions.get('window').width * 0.8,
+    height: (Dimensions.get('window').width * 0.8) / 2.05,
     marginBottom: 40,
   },
   spinner: {

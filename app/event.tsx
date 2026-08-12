@@ -1019,7 +1019,11 @@ export default function EventScreen() {
     otherHeaderY.current = null;
     selectBarYRef.current = null;
     longPressAnchorRef.current = null;
-    if (!skipLoad) loadPhotos();
+    if (!skipLoad) {
+      flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+      scrollOffsetRef.current = 0;
+      setTimeout(() => loadPhotos(), 100);
+    }
   }
 
   function updateSectionPositions() {
@@ -1969,7 +1973,7 @@ export default function EventScreen() {
             <Pressable style={styles.selBtn} onPress={() => selectGroup(deletablePhotos, !allSelected)}>
               <Text style={styles.selBtnText}>Select all</Text>
             </Pressable>
-            <Pressable style={styles.selBtn} onPress={exitSelectMode}>
+            <Pressable style={styles.selBtn} onPress={() => exitSelectMode()}>
               <Text style={styles.selBtnText}>Cancel</Text>
             </Pressable>
             <Pressable style={[styles.selBtn, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={handleBulkDelete}>
@@ -1987,7 +1991,7 @@ export default function EventScreen() {
           <Pressable style={styles.selBtn} onPress={() => selectGroup(deletablePhotos, !allSelected)}>
             <Text style={styles.selBtnText}>Select all</Text>
           </Pressable>
-          <Pressable style={styles.selBtn} onPress={exitSelectMode}>
+          <Pressable style={styles.selBtn} onPress={() => exitSelectMode()}>
             <Text style={styles.selBtnText}>Cancel</Text>
           </Pressable>
           <Pressable style={[styles.selBtn, { opacity: selected.size === 0 ? 0.4 : 1 }]} disabled={selected.size === 0} onPress={() => requestAppPermission('gallery', handleBulkDownload, userMobile ?? params.adminPhone ?? null)}>
@@ -2224,7 +2228,9 @@ export default function EventScreen() {
                   scrollOffsetRef.current = 0;
                   setTimeout(() => setMyUploadsFilter(true), 100);
                 } else {
-                  setMyUploadsFilter(false);
+                  flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+                  scrollOffsetRef.current = 0;
+                  setTimeout(() => { setMyUploadsFilter(false); loadPhotos(); }, 100);
                 }
               }}
             />
@@ -2680,7 +2686,9 @@ export default function EventScreen() {
                   scrollOffsetRef.current = 0;
                   setTimeout(() => setMyUploadsFilter(true), 100);
                 } else {
-                  setMyUploadsFilter(false);
+                  flatListRef.current?.scrollToOffset({ offset: 0, animated: false });
+                  scrollOffsetRef.current = 0;
+                  setTimeout(() => { setMyUploadsFilter(false); loadPhotos(); }, 100);
                 }
               }}
             />

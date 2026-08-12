@@ -223,11 +223,9 @@ const styles = StyleSheet.create({
   container: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 64, paddingBottom: 40 },
   appName: { fontSize: 13, fontWeight: '700', color: Colors.accent, letterSpacing: 1.5, marginBottom: 16, textTransform: 'uppercase' },
   title: { fontSize: 30, fontWeight: '800', color: Colors.white, lineHeight: 36, marginBottom: 10 },
-  subtitle: { ...Typography.body, color: Colors.textMuted, marginBottom: 16 },
   warning: { fontSize: 13, fontWeight: '700', color: Colors.accent, marginBottom: 24 },
   form: { marginTop: 8 },
   label: { ...Typography.inputLabel, color: Colors.accent, marginBottom: 8 },
-  labelMuted: { opacity: 0.35 },
   input: {
     backgroundColor: Colors.card,
     borderWidth: 1.5,

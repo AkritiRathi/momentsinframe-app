@@ -199,11 +199,6 @@ export async function deleteUploadNotification(slug: string, id: string): Promis
   } catch {}
 }
 
-export async function hasUnreadNotifications(slug: string): Promise<boolean> {
-  const notifs = await getUploadNotifications(slug);
-  return notifs.some(n => !n.read);
-}
-
 export async function clearAllUploadNotifications(slug: string): Promise<void> {
   try {
     await AsyncStorage.removeItem(notifKey(slug));

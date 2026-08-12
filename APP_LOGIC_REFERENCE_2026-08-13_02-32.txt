@@ -1,0 +1,931 @@
+================================================================================
+  APP LOGIC REFERENCE — MomentsInFrame
+  Created: 2026-08-13 02:32 IST
+  Use this file to brief Claude or any AI/developer in a new session.
+  Contains: pending items, tech stack, and all major logic with exact code.
+  When new features are built, add new dated sections at the bottom.
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PENDING ITEMS — READ THIS FIRST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OTA (no build needed)
+  1. Privacy Policy link in app — PARKED: waiting for lawyer review
+
+Next native build (in priority order)
+  2. Android native splash screen logo too small
+     — Replace assets/splash-screen.png with version where logo fills more canvas
+     — iOS unaffected. Rebuild required (native asset, cannot OTA).
+
+  3. In-app camera + live filters — FULL SPEC FINALISED, coding not started
+     See Section 14 below for complete spec.
+
+Future build (decide later)
+  4. Trusted Circle — full 24-rule spec finalised, coding not started
+  5. Red/green face oval in Find My Photos — deferred
+  6. Video support
+
+Deferred / OTA only (decide later)
+  7. Push notifications — 4 types only: co-admin change, photo upgrade,
+     event expiring 24h (organiser), event closed (guests)
+  8. Slideshow mode
+  9. Auto OTA update on launch
+  10. Haptic feedback
+
+Admin deadline
+  11. Android developer verification — complete by Sep 30, 2026 in Play Console
+      or app gets removed from Play Store
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TECH STACK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Mobile app
+  — Expo SDK 54, React Native 0.81.5, New Architecture enabled
+  — TypeScript, Expo Router (file-based routing)
+  — Repo: D:\Downloads D Drive\MomentsInFrame\
+
+Backend / web
+  — Next.js 15, TypeScript
+  — Repo: D:\Downloads D Drive\onealbum-trial\src\
+  — Deployed to Vercel (3 regions: bom1, sin1, fra1)
+
+Infrastructure
+  — Database: Supabase (free tier) — PostgreSQL
+  — Storage: AWS S3 Mumbai (ap-south-1), Transfer Acceleration enabled
+  — Auth: WhatsApp OTP via Meta Cloud API
+  — Web: momentsinframe.com (Vercel)
+
+OTA updates
+  — Always push to: eas update --branch preview
+  — NEVER push to production branch
+  — Installed APK/IPA listens to preview channel
+
+Distribution
+  — iOS: TestFlight via eas build --profile testflight + eas submit
+  — Android: Play Store Internal Testing via eas build --profile preview (AAB)
+  — iOS build image: macos-tahoe-26.5-xcode-26.6 (required — earlier Xcode fails)
+  — autoIncrement: true in eas.json — build numbers auto-increment
+  — ALWAYS run eas build:version:set for both platforms before every EAS build
+
+Current live version
+  — v2.0.5: iOS Build 38 (TestFlight), Android Build 21 (Play Store Internal)
+
+Identity rule
+  — All access/permission checks use mobile number (phone)
+  — NEVER use event_user_id or device_id for identity checks
+  — Master phone (whitelist management only): 8826388888
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1: TWO-PHASE UPLOAD FLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHY TWO PHASES:
+  Vercel serverless functions have a 4.5MB request body limit. We never send
+  raw file bytes through the Next.js function — only small JSON payloads.
+  The actual file goes directly from the app to S3 via a presigned URL.
+
+PHASE 1 — Get presigned URL (/api/upload-url):
+  App sends { eventSlug, filename, contentType } → server returns { uploadUrl, stagingKey }
+  stagingKey format: staging/{event_id}/{uuid}.{ext}
+
+PHASE 2 — App PUTs file directly to S3:
+  App uploads raw bytes to the presigned URL — Vercel is bypassed entirely.
+
+PHASE 3 — Process (/api/upload):
+  App sends { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId }
+  Server: fetches staged file from S3 → EXIF extraction → HEIC pre-decode →
+          JPEG conversion → GPS strip → pHash → duplicate check → store
+  Staging file always deleted from S3 in a finally block (success or failure).
+
+CLIENT-SIDE TIMEOUT (lib/api.ts):
+  The post() helper has a default 15s timeout. processUpload passes 60s because
+  the server runs pHash + S3 move + DB write which can exceed 15s for large photos.
+  All other API calls use 15s. The timeout only controls how long the app waits —
+  it does NOT slow down uploads.
+
+--- CODE: lib/api.ts --- (mobile app)
+function makeTimeout(ms: number) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  return { signal: controller.signal, clear: () => clearTimeout(id) };
+}
+
+async function post(path: string, body: object, ms = 15000) {
+  const { signal, clear } = makeTimeout(ms);
+  try {
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+    return res.json();
+  } finally {
+    clear();
+  }
+}
+
+export async function processUpload(eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId) {
+  return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId }, 60000);
+}
+
+--- CODE: /api/upload-url/route.ts (Phase 1) ---
+export async function POST(request: NextRequest) {
+  const { eventSlug, filename, contentType } = await request.json();
+  const extension = filename.split(".").pop()?.toLowerCase() ?? "";
+  const stagingKey = `staging/${event.id}/${randomUUID()}.${extension}`;
+  const uploadUrl = await getPresignedUploadUrl(stagingKey, contentType || "application/octet-stream");
+  return NextResponse.json({ uploadUrl, stagingKey });
+}
+
+--- CODE: /api/upload/route.ts (Phase 3 — key steps) ---
+// 1. Normalise filename — always .jpg regardless of original format
+const storedFilename = originalFilename.replace(/\.[^.]+$/, ".jpg");
+
+// 2. Fetch staged file from S3
+const getResult = await s3Client.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: stagingKey }));
+let inputBuffer = await streamToBuffer(getResult.Body as NodeJS.ReadableStream);
+
+// 3. Extract EXIF date BEFORE any conversion (see Section 2)
+const { takenAt, dateSource } = await extractBestDate(tempInputPath);
+
+// 4. Pre-decode HEIC (see Section 3), then convert to JPEG
+const decodedBuffer = await preDecodeIfHeic(inputBuffer, originalExtension);
+const convertedBuffer = isHeic ? await convertToJpg(decodedBuffer) : decodedBuffer;
+
+// 5. Strip GPS EXIF (see Section 4)
+uploadBuffer = stripGpsExif(alreadyJpg ? uploadBuffer : await convertToJpg(uploadBuffer));
+
+// 6. Compute pHash for duplicate detection (see Section 5)
+const newPhash = await computePhash(convertedBuffer);
+
+// 7. No duplicate — generate thumbnail + display versions, insert new row
+const [thumbBuffer, displayBuffer] = await Promise.all([
+  sharp(uploadBuffer).rotate().resize(400, undefined, { withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer().then(toPlainBuffer),
+  sharp(uploadBuffer).rotate().resize(1200, undefined, { withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer().then(toPlainBuffer),
+]);
+
+// FK fallback — retry with event_user_id: null if foreign key error (code 23503)
+let { data: newPhoto, error: insertError } = await supabaseAdmin.from("photos").insert(insertPayload).select().single();
+if (insertError?.code === '23503') {
+  ({ data: newPhoto, error: insertError } = await supabaseAdmin.from("photos").insert({ ...insertPayload, event_user_id: null }).select().single());
+}
+
+// Always clean up staging file — in finally block
+await s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: stagingKey }));
+
+WHAT GETS STORED IN S3 PER PHOTO (3 versions):
+  — Full original: stored as JPEG at event_id/uuid.jpg
+  — Thumbnail: 400px wide, JPEG quality 75, withoutEnlargement: true
+  — Display: 1200px wide, JPEG quality 85, withoutEnlargement: true
+
+toPlainBuffer() — IMPORTANT:
+  Some Vercel Node runtime versions produce SharedArrayBuffer-backed Buffers.
+  The AWS S3 SDK rejects these. Always wrap:
+    function toPlainBuffer(input: Buffer): Buffer { return Buffer.from(input); }
+
+PRE-UPLOAD CLIENT-SIDE DEDUPLICATION:
+  App fetches all existing filenames for the event before starting.
+  Any asset whose filename already exists is skipped immediately (no backend call).
+  Note: filename matching is imperfect on Samsung — pHash on server is the safety net.
+
+UPGRADE NOTIFICATION:
+  On keep_new (quality upgrade), if original uploader ≠ new uploader,
+  send them a notification via createOrUpdateUpgradeNotification().
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2: EXIF EXTRACTION + dateSource (extractBestDate)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Every uploaded photo gets a dateSource value that controls which gallery section
+it appears in and how duplicate detection treats it.
+
+  dateSource = "exif"        → Photo Gallery (real camera photo, trusted date)
+  dateSource = "file_meta"   → Other Photos Gallery (file system date, less trusted)
+  dateSource = "upload_time" → Other Photos Gallery (no date info at all)
+
+CRITICAL RULE — Make field check (added 2026-08-13):
+  iOS/Android screenshots have DateTimeOriginal (time of screenshot) but NO
+  camera Make field. Without this check, screenshots landed in Photo Gallery.
+  Real camera photos always have Make: "Apple" / "samsung" / "OnePlus" etc.
+  Now: EXIF date is only trusted if BOTH DateTimeOriginal AND Make are present.
+
+HEIC raw fallback:
+  Some iPhone HEIC files (Live Photos, burst) have 48+ iref box references.
+  exifr hits a security limit and throws. We fall back to scanning the raw
+  binary for TIFF magic bytes and parsing from there.
+
+IST offset:
+  EXIF DateTimeOriginal has no timezone. All events are India-based.
+  We subtract 5h30m (IST = UTC+5:30) to get UTC for DB storage.
+
+MUST be called BEFORE any format conversion touches the file.
+
+--- CODE: src/lib/exif.ts ---
+export async function extractBestDate(filePath: string, uploadTimestamp: Date = new Date()): Promise<ExtractedDate> {
+  // PRIMARY — try EXIF date taken + camera Make
+  try {
+    const exifData = await exifr.parse(filePath, ["DateTimeOriginal", "CreateDate", "Make"]);
+    const exifDate = exifData?.DateTimeOriginal || exifData?.CreateDate;
+    const hasCameraInfo = !!(exifData?.Make);
+    if (exifDate instanceof Date && !isNaN(exifDate.getTime()) && hasCameraInfo) {
+      const istOffsetMs = 5.5 * 60 * 60 * 1000;
+      const utcDate = new Date(exifDate.getTime() - istOffsetMs);
+      return { takenAt: utcDate, dateSource: "exif" };
+    }
+  } catch {
+    // Standard parse failed — try HEIC raw TIFF scan
+    try {
+      const lowerPath = filePath.toLowerCase();
+      if (lowerPath.endsWith(".heic") || lowerPath.endsWith(".heif")) {
+        const buf = readFileSync(filePath);
+        for (let i = 0; i < buf.length - 4; i++) {
+          const isLE = buf[i] === 0x49 && buf[i+1] === 0x49 && buf[i+2] === 0x2A && buf[i+3] === 0x00;
+          const isBE = buf[i] === 0x4D && buf[i+1] === 0x4D && buf[i+2] === 0x00 && buf[i+3] === 0x2A;
+          if (isLE || isBE) {
+            const tiffData = await exifr.parse(buf.slice(i), { tiff: true, exif: true, translateValues: false, reviveValues: false }).catch(() => null);
+            const rawDate = tiffData?.DateTimeOriginal || tiffData?.CreateDate;
+            const exifDate = rawDate instanceof Date ? rawDate : (typeof rawDate === "string" ? new Date(rawDate.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1-$2-$3")) : null);
+            const hasCameraInfoHeic = !!(tiffData?.Make);
+            if (exifDate && !isNaN(exifDate.getTime()) && hasCameraInfoHeic) {
+              const istOffsetMs = 5.5 * 60 * 60 * 1000;
+              const utcDate = new Date(exifDate.getTime() - istOffsetMs);
+              return { takenAt: utcDate, dateSource: "exif" };
+            }
+            break;
+          }
+        }
+      }
+    } catch { /* fall through */ }
+  }
+
+  // FALLBACK 1 — file system date
+  try {
+    const stats = statSync(filePath);
+    const fileDate = stats.birthtime && stats.birthtime.getTime() > 0 ? stats.birthtime : stats.mtime;
+    if (fileDate && !isNaN(fileDate.getTime())) {
+      return { takenAt: fileDate, dateSource: "file_meta" };
+    }
+  } catch { /* fall through */ }
+
+  // FALLBACK 2 — upload timestamp
+  return { takenAt: uploadTimestamp, dateSource: "upload_time" };
+}
+
+export function belongsInMainTimeline(dateSource: DateSource): boolean {
+  return dateSource === "exif";
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3: HEIC PRE-DECODE + JPEG CONVERSION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHY:
+  sharp/libvips has a 16-reference security limit for HEIC containers.
+  iPhone HEIC files (Live Photos, burst shots) often have 48+ iref references.
+  This causes sharp to crash. We pre-decode using heic-convert (WASM, no limits)
+  BEFORE passing to sharp. EXIF is injected back into the JPEG after conversion.
+
+  heic-convert does NOT preserve EXIF — we manually extract raw TIFF bytes from
+  the HEIC box structure and inject them as an APP1 segment into the JPEG.
+
+--- CODE: src/lib/image-processing.ts ---
+export async function preDecodeIfHeic(buffer: Buffer, extension: string): Promise<Buffer> {
+  if (!HEIC_EXTENSIONS.has(extension.toLowerCase())) return buffer;
+  const jpegArrayBuffer = await heicConvert({ buffer: buffer as unknown as ArrayBuffer, format: "JPEG", quality: 1 });
+  const jpegBuffer = Buffer.from(jpegArrayBuffer);
+  return injectExifFromHeic(buffer, jpegBuffer);
+}
+
+export async function convertToJpg(inputBuffer: Buffer): Promise<Buffer> {
+  return sharp(inputBuffer)
+    .rotate()
+    .jpeg({ quality: 95, mozjpeg: true })
+    .withMetadata({ orientation: 1 })
+    .toBuffer();
+}
+
+FILENAME NORMALISATION:
+  All photos stored with .jpg extension: originalFilename.replace(/\.[^.]+$/, ".jpg")
+  original_format column stores the original extension (heic, png, jpeg, etc.)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4: GPS EXIF STRIPPING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHY: Privacy. We strip GPS coordinates from every uploaded photo before storing.
+     Camera Make/Model, DateTimeOriginal, and all other EXIF are preserved.
+     Applied in /api/upload/route.ts on both the new-photo path and keep_new path.
+
+--- CODE: src/lib/image-processing.ts ---
+export function stripGpsExif(jpegBuffer: Buffer): Buffer {
+  try {
+    const dataUrl = "data:image/jpeg;base64," + jpegBuffer.toString("base64");
+    let exifObj: any;
+    try { exifObj = piexif.load(dataUrl); } catch { return jpegBuffer; }
+    exifObj["GPS"] = {};
+    const exifBytes = piexif.dump(exifObj);
+    const result = piexif.insert(exifBytes, dataUrl);
+    return Buffer.from(result.replace("data:image/jpeg;base64,", ""), "base64");
+  } catch {
+    return jpegBuffer;
+  }
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5: DUPLICATE DETECTION (isDuplicate)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Uses perceptual hashing (pHash via sharp-phash). Detects visually identical photos
+even when one is recompressed (e.g. WhatsApp copies). Logic lives in:
+  src/lib/duplicate-detection.ts
+
+THRESHOLDS:
+  HASH_THRESHOLD = 10          — outer limit, beyond this never a duplicate
+  HASH_THRESHOLD_STRICT = 4    — tight match, almost certainly same photo
+  SIZE_SIMILARITY_RATIO = 15%  — files within 15% size = "same quality"
+  MIN_WHATSAPP_DELAY_MS = 10000 — minimum gap to treat as WhatsApp timestamp shift
+    (burst shots always under 10s apart; WhatsApp delivery takes longer)
+
+isDuplicate() RULES (checked in order):
+  1. If hash distance > 10 → NOT duplicate
+  2. If distance 5–10 (loose band):
+     Match ONLY if exactly one side has EXIF (WhatsApp copy scenario)
+     OR both have EXIF + timestamps within 2s + sizes differ >15% (WhatsApp HD)
+     Otherwise → NOT duplicate
+  3. If both have EXIF and timestamps differ by >2s → NOT duplicate
+     Exception: if distance ≤4 AND sizes differ >15% AND gap >10s → WhatsApp
+     shifted timestamp to receive time; trust the visual hash
+  4. Hash collision guard: if one has EXIF, size diff >90%, distance >4 → NOT duplicate
+  5. Neither has EXIF: only match if distance === 0 (pixel-perfect identical)
+  6. Otherwise → IS duplicate
+
+--- CODE: src/lib/duplicate-detection.ts ---
+const HASH_THRESHOLD = 10;
+const HASH_THRESHOLD_STRICT = 4;
+const SIZE_SIMILARITY_RATIO = 0.15;
+const MIN_WHATSAPP_DELAY_MS = 10000;
+
+export function isDuplicate(
+  hashA: string, hashB: string,
+  sizeA: number, sizeB: number,
+  takenAtA?: Date | null, takenAtB?: Date | null,
+  dateSourceA?: string | null, dateSourceB?: string | null,
+): boolean {
+  const distance = hammingDistance(hashA, hashB);
+  if (distance > HASH_THRESHOLD) return false;
+
+  const oneHasExif = (dateSourceA === "exif") !== (dateSourceB === "exif");
+  const bothHaveExif = dateSourceA === "exif" && dateSourceB === "exif";
+  const timestampsClose = takenAtA != null && takenAtB != null &&
+    Math.abs(takenAtA.getTime() - takenAtB.getTime()) <= 2000;
+  const sizeDiffRatio = Math.abs(sizeA - sizeB) / Math.max(sizeA, sizeB);
+  const sizeDiffSignificant = sizeDiffRatio > SIZE_SIMILARITY_RATIO;
+
+  if (distance > HASH_THRESHOLD_STRICT) {
+    const isWhatsappHd = bothHaveExif && timestampsClose && sizeDiffSignificant;
+    if (!oneHasExif && !isWhatsappHd) return false;
+  }
+
+  const tsGapMs = takenAtA != null && takenAtB != null
+    ? Math.abs(takenAtA.getTime() - takenAtB.getTime()) : null;
+  const whatsappTimestampShift = distance <= HASH_THRESHOLD_STRICT && sizeDiffSignificant
+    && tsGapMs != null && tsGapMs > MIN_WHATSAPP_DELAY_MS;
+
+  if (bothHaveExif && !timestampsClose && takenAtA != null && takenAtB != null && !whatsappTimestampShift) {
+    return false;
+  }
+
+  if (oneHasExif && sizeDiffRatio > 0.90 && distance > HASH_THRESHOLD_STRICT) return false;
+  if (oneHasExif) return true;
+  if (bothHaveExif && timestampsClose && sizeDiffSignificant) return true;
+  if (whatsappTimestampShift) return true;
+  if (bothHaveExif && timestampsClose && !sizeDiffSignificant && distance > 0) return false;
+
+  const neitherHasExif = dateSourceA !== "exif" && dateSourceB !== "exif";
+  if (neitherHasExif) return distance === 0;
+
+  return sizeDiffRatio <= SIZE_SIMILARITY_RATIO;
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6: QUALITY UPGRADE (resolveDuplicate)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When a duplicate IS detected, we check if the new upload is better quality.
+File size is used as the quality proxy.
+
+WHEN UPGRADE HAPPENS:
+  — New file is larger (less compressed) → new wins
+  — New file has genuine EXIF date, existing only has fallback → new wins
+  — Common: WhatsApp copy uploaded first (small, no EXIF), then original (large, EXIF)
+
+WHAT HAPPENS ON UPGRADE (server-side):
+  1. Convert new file, strip GPS, generate new thumbnail + display
+  2. Upload all 3 new versions to S3
+  3. UPDATE existing photo DB row IN-PLACE (same photo ID, same timeline position)
+  4. Notify original uploader if they are a different person
+
+WHY IN-PLACE UPDATE:
+  Preserves photo's position in event timeline and keeps the same photo ID.
+  The WhatsApp copy "becomes" the original.
+
+CRITICAL: Do NOT modify this logic without explicit user approval.
+
+--- CODE: src/lib/duplicate-detection.ts ---
+export function resolveDuplicate(existing: PhotoCandidate, incoming: NewUpload): DuplicateResolution {
+  const sizeDiff = incoming.fileSizeBytes - existing.fileSizeBytes;
+  const sameQuality = Math.abs(sizeDiff) < existing.fileSizeBytes * 0.02;
+  const sameDateSource = incoming.dateSource === existing.dateSource;
+  const sameTimestamp = Math.abs(incoming.takenAt.getTime() - existing.takenAt.getTime()) < 1000;
+
+  if (sameQuality && sameDateSource && sameTimestamp) {
+    return { action: "merge_self_duplicate", reason: "Identical quality and timestamp." };
+  }
+
+  const incomingHigherQuality = sizeDiff > 0 && !sameQuality;
+  const incomingMoreTrustworthyDate = incoming.dateSource === "exif" && existing.dateSource !== "exif";
+
+  if (incomingHigherQuality || incomingMoreTrustworthyDate) {
+    return { action: "keep_new", reason: incomingHigherQuality ? "New upload is higher quality." : "New upload has genuine EXIF date." };
+  }
+
+  return { action: "keep_existing", reason: "Existing photo is equal or higher quality." };
+}
+
+--- CODE: /api/upload/route.ts — keep_new branch ---
+if (resolution.action === "keep_new") {
+  // Strip GPS on upgrade too
+  const finalBuffer = stripGpsExif(toPlainBuffer(alreadyJpg ? uploadBuffer : await convertToJpg(uploadBuffer)));
+  const [keepThumbBuffer, keepDisplayBuffer] = await Promise.all([
+    sharp(finalBuffer).rotate().resize(400, undefined, { withoutEnlargement: true }).jpeg({ quality: 75 }).toBuffer().then(toPlainBuffer),
+    sharp(finalBuffer).rotate().resize(1200, undefined, { withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer().then(toPlainBuffer),
+  ]);
+  // Upload 3 new versions to S3, then UPDATE existing DB row in-place
+  await supabaseAdmin.from("photos").update({ storage_path, thumbnail_path, display_path, phash, taken_at, ... }).eq("id", existing.id);
+  // FK fallback — retry with event_user_id: null on 23503 error
+
+  // Notify original uploader if different person
+  if (existing.uploaded_by_mobile && existing.uploaded_by_mobile !== uploaderMobile) {
+    await createOrUpdateUpgradeNotification({ recipientPhone: existing.uploaded_by_mobile, ... });
+  }
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7: iOS PHOTO SAVING (PhotoSaver native module)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+iOS requires a native Swift module to save photos with correct EXIF date into
+a named album. Android uses MediaStore (Section 8).
+
+KEY LESSON — why the native module was null for 16 builds:
+  expo-modules-autolinking scans SUBDIRECTORIES only — it never reads files at
+  the ROOT of the module directory. Fix: add "podspecPath" to expo-module.config.json.
+
+TWO THINGS BOTH REQUIRED:
+  A) Metro bundler — "file:" entry in root package.json:
+       "photo-saver": "file:./modules/photo-saver"
+  B) CocoaPods — podspec + "podspecPath" in expo-module.config.json
+
+WHY creationDate DOES NOT WORK:
+  iOS Photos completely ignores creationDate for JPEG files. It reads the date
+  from EXIF metadata embedded in the file. Fix: embed DateTimeOriginal using
+  CGImageDestination BEFORE saving.
+
+iOS PERMISSION LEVELS:
+  FULL ACCESS (.authorized) — can create named album, add photo to album
+  LIMITED ACCESS (.limited) — saves to Camera Roll only, no album creation
+
+MODULE FILE STRUCTURE:
+  modules/
+  └── photo-saver/
+      ├── expo-module.config.json
+      ├── photo-saver.podspec
+      ├── package.json
+      └── ios/PhotoSaverModule.swift
+
+--- FILE: expo-module.config.json ---
+{
+  "platforms": ["ios"],
+  "ios": {
+    "modules": ["PhotoSaverModule"],
+    "podspecPath": "./photo-saver.podspec"
+  }
+}
+
+--- CODE: Usage in app ---
+let PhotoSaver = null;
+try { PhotoSaver = require('photo-saver').default; } catch (e) { }
+
+if (PhotoSaver && Platform.OS === 'ios') {
+  const result = await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs ?? 0, params.name);
+  if (result === 'limited_access') {
+    // Show alert once — user has limited Photos permission
+  }
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8: ANDROID DOWNLOAD (MediaStore native module)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Android uses modules/media-store — wraps Android's MediaStore API.
+
+SINGLE PHOTO DOWNLOAD:
+  1. Download photo from server to Expo cache directory
+  2. Pass local path to MediaStore.saveToDownloads(path, filename, folderName, mimeType, dateTakenMs)
+  3. MediaStore saves to Downloads/[EventFolderName]/filename.jpg
+  4. dateTakenMs sets correct date in Android's media database
+  5. Delete temp cache file after saving
+
+ZIP DOWNLOAD (bulk, >25 photos):
+  Same flow but mimeType = 'application/zip'. Split into batches if needed.
+
+KEY DIFFERENCE FROM iOS:
+  — Android reads date from dateTakenMs passed to MediaStore (no EXIF embed needed)
+  — iOS ignores creation date passed in code — must embed EXIF into file
+  — Android saves to Downloads folder (file manager accessible)
+  — iOS saves to Photos app (camera roll / named album)
+  — iOS ZIP: shared via iOS Share Sheet (no Downloads folder for apps)
+
+FOLDER NAMING:
+  First download: user asked to name folder (defaults to event name).
+  Stored in SecureStore keyed by event slug. Never asked again for same event.
+
+--- CODE: app/event.tsx ---
+const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
+
+async function saveFileToDownloads(filename, url, mimeType, folderPath, mode, notify = false, dateTakenMs?) {
+  if (Platform.OS === 'android') {
+    const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+    if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+    const localPath = dlResult.uri.replace('file://', '');
+    await MediaStore.saveToDownloads(localPath, filename, folderName, mimeType, dateTakenMs);
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+  } else {
+    const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
+    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
+    if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+    if (PhotoSaver) {
+      await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs ?? 0, params.name);
+    } else {
+      await MediaLibrary.saveToLibraryAsync(cacheUri);
+    }
+    await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+  }
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9: WHITELIST CASCADE DELETE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Only the master phone (8826388888) can manage the whitelist.
+When master removes a number, ALL of that organiser's data is hard-deleted:
+  — All events they owned (cascade deletes event_coadmins, event_allowed_phones, event_users)
+  — All photos in those events (DB rows + S3 files for all 3 versions)
+  — Their whitelist entry
+  — app_users row is NOT touched — their guest presence in other events is untouched
+
+S3 deletion is done in batches of 1000 (AWS limit per DeleteObjects call).
+
+FRONTEND: Two-step modal in app/(master)/whitelist.tsx
+  Step 1 — Password verify modal: master enters their password, POST to
+           /api/native/organiser/login to verify
+  Step 2 — Final confirm modal: shows warning that all events/photos will be
+           permanently deleted; red Confirm button; loading overlay during delete
+
+--- CODE: src/app/api/native/whitelist/[phone]/route.ts ---
+export async function DELETE(request, { params }) {
+  const { phone } = await params;
+  const { callerPhone, password } = await request.json();
+
+  if (phone === MASTER_PHONE) {
+    return NextResponse.json({ error: "Cannot remove the master number." }, { status: 400 });
+  }
+
+  if (!await verifyMaster(callerPhone, password)) {
+    return NextResponse.json({ error: "Unauthorised." }, { status: 403 });
+  }
+
+  // Find all events owned by this phone
+  const { data: events } = await supabaseAdmin.from("events").select("id").eq("owner_phone", phone);
+  const eventIds = (events ?? []).map(e => e.id);
+
+  if (eventIds.length > 0) {
+    // Fetch all photo S3 paths
+    const { data: photos } = await supabaseAdmin.from("photos")
+      .select("storage_path, thumbnail_path, display_path").in("event_id", eventIds);
+
+    if (photos?.length) {
+      const keys = photos.flatMap(p => [p.storage_path, p.thumbnail_path, p.display_path]).filter(Boolean);
+      // Delete S3 objects in batches of 1000
+      for (let i = 0; i < keys.length; i += 1000) {
+        await s3Client.send(new DeleteObjectsCommand({
+          Bucket: S3_BUCKET,
+          Delete: { Objects: keys.slice(i, i + 1000).map(Key => ({ Key })) },
+        })).catch(() => {});
+      }
+    }
+
+    // Delete photo DB rows, then events (CASCADE handles related tables)
+    await supabaseAdmin.from("photos").delete().in("event_id", eventIds);
+    await supabaseAdmin.from("events").delete().eq("owner_phone", phone);
+  }
+
+  // Delete from whitelist
+  await supabaseAdmin.from("organiser_whitelist").delete().eq("phone", phone);
+  return NextResponse.json({ success: true });
+}
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10: GALLERY (FlashList, select mode, drag-to-select, sticky header)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Gallery uses @shopify/flash-list (not FlatList) for performance with 200+ photos.
+
+FlashList CELL RECYCLING:
+  FlatList keeps items mounted; FlashList recycles them. onLayout does NOT fire
+  for items that scroll off-screen and get recycled. Use accumulatedHeights ref
+  (not state) to store each item's height — keyed by item.key.
+
+SELECT MODE:
+  Long press → enters select mode, selects that photo.
+  Select bar appears above gallery with count, Select All, action buttons.
+  exitSelectMode() resets ALL state including myUploadsFilter.
+
+DRAG-TO-SELECT:
+  Drag left→right = SELECT, right→left = DESELECT.
+  Uses PAN gesture from react-native-gesture-handler.
+  CRITICAL: use ref.measure (NOT measureInWindow) for coordinate calculation.
+  measureInWindow on Android subtracts status bar height causing ~24dp offset.
+
+  Position calculation:
+    fingerContentY = absoluteY - flatListLayoutRef.y + scrollOffset
+
+STICKY SECTION HEADERS:
+  "Photo Gallery" and "Other Photos" headers stick to top as user scrolls.
+  NOT using FlashList's stickyHeaderIndices (caused bugs on Android).
+  Instead: scroll-driven absolute-positioned overlay with opacity:0 on in-list
+  header when sticky overlay is showing.
+
+MY UPLOADS FILTER:
+  Pill button on Photo Gallery header. Filters to current user's own uploads.
+  Disables: upload button, sort menu, long-press select, drag-to-select.
+  Keeps active: download, delete (own photos only regardless of role).
+  Resets when exitSelectMode() is called.
+
+CO-ADMIN DELETE RULES:
+  Guest → only their own photos
+  Co-Admin → any guest's photos, CANNOT delete organiser's photos
+  Organiser/Admin → all photos
+  My Uploads active → overrides all role rules
+
+--- CODE: app/event.tsx (key patterns) ---
+const accumulatedHeights = useRef<Record<string, number>>({});
+
+// Container ref — use measure() not measureInWindow()
+<View ref={flatListContainerRef} onLayout={() => {
+  flatListContainerRef.current?.measure((_x, _y, _w, _h, pageX, pageY) => {
+    flatListLayoutRef.current = { x: pageX, y: pageY };
+  });
+}}>
+
+// exitSelectMode resets everything
+function exitSelectMode() {
+  setSelectMode(false);
+  setDeleteMode(false);
+  setSelected(new Set());
+  setSelectBarSticky(false);
+  setMyUploadsFilter(false);
+  mainHeaderY.current = null;
+  otherHeaderY.current = null;
+  selectBarYRef.current = null;
+  longPressAnchorRef.current = null;
+}
+
+// CRITICAL: Sticky SectionHeader must receive myUploadsFilter + onMyUploadsToggle
+// props — otherwise the pill loses its active style when scrolling
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 11: FIND MY PHOTOS (AWS Rekognition face search)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+User takes a selfie via expo-camera, app sends base64 to backend, backend uses
+AWS Rekognition SearchFacesByImage to find matching faces across all event photos.
+
+IMPORTANT: Uses expo-camera (NOT VisionCamera) — VisionCamera was removed because
+  react-native-vision-camera-face-detector was incompatible and crashed the app.
+
+RESULTS: Returned in two sections:
+  — photos[] — matches found in Photo Gallery (dateSource = "exif")
+  — otherPhotos[] — matches found in Other Photos Gallery
+
+ANDROID EXIF ISSUE:
+  Android cropped the selfie wrong before Rekognition. Fixed by running
+  ImageManipulator to normalize orientation BEFORE cropping the oval region.
+
+--- CODE: api call (lib/api.ts) ---
+export async function findMyPhotos(slug, selfieBase64, adminPhone?, userMobile?) {
+  const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/find-my-photos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selfieBase64, ...(adminPhone ? { adminPhone } : {}), ...(userMobile ? { userMobile } : {}) }),
+  });
+  const text = await res.text();
+  try { return JSON.parse(text); } catch { return { error: 'Server returned unexpected response.' }; }
+}
+
+SCREEN SLEEP FIX:
+  expo-keep-awake activated during the Rekognition backend call to prevent
+  the screen sleeping mid-search which caused network errors.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 12: WHATSAPP OTP AUTHENTICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Authentication uses WhatsApp OTP via Meta Cloud API — NOT SMS.
+All access/permission checks use mobile number. Never use event_user_id or device_id.
+
+Flow:
+  1. User enters phone number
+  2. App calls POST /api/native/otp/send → backend sends WhatsApp message with OTP
+  3. User enters OTP
+  4. App calls POST /api/native/otp/verify → backend verifies
+  5. On success: user is registered/logged in, mobile stored in SecureStore
+
+Web app (momentsinframe.com) uses same OTP system.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 13: NOTIFICATIONS PANEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Bell icon in event screen header. Shows upload history + server notifications.
+Red dot badge when unread notifications exist.
+
+Notification types currently implemented:
+  — upload_complete: batch upload finished summary
+  — photo_upgrade: your photo was replaced by a better quality version
+  — (others deferred to future build)
+
+Server notifications stored in Supabase notifications table.
+Fetched on event screen load and marked read when panel opened.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 14: IN-APP CAMERA + LIVE FILTERS — SPEC (NOT YET CODED)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+STATUS: Full spec finalised 2026-08-13. Coding not yet started.
+This is the NEXT native build item (after splash screen fix).
+
+TECH STACK:
+  — Camera: react-native-vision-camera v5 (upgrade from current expo-camera)
+  — Filters: @shopify/react-native-skia colour matrix frame processor
+  — Worklets: react-native-worklets-core
+  — All on-device GPU processing. Zero API cost, zero licensing fee.
+  — Works identically on all phone brands, iOS and Android.
+
+BUILD ENVIRONMENT (iOS):
+  Use image: macos-tahoe-26.5-xcode-26.6
+  Earlier Xcode versions fail with Swift compiler LLVM crash on VisionCamera v5.
+
+CAMERA SCREEN LAYOUT (top to bottom):
+  1. Top bar: X (close) + flash toggle (on/off/auto) — nothing else
+  2. 3:4 viewfinder — always fixed ratio, live colour filter applied in real time
+  3. Filter section:
+     — Category tabs: Classic | Aesthetic | Film
+     — Horizontal scrollable filter strip per tab
+     — Each filter shown as circular thumbnail (static pre-baked sample photo
+       with filter applied — NOT coloured dots, NOT live frame previews)
+     — Selected filter has white border ring
+     — Filter thumbnails are OTA-updatable (just JS colour matrix values)
+  4. Bottom row: [last gallery photo] | [capture button] | [flip camera]
+
+AFTER CAPTURE:
+  — Full-screen preview shown with the captured photo
+  — Two buttons: Retake (dark) | Post (white)
+  — Post: saves photo to device gallery AND uploads to current event
+
+EVENT SCREEN ENTRY POINT:
+  — "Take Photo" button (dark outlined, left) + "Upload Photos" (yellow, right)
+  — Same row, helper text below both buttons
+
+OTHER CONFIRMED DECISIONS:
+  — No intensity slider (full strength on single tap; add OTA later if needed)
+  — No Live Photos (Apple restricts to native camera only — third-party apps cannot)
+  — Flash works on both iOS and Android via VisionCamera v5 built-in controls
+  — Standard still JPEG/HEIC with filter baked in at capture
+  — Static sample thumbnails: one gorgeous sample photo, all 20 filter matrices
+    applied to it at build time; saved as 20 tiny JPEG thumbnails inside app
+
+20 COLOUR MATRIX FILTERS (final list):
+
+  Classic (8):
+    1. Normal      — No filter
+    2. Warm        — Golden/cozy, boosts reds & oranges
+    3. Cool        — Fresh/airy, boosts blues
+    4. Vivid       — Punchy, saturated
+    5. Fade        — Matte/faded aesthetic
+    6. B&W         — Classic black and white
+    7. Drama       — High contrast, moody, deep shadows
+    8. Vintage     — Warm + faded + slight vignette
+
+  Aesthetic (8):
+    9.  Golden Hour  — Deep orange warmth, like sunset on skin
+    10. Sunset       — Pink + orange tones, popular for portraits
+    11. Teal & Orange — Cinematic look (hugely popular, used in movies)
+    12. Moody        — Dark, desaturated, cool shadows
+    13. Soft         — Gentle pastel brightening, dreamy
+    14. Rose         — Subtle pink warmth, flattering for skin
+    15. Forest       — Cool green tones, outdoorsy
+    16. Matte        — Flat, no blacks, popular on Instagram Reels
+
+  Film emulation (4):
+    17. Kodak        — Warm, slightly faded, slight yellow in highlights
+    18. Fuji         — Cool greens in shadows, clean whites
+    19. Cinematic    — High contrast, crushed blacks, slight blue
+    20. Lo-Fi        — Oversaturated, high contrast, retro feel
+
+  New filters can be added via OTA (new name + colour matrix = OTA update).
+  No native recompilation needed to add more filters after the build ships.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 15: NATIVE MODULE PACKAGE.JSON RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Every local native module in modules/ MUST have an entry in the root package.json
+or requireNativeModule returns null at runtime.
+
+  "dependencies": {
+    "photo-saver": "file:./modules/photo-saver",
+    "media-store": "file:./modules/media-store"
+  }
+
+Missing this entry → JS loads fine → native module is null → crash at call site.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 16: iOS MODAL SAFE AREA RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Inside Modals, use useSafeAreaInsets() — NOT SafeAreaView.
+SafeAreaView inside a Modal does not work correctly across all iPhone screen sizes.
+
+  import { useSafeAreaInsets } from 'react-native-safe-area-context';
+  const insets = useSafeAreaInsets();
+  // Apply insets.top / insets.bottom manually to padding
+
+Every iOS fix must have an explicit Platform.OS === 'ios' check.
+Never modify shared logic that could affect Android behaviour.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 17: DROPDOWN MENU CONSISTENCY RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+All dropdown menus must share the same design system.
+Any style or layout change to one dropdown must be applied to all three files:
+  — app/event.tsx (main event screen dropdown)
+  — app/(organiser)/manage-event.tsx (manage event dropdown)
+  — (third file — check current codebase)
+
+Never change one dropdown without checking and updating the others.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 18: BUILD + VERSION RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+— iOS and Android must stay on the same version string or OTA won't reach both.
+— Always run eas build:version:set for both platforms before every EAS build.
+  preview/testflight profiles do NOT auto-increment.
+— No local dev builds ever — all testing via TestFlight (iOS) and Play Store
+  Internal Testing (Android).
+— GitHub: never commit/push app changes before user tests on device.
+  OTA first → user confirms → then commit to GitHub.
+— After confirming: always push OTA immediately when user approves a change.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+END OF REFERENCE — 2026-08-13 02:32 IST
+Built with Expo SDK 54 · React Native 0.81.5 · Next.js 15 · Supabase · AWS S3
+================================================================================

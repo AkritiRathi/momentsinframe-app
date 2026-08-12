@@ -523,13 +523,6 @@ const styles = StyleSheet.create({
   eventExpiry: { fontSize: 12, color: Colors.textMuted },
   eventArrow: { fontSize: 22, color: Colors.accent, marginLeft: 8 },
   organiserPrefix: { color: Colors.accent, fontWeight: '700' },
-  organiserBadge: {
-    backgroundColor: '#2a2200',
-    borderRadius: 6,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  organiserBadgeText: { fontSize: 10, fontWeight: '700', color: Colors.accent },
   expiredBadge: {
     backgroundColor: '#2a1a1a',
     borderRadius: 6,

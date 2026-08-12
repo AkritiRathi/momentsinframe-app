@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
-  Modal, ActivityIndicator, Dimensions, TextInput, ScrollView,
+  Modal, ActivityIndicator, Dimensions, TextInput,
   Platform, BackHandler, AppState, RefreshControl, Alert, InteractionManager,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
@@ -522,9 +522,7 @@ export default function EventScreen() {
   const longPressAnchorRef = useRef<{ anchorFlatIndex: number; anchorContentY: number } | null>(null);
 
   // Upload
-  const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, duplicates: 0 });
-  const [uploadCancelRequested, setUploadCancelRequested] = useState(false);
   const uploadCancelledRef = useRef(false);
   const downloadCancelledRef = useRef(false);
   const bgUploadCancelledRef = useRef(false);
@@ -650,17 +648,6 @@ export default function EventScreen() {
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (isAlertVisible) return true;
-      if (uploading) {
-        showAlert(
-          'Cancel upload?',
-          'Photos uploaded so far will be saved.',
-          [
-            { text: 'Stop Upload', style: 'destructive', onPress: () => { uploadCancelledRef.current = true; setUploadCancelRequested(true); } },
-            { text: 'Keep Uploading', style: 'cancel' },
-          ]
-        );
-        return true;
-      }
       if (bgUploading) {
         showAlert(
           'Cancel upload?',
@@ -680,7 +667,7 @@ export default function EventScreen() {
       return true;
     });
     return () => sub.remove();
-  }, [selectMode, deleteMode, uploading, bgUploading, isAlertVisible]);
+  }, [selectMode, deleteMode, bgUploading, isAlertVisible]);
 
   useEffect(() => {
     const JPG_LIMIT = 40;
@@ -2045,13 +2032,6 @@ export default function EventScreen() {
             <View style={styles.eventHeaderTopRow}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <TouchableOpacity style={styles.backBtn} onPress={() => {
-                if (uploading) {
-                  showAlert('Cancel upload?', 'Photos uploaded so far will be saved.', [
-                    { text: 'Stop Upload', style: 'destructive', onPress: () => { uploadCancelledRef.current = true; setUploadCancelRequested(true); } },
-                    { text: 'Keep Uploading', style: 'cancel' },
-                  ]);
-                  return;
-                }
                 if (bgUploading) {
                   showAlert('Cancel upload?', 'Photos uploaded so far will be saved.', [
                     { text: 'Stop Upload', style: 'destructive', onPress: () => { bgUploadCancelledRef.current = true; _bgCancelled = true; setBgCancelRequested(true); } },

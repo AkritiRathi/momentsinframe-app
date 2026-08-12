@@ -40,14 +40,6 @@ async function del(path: string, body: object) {
   return res.json();
 }
 
-async function postRaw(path: string, body: object): Promise<Response> {
-  return fetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-}
-
 // Organiser API
 export async function organiserSetup(phone: string, name: string, password: string) {
   return post('/api/native/organiser/setup', { phone, name, password });
@@ -227,13 +219,6 @@ export async function clearAllowedGuests(slug: string, organiserPhone: string, o
 
 export async function clearJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string) {
   return del(`/api/native/events/${slug}/joined-guests`, { organiserPhone, organiserPassword });
-}
-
-export async function listJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean; photo_count: number; role: 'organiser' | 'coadmin' | 'user' }[]; owner_phone?: string; total_photo_count?: number; error?: string }> {
-  return get(`/api/native/events/${slug}/joined-guests`, {
-    'x-organiser-phone': organiserPhone,
-    'x-organiser-password': organiserPassword,
-  });
 }
 
 export async function setGuestBlocked(slug: string, mobile: string, isBlocked: boolean, organiserPhone: string, organiserPassword: string): Promise<{ success?: boolean; error?: string }> {

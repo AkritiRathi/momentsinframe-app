@@ -6,8 +6,8 @@ function makeTimeout(ms: number) {
   return { signal: controller.signal, clear: () => clearTimeout(id) };
 }
 
-async function post(path: string, body: object) {
-  const { signal, clear } = makeTimeout(15000);
+async function post(path: string, body: object, ms = 15000) {
+  const { signal, clear } = makeTimeout(ms);
   try {
     const res = await fetch(`${API_BASE_URL}${path}`, {
       method: 'POST',
@@ -149,7 +149,7 @@ export async function getUploadUrl(eventSlug: string, filename: string, contentT
 }
 
 export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, uploaderMobile?: string, uploaderName?: string, eventUserId?: string) {
-  return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId });
+  return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId }, 60000);
 }
 
 export async function deletePhotos(slug: string, photoIds: string[], uploaderMobile?: string, eventUserId?: string, deviceId?: string, adminPhone?: string) {

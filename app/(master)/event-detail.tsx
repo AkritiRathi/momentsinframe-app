@@ -21,6 +21,13 @@ function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function formatStorage(bytes: number): string {
+  if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} GB`;
+  if (bytes >= 1_048_576) return `${(bytes / 1_048_576).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
 type Coadmin = { phone: string; name: string | null; appName?: string | null; added_at: string };
 type AllowedGuest = { phone: string; name: string | null; appName?: string | null; added_at: string; photo_count?: number };
 
@@ -30,7 +37,7 @@ export default function EventDetailScreen() {
   const { showAlert, alertOverlay } = useAlert();
   const params = useLocalSearchParams<{
     id: string; name: string; slug: string; join_code: string;
-    created_at: string; expires_at: string; photo_count: string;
+    created_at: string; expires_at: string; photo_count: string; total_size_bytes: string;
     is_closed: string; allow_guest_delete: string; view_only: string; find_my_photos: string; organiserPhone: string;
   }>();
 
@@ -660,7 +667,7 @@ export default function EventDetailScreen() {
         <Text style={styles.eventName}>{params.name}</Text>
         <Text style={[styles.eventSub, { marginBottom: 4 }]}>Created: {formatDate(params.created_at)} · Expires: {formatDate(params.expires_at)}</Text>
         <Text style={styles.eventSub}>
-          {params.photo_count} photos · Event Code: <Text style={styles.codeHighlight}>{params.join_code}</Text>
+          {params.photo_count} photos · {formatStorage(parseInt(params.total_size_bytes ?? '0', 10))} · Event Code: <Text style={styles.codeHighlight}>{params.join_code}</Text>
         </Text>
 
         <Text style={styles.sectionLabel}>SHARE</Text>

@@ -24,6 +24,7 @@ type Event = {
   view_only: boolean;
   find_my_photos_enabled: boolean;
   photo_count: number;
+  total_size_bytes: number;
 };
 
 function formatDate(iso: string) {
@@ -131,6 +132,7 @@ export default function DashboardScreen() {
         created_at: item.created_at,
         expires_at: item.expires_at,
         photo_count: String(item.photo_count),
+        total_size_bytes: String(item.total_size_bytes ?? 0),
         is_closed: item.is_closed ? 'true' : 'false',
         allow_guest_delete: item.allow_guest_delete ? 'true' : 'false',
         view_only: item.view_only ? 'true' : 'false',

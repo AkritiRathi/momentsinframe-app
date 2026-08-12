@@ -225,6 +225,20 @@ export async function pruneUploadNotifications(slug: string, eventExpiresAt: str
   } catch {}
 }
 
+// ── New Photo Badge ───────────────────────────────────────────────────────────
+
+export async function getLastVisitedAt(slug: string): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(`mif_last_visited_${slug}`);
+  } catch { return null; }
+}
+
+export async function saveLastVisitedAt(slug: string, isoTimestamp: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(`mif_last_visited_${slug}`, isoTimestamp);
+  } catch {}
+}
+
 export async function mergeUploadNotification(
   slug: string,
   id: string,

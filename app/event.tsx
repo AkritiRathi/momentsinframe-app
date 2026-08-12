@@ -37,6 +37,7 @@ import {
   deleteUploadNotification, mergeUploadNotification, clearAllUploadNotifications,
   pruneUploadNotifications, UploadNotification,
   saveLastEvent, clearLastEvent,
+  getLastVisitedAt, saveLastVisitedAt,
 } from '../lib/storage';
 import { getOrganiserPassword } from '../lib/auth';
 import { setupNotifications, showUploadCompleteNotification, showDownloadCompleteNotification } from '../lib/notifications';
@@ -60,6 +61,7 @@ type Photo = {
   original_filename: string;
   uploaded_by_name: string | null;
   uploaded_by_mobile: string | null;
+  uploaded_at: string | null;
 };
 
 type PhotoUrls = {
@@ -120,7 +122,7 @@ function daysUntil(iso: string): number {
 
 import { buildDownloadFilename } from '../lib/downloadFilename';
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther, hideMyUploads }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther, hideMyUploads, newCount }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -135,6 +137,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   onMyUploadsToggle?: () => void;
   showMyUploadsOnOther?: boolean;
   hideMyUploads?: boolean;
+  newCount?: number;
 }) {
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
@@ -152,6 +155,11 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Text style={styles.sectionTitle}>{label}</Text>
             <Text style={styles.sectionCount}>{items.length}</Text>
+            {!myUploadsFilter && newCount != null && newCount > 0 && (
+              <View style={styles.newSectionBadge}>
+                <Text style={styles.newSectionBadgeText}>{newCount} new</Text>
+              </View>
+            )}
           </View>
           {(isMain || showMyUploadsOnOther) && !hideMyUploads && (
             <TouchableOpacity
@@ -458,6 +466,9 @@ export default function EventScreen() {
   const [eventUserId, setEventUserId] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [newlyUploadedIds, setNewlyUploadedIds] = useState<Set<string>>(new Set());
+  const [newPhotoIds, setNewPhotoIds] = useState<Set<string>>(new Set());
+  const [newMainCount, setNewMainCount] = useState(0);
+  const [newOtherCount, setNewOtherCount] = useState(0);
   const [uploadSummary, setUploadSummary] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [deletingPhoto, setDeletingPhoto] = useState(false);
@@ -687,6 +698,10 @@ export default function EventScreen() {
     setLoading(true);
     setUploadSummary(null);
     setNewlyUploadedIds(new Set());
+    setNewPhotoIds(new Set());
+    const visitedAt = new Date().toISOString();
+    const lastVisitedAt = await getLastVisitedAt(slug);
+    await saveLastVisitedAt(slug, visitedAt);
     async function attempt() {
       const data = await getEventPhotos(slug, params.adminPhone || undefined, userMobileRef.current ?? undefined);
       if (data.error) { setLoading(false); showAlert('Error', data.error); return; }
@@ -694,6 +709,17 @@ export default function EventScreen() {
       const other: Photo[] = data.otherPhotos ?? [];
       setPhotos(main);
       setOtherPhotos(other);
+      if (lastVisitedAt) {
+        const newMain = main.filter(p => p.uploaded_at && p.uploaded_at > lastVisitedAt);
+        const newOther = other.filter(p => p.uploaded_at && p.uploaded_at > lastVisitedAt);
+        setNewMainCount(newMain.length);
+        setNewOtherCount(newOther.length);
+        setNewPhotoIds(new Set([...newMain.map(p => p.id), ...newOther.map(p => p.id)]));
+      } else {
+        setNewMainCount(0);
+        setNewOtherCount(0);
+        setNewPhotoIds(new Set());
+      }
       if (data.event) {
         if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
         if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
@@ -981,7 +1007,7 @@ export default function EventScreen() {
     }
   }, [selectMode, deleteMode]);
 
-  function exitSelectMode() {
+  function exitSelectMode(skipLoad = false) {
     setSelectMode(false);
     setDeleteMode(false);
     setSelected(new Set());
@@ -993,7 +1019,7 @@ export default function EventScreen() {
     otherHeaderY.current = null;
     selectBarYRef.current = null;
     longPressAnchorRef.current = null;
-    loadPhotos();
+    if (!skipLoad) loadPhotos();
   }
 
   function updateSectionPositions() {
@@ -1484,7 +1510,7 @@ export default function EventScreen() {
             ? await deletePhotos(slug, ids, undefined, undefined, undefined, userMobile ?? undefined)
             : await deletePhotos(slug, ids, userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
           if (result.error) { showAlert('Error', result.error); return; }
-          exitSelectMode();
+          exitSelectMode(true);
           await loadPhotos();
         },
       },
@@ -1986,7 +2012,7 @@ export default function EventScreen() {
         section={section}
         thumbUrl={urls?.thumbUrl ?? null}
         isSelected={selected.has(photo.id)}
-        isNew={newlyUploadedIds.has(photo.id)}
+        isNew={newlyUploadedIds.has(photo.id) || newPhotoIds.has(photo.id)}
         selectMode={selectMode}
         deleteMode={deleteMode}
         onPress={handleThumbPress}
@@ -2190,6 +2216,7 @@ export default function EventScreen() {
               myUploadsFilter={myUploadsFilter}
               showMyUploadsOnOther={item.section === 'other' && (photos.length === 0 || (myUploadsFilter && !!userMobile && !photos.some(p => p.uploaded_by_mobile === userMobile)))}
               hideMyUploads={viewOnly && !isAdmin}
+              newCount={item.section === 'main' ? newMainCount : newOtherCount}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
                 if (!myUploadsFilter) {
@@ -2600,7 +2627,7 @@ export default function EventScreen() {
               <RefreshControl
                 refreshing={refreshing}
                 onRefresh={async () => {
-                  exitSelectMode();
+                  exitSelectMode(true);
                   setRefreshing(true);
                   setNewlyUploadedIds(new Set());
                   setUploadSummary(null);
@@ -2645,6 +2672,7 @@ export default function EventScreen() {
               myUploadsFilter={myUploadsFilter}
               showMyUploadsOnOther={stickySection === 'other' && (photos.length === 0 || (myUploadsFilter && !!userMobile && !photos.some(p => p.uploaded_by_mobile === userMobile)))}
               hideMyUploads={viewOnly && !isAdmin}
+              newCount={stickySection === 'main' ? newMainCount : newOtherCount}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
                 if (!myUploadsFilter) {
@@ -3211,6 +3239,8 @@ const styles = StyleSheet.create({
   thumb: { width: THUMB_SIZE, height: THUMB_SIZE, backgroundColor: '#1a1a1a' },
   newBadge: { position: 'absolute', top: 5, left: 5, backgroundColor: '#22C55E', borderRadius: 99, paddingHorizontal: 6, paddingVertical: 2 },
   newBadgeText: { fontSize: 9, fontWeight: '800', color: '#fff', letterSpacing: 0.3 },
+  newSectionBadge: { backgroundColor: '#22C55E', borderRadius: 99, paddingHorizontal: 8, paddingVertical: 2 },
+  newSectionBadgeText: { fontSize: 11, fontWeight: '700', color: '#fff', letterSpacing: 0.2 },
   thumbImage: { width: '100%', height: '100%' },
   thumbSkeleton: { flex: 1, backgroundColor: '#252525' },
   checkbox: { position: 'absolute', top: 5, right: 5, width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: 'rgba(255,255,255,0.8)', backgroundColor: 'rgba(255,255,255,0.5)', alignItems: 'center', justifyContent: 'center' },

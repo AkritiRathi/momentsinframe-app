@@ -1,0 +1,1454 @@
+================================================================================
+MOMENTSINFRAME — COMPLETE AI BRIEFING REFERENCE
+Last updated: 2026-08-13
+================================================================================
+
+READ THIS FIRST — THE SINGLE MOST IMPORTANT RULE IN THIS FILE
+================================================================================
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                  CRITICAL RULE — NO EXCEPTIONS WHATSOEVER
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+NEVER make any code change without EXPLICIT user approval in that SAME turn.
+
+WHAT YOU MUST DO before writing, editing, or running ANYTHING:
+  1. Explain what the problem or task is IN PLAIN ENGLISH
+  2. List every single file or action you plan to take
+  3. Ask "Shall I go ahead?" (or equivalent)
+  4. WAIT. Do not touch any tool until the user says yes.
+
+WHAT COUNTS AS APPROVAL:
+  - "yes", "go ahead", "do it", "sure", or clear equivalent
+
+WHAT DOES NOT COUNT AS APPROVAL:
+  - Discussion, analysis, options, questions, screenshots, silence, complaints
+
+THE USER STATED THIS RULE THREE TIMES. IT HAS BEEN VIOLATED BEFORE. THE
+CONSEQUENCE IS WASTED BUILDS, WASTED MONEY, AND LOSS OF TRUST.
+
+ADDITIONAL RULE: All logic must be explained in PLAIN ENGLISH BEFORE any code
+is mentioned. Never lead with code, file paths, or technical jargon.
+
+ADDITIONAL RULE: When presenting options, ALWAYS number them (1. 2. 3.) so the
+user can reply by number. Never use unnumbered bullets.
+
+ADDITIONAL RULE: When the user says "point X remains the same," they mean the
+app behaviour stays unchanged — NOT that the point should be removed from a list.
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+================================================================================
+SECTION 1: PROJECT OVERVIEW
+================================================================================
+
+App name: MomentsInFrame
+Type: Production-grade native mobile app (NOT a prototype)
+Bundle ID: com.momentsinframe.app
+
+REPOS:
+- Mobile app: https://github.com/AkritiRathi/momentsinframe-app
+- Backend/web: https://github.com/AkritiRathi/onealbum-trial
+
+TECH STACK:
+- Mobile: Expo SDK 54, React Native 0.81.5, New Architecture enabled
+- Routing: expo-router (file-based)
+- Backend: Next.js 15, TypeScript
+- Database: Supabase (PostgreSQL), free tier
+- Photo storage: AWS S3, Mumbai region (ap-south-1), bucket: wedding-app-trial
+- S3 Transfer Acceleration: ENABLED (useAccelerateEndpoint: true in src/lib/s3.ts)
+- Face search: AWS Rekognition, same Mumbai region
+- OTP: Meta Cloud API (WhatsApp), template name: momentsinframe_otp
+- Deployment: Vercel Pro (3 regions: bom1 Mumbai, sin1 Singapore, fra1 Frankfurt)
+
+CURRENT LIVE VERSION: v2.0.5
+- iOS: Build 38 — TestFlight (submitted 2026-08-11)
+- Android: Build 21 — Play Store Internal Testing
+
+DEVELOPER/PUBLISHER EMAIL: developerakr@gmail.com
+PERSONAL EMAIL: saurabhrathis4@gmail.com (never use as public contact)
+SUPPORT EMAIL: support@momentsinframe.com
+PRIVACY POLICY: https://sites.google.com/view/momentsinframeprivatepolicy
+
+
+================================================================================
+SECTION 2: CRITICAL OPERATIONAL RULES
+================================================================================
+
+--- OTA UPDATES ---
+
+ALWAYS push OTA to --branch preview, NEVER production.
+  Command: npx eas update --branch preview --message "..."
+Reason: The installed app (APK/IPA) was built with channel: "preview" in eas.json.
+Pushing to production silently succeeds but the app never receives the update.
+
+--- TESTING / DISTRIBUTION ---
+
+ALL testing is done EXCLUSIVELY via:
+- iOS: TestFlight (Apple Developer account active since 2026-07-07)
+- Android: Play Store Internal Testing
+
+NEVER suggest:
+- Local dev builds
+- Expo Go
+- Simulators or emulators
+- Direct APK download
+- Direct EAS link installation
+
+--- BUILD COMMANDS ---
+
+iOS:
+  eas build --platform ios --profile testflight --non-interactive
+  eas submit --platform ios --profile production --latest
+  iOS build image (REQUIRED for VisionCamera v5): macos-tahoe-26.5-xcode-26.6
+
+Android:
+  eas build --platform android --profile preview --non-interactive
+  Upload AAB to Play Console → Internal Testing track
+  Profile MUST use buildType: "app-bundle" (AAB), NOT apk
+
+--- BUILD VERSION NUMBERS — CRITICAL ---
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+TWO SEPARATE THINGS — DO NOT CONFUSE THEM:
+
+1. VERSION STRING (e.g., "2.0.5") — SET BY THE USER, MUST BE CONFIRMED
+   - The human-readable version shown in the store listing
+   - The user decides this. NEVER assume or suggest a version string.
+   - Before EVERY native build, ask: "What version string should I use?"
+     Then WAIT for the user's answer before running any build command.
+   - iOS and Android MUST use the same version string or OTA won't reach
+     both platforms.
+
+2. BUILD NUMBER (e.g., iOS 38, Android 21) — AUTO-INCREMENTS, NO ACTION NEEDED
+   - The internal store build counter (iOS buildNumber, Android versionCode)
+   - Auto-increments automatically via autoIncrement: true in eas.json
+   - Do NOT run eas build:version:set — it is NOT needed or correct
+   - Do NOT suggest or set a build number manually
+   - EAS handles this entirely on its own when the build runs
+
+Current as of 2026-08-13:
+   Version string: 2.0.5
+   iOS build number: 38 (auto-increments on next build)
+   Android build number: 21 (auto-increments on next build)
+
+eas.json has appVersionSource: "remote" — versionCode in app.json is IGNORED.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+--- COMMIT / PUSH RULES ---
+
+NEVER commit or push to GitHub BEFORE the user tests on device.
+ONLY commit/push after the user confirms the OTA or build works.
+Sequence: Push OTA → user tests → user confirms → then commit + push to GitHub.
+
+--- PLATFORM GATE RULE (iOS vs Android) ---
+
+Every iOS-only fix must be wrapped in: if (Platform.OS === 'ios') { ... }
+NEVER modify shared logic that could silently affect Android.
+Android was stable. Any unguarded change risks breaking it.
+
+--- MOBILE NUMBER IS IDENTITY ---
+
+All access and permission checks must use mobile number as identity.
+NEVER use event_user_id or device_id as the primary permission gate.
+Mobile number persists across reinstalls and device changes.
+Server checks: uploaded_by_mobile, owner_phone, mobile
+Client passes: uploaderMobile, organiserPhone
+
+--- MODAL SAFE AREA (iOS) ---
+
+Inside a React Native Modal, SafeAreaView does NOT reliably receive correct
+insets on iOS. Use this pattern instead:
+  const insets = useSafeAreaInsets();
+  <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+Works across all iPhone screen types (SE, notch, Dynamic Island).
+
+--- DROPDOWN MENU CONSISTENCY ---
+
+All dropdown menus must share the SAME design. A change to one must be applied
+to ALL three files:
+  - app/(auth)/home.tsx (gear ⚙ menu)
+  - app/(master)/event-detail.tsx (gear ⚙ menu)
+  - app/event.tsx (three-dot ⋮ menu)
+
+Standard design:
+  Backdrop: flex: 1, backgroundColor: 'rgba(0,0,0,0.5)'
+  Sheet: backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 0.5,
+         borderColor: '#333', overflow: 'hidden' — NO minWidth, NO fixed width
+  Row: paddingHorizontal: 16, paddingVertical: 14, flexDirection: 'row',
+       alignItems: 'center', gap: 12
+  Row text: fontSize: 14, fontWeight: '600', color: Colors.white
+  Divider: height: 0.5, backgroundColor: '#333'
+  Position: measured via .measure() → { top: pageY + height + 4,
+            right: screenWidth - pageX - width }
+
+--- LOCAL NATIVE MODULES ---
+
+Every local native module in modules/ MUST be in package.json:
+  "background-upload": "file:./modules/background-upload"
+  "photo-saver": "file:./modules/photo-saver"
+After adding: run npm install (creates symlink in node_modules).
+This requires a full EAS build — NOT OTA.
+
+--- BUILD ERROR LOGS ---
+
+If an EAS build fails and the logs cannot be read directly, ask the user to
+paste the relevant log lines into the chat. Never guess the root cause from
+a build failure without seeing the actual error. Never suggest re-running the
+build before diagnosing the error.
+
+--- momentsinframe.com PUBLISH RULE ---
+
+ALWAYS show preview and get explicit approval before publishing anything to
+momentsinframe.com / Vercel (the live web app).
+
+--- UPDATE MEMORY IMMEDIATELY ---
+
+Update feature memory files, MEMORY.md, and pending tasks the moment a feature
+is done or dropped — never wait until the next session.
+
+
+================================================================================
+SECTION 3: INFRASTRUCTURE DETAILS
+================================================================================
+
+AWS S3:
+  Bucket: wedding-app-trial
+  Region: ap-south-1 (Mumbai)
+  Transfer Acceleration: ENABLED
+  Cost: ~$0.23/month per 10GB stored
+  No storage cap — scales infinitely
+
+Supabase (PostgreSQL):
+  Free tier — 500MB DB storage
+  Service-role client: src/lib/supabase-admin.ts
+  Session persistence disabled in service client (server-only)
+
+Vercel:
+  Plan: Pro ($20/month)
+  Regions: bom1 (Mumbai), sin1 (Singapore), fra1 (Frankfurt)
+  Photos upload directly from the phone to S3 — Vercel only generates presigned URLs
+
+AWS Rekognition:
+  Region: ap-south-1 (same as S3)
+  IAM policy: MomentsInFrameRekognition
+  Permissions: rekognition:CompareFaces + rekognition:DetectFaces
+  Cost: ~$0.001 per API call. 100-photo search ≈ ₹8.5; 500-photo search ≈ ₹42
+  1M free calls/month for first 12 months
+
+Android App Signing — SHA-256:
+  A7:56:AD:BB:AA:8E:0C:53:9F:B2:F7:EB:02:68:83:45:0D:BC:47:37:80:27:
+  8D:A9:FE:2D:85:AB:E1:16:BD:51
+
+Play Store App Signing link:
+  https://play.google.com/console/u/1/developers/8973303414677089705/
+  app/4975488135697444456/keymanagement
+
+S3 vs R2 migration: PARKED — evaluate later, needs proper cost/speed comparison.
+
+
+================================================================================
+SECTION 4: TWO-PHASE UPLOAD — HOW IT WORKS
+================================================================================
+
+ENGLISH EXPLANATION:
+Uploading a photo happens in two steps. In step 1, the app asks the backend for
+a secure temporary URL (a "presigned URL") that points directly to S3. In step 2,
+the app uploads the photo file directly to S3 using that URL — the backend never
+touches the actual photo data in this step. Once S3 has the file, the app tells
+the backend "it's uploaded, please process it." The backend then does all the
+heavy work: checking for duplicates, converting formats, extracting dates, and
+saving the final record to the database.
+
+PHASE 1 — Get presigned URL:
+  POST /api/upload-url
+  - Validates event exists
+  - Generates staging key: staging/{eventId}/{uuid}.{ext}
+  - Returns presigned PUT URL (15-minute expiry)
+  Files: src/app/api/upload-url/route.ts
+
+PHASE 2 — Process upload:
+  POST /api/upload
+  - Backend fetches file from S3 staging key
+  - Runs EXIF extraction (extractBestDate)
+  - Converts HEIC → JPEG if needed
+  - Strips GPS data (privacy)
+  - Computes pHash for duplicate detection
+  - Checks for duplicates and runs quality upgrade logic
+  - Moves file from staging/ to final location
+  - Writes record to Supabase photos table
+  - Sends upgrade notification if a higher-quality version replaced an old one
+  - Timeout: 60 seconds (client-side) — NOT the default 15s
+  Files: src/app/api/upload/route.ts
+
+IMPORTANT TIMEOUT RULE:
+processUpload() in lib/api.ts uses 60000ms (60s) timeout.
+ALL other API calls use the default 15000ms (15s) timeout.
+This is because processUpload does pHash + S3 move + DB write which can exceed 15s.
+
+Upload concurrency:
+  Individual upload: sequential (one at a time)
+  Upload by date: 3 at a time (CONCURRENCY=3)
+
+Pre-check (Upload by date only):
+  Before calling backend, app checks if filename already exists in event.
+  This is a LOCAL check using cached filenames — no backend call.
+  Note: individual upload via image picker may return different filenames than
+  Upload by date via MediaLibrary for the same photo (Android system behaviour).
+  The backend pHash detection catches these as duplicates anyway.
+
+
+================================================================================
+SECTION 5: PHOTO CLASSIFICATION — dateSource SYSTEM
+================================================================================
+
+ENGLISH EXPLANATION:
+Every photo is classified into one of two galleries — "Photos Gallery" (main
+timeline) or "Other Photos" — based on WHERE its date came from. Photos that
+have a verified date from camera EXIF data AND have a camera Make field (like
+"Apple" or "samsung") go to Photos Gallery. Everything else (screenshots,
+WhatsApp copies, files without full EXIF) goes to Other Photos.
+
+dateSource values:
+  "exif"        → Photos Gallery (real camera photo, trustworthy timestamp)
+  "file_meta"   → Other Photos (file system date, not trustworthy)
+  "upload_time" → Other Photos (no date info at all)
+
+How dateSource is assigned (in src/lib/exif.ts → extractBestDate):
+  1. Parse DateTimeOriginal / CreateDate AND the Make field from EXIF
+  2. If date found AND Make is present → "exif" (real camera photo)
+  3. If date found but NO Make → fall through (screenshot: has date, no camera)
+  4. If no EXIF date → "file_meta" from file system creation/modification time
+  5. If file stat fails → "upload_time"
+
+Why the Make check matters:
+  iOS and Android screenshots embed DateTimeOriginal (time of screenshot) but
+  have NO camera Make field. Before the Make check was added (2026-08-13),
+  screenshots appeared in Photos Gallery. Real camera photos always have
+  Make: "Apple" / Make: "samsung" / etc.
+
+WhatsApp HD photos:
+  In ~99% of cases, WhatsApp strips EXIF entirely → dateSource = "file_meta"
+  → Other Photos (already correct). In ~1% of cases WhatsApp preserves full
+  EXIF including Make → treated as real camera photo. Acceptable.
+
+belongsInMainTimeline(dateSource):
+  Returns true only for "exif". Used to decide which gallery a photo goes in.
+
+
+================================================================================
+SECTION 6: DUPLICATE DETECTION AND QUALITY UPGRADE
+================================================================================
+
+ENGLISH EXPLANATION:
+When a photo is uploaded, the backend computes a "perceptual hash" (pHash) —
+a compact fingerprint of what the image looks like. It then compares this
+fingerprint against all existing photos in the event. If two photos look very
+similar (within a Hamming distance threshold), they're considered duplicates.
+Instead of rejecting the new photo, the system checks which version is better
+quality (higher resolution, bigger file size) and keeps only the best one.
+
+Files: src/lib/duplicate-detection.ts
+
+pHash computation:
+  - Resize to 32×32 grayscale
+  - Apply DCT (discrete cosine transform)
+  - Compare pixel values to mean → binary hash
+  - Result: 64-bit hash stored as hex string
+
+Hamming distance:
+  How many bits differ between two pHash values.
+  Lower = more similar. Threshold varies by scenario (see below).
+
+isDuplicate logic — three scenarios based on dateSource:
+
+  bothHaveExif (both are real camera photos):
+    - Hamming distance ≤ 10 AND timestamp gap ≤ 2 seconds → duplicate
+    - Hamming distance ≤ 10 AND timestamp gap > 2 seconds → NOT duplicate
+      (burst shot protection — different frames, same scene)
+    - Hamming distance > 10 → NOT duplicate
+
+  oneHasExif (one real camera, one WhatsApp/processed copy):
+    - Hamming distance ≤ 10 → duplicate
+    - Hamming distance > 10 → NOT duplicate
+
+  neitherHasExif (both screenshots/processed):
+    - Hamming distance === 0 (pixel-perfect match) → duplicate
+    - Hamming distance > 0 → NOT duplicate (different screenshots)
+
+Quality upgrade (resolveDuplicate — keep_new):
+  When a duplicate is found, pick the BETTER version:
+  - "exif" source always beats "file_meta" / "upload_time" on trustworthiness
+  - Between same dateSource: larger file size wins
+  - A screenshot can NEVER replace a real camera photo
+  - The winning photo replaces the existing one in S3 and DB
+  - The original uploader receives a server notification: "your photo was
+    replaced by a higher quality version"
+
+
+================================================================================
+SECTION 7: GPS STRIPPING (PRIVACY)
+================================================================================
+
+ENGLISH EXPLANATION:
+Before saving any photo to S3, the backend removes all GPS location data from
+the EXIF metadata. This is a privacy measure — guests should not have their
+precise location exposed to strangers via photo metadata.
+
+Function: stripGpsExif() in src/lib/image-processing.ts
+  - Reads EXIF bytes from JPEG
+  - Removes GPS IFD data
+  - Rewrites EXIF without GPS
+  - All other EXIF (dates, camera make, etc.) preserved
+  - Called during processUpload before final S3 write
+
+
+================================================================================
+SECTION 8: OTP VERIFICATION (WhatsApp)
+================================================================================
+
+ENGLISH EXPLANATION:
+When a user tries to log in or register, the app sends their phone number to the
+backend. The backend generates a random 6-digit code, stores it in the database
+with a 5-minute expiry, and sends it to the user via WhatsApp using Meta's
+Cloud API. The user enters the code in the app. The app sends the code to the
+backend to verify. If it matches and hasn't expired, the user is authenticated.
+
+Backend:
+  POST /api/native/otp/send
+  - Generates 6-digit code
+  - Stores in otp_codes table with 5-minute expiry
+  - Sends via Meta Cloud API WhatsApp template: momentsinframe_otp
+
+  POST /api/native/otp/verify
+  - Checks code matches and hasn't expired
+
+App functions (lib/api.ts):
+  sendOtp(phone) — throws if backend returns error
+  verifyOtp(phone, code) — throws if backend returns error
+
+Environment variables needed:
+  WHATSAPP_ACCESS_TOKEN
+  WHATSAPP_PHONE_NUMBER_ID
+  WHATSAPP_TEMPLATE_NAME (= momentsinframe_otp)
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN
+  CRON_SECRET
+
+
+================================================================================
+SECTION 9: FIND MY PHOTOS (IMPLEMENTED — 2026-08-08)
+================================================================================
+
+ENGLISH EXPLANATION:
+An organiser can enable a "Find My Photos" feature for their event. When enabled,
+any guest can open their camera in the app, take a selfie, and the app will
+automatically find all event photos where they appear. It uses AWS Rekognition's
+face comparison — comparing the selfie against every event photo — and shows
+results in a two-section gallery. The selfie is never saved anywhere.
+
+How it works step by step:
+  1. Organiser enables "Find My Photos" toggle in Manage Event → SETTINGS section
+  2. Guest taps ⋮ menu → "My Photos" option (only visible when feature is enabled)
+  3. Guest takes selfie
+  4. DetectFaces guard runs: must detect exactly 1 face or search is aborted
+  5. Selfie sent as base64 to POST /api/native/events/{slug}/find-my-photos
+  6. Backend fetches all event photo S3 keys from Supabase
+  7. CompareFaces called for each photo (CONCURRENCY=5 batches)
+  8. Similarity threshold: 80%
+  9. Results returned as two arrays: photos (dateSource=exif) and otherPhotos
+  10. Results displayed in two-section screen, oldest first
+  11. User can drag-to-select and download (no delete on this screen for anyone)
+  12. Selfie discarded after search completes
+
+Delete rule: NO delete button for anyone (including organiser) on Find My Photos
+screen. The screen's sole job is find + download. Organiser deletes from main gallery.
+
+DB column: find_my_photos_enabled boolean default false on events table
+
+Current camera: expo-camera (CameraView) — replaced VisionCamera after crash fix
+  (2026-08-11, commit ac3fac9)
+Red/green face oval: DEFERRED to next native build
+
+Screen file: app/my-photos.tsx
+Backend: src/app/api/native/events/[slug]/find-my-photos/route.ts
+
+
+================================================================================
+SECTION 10: UPLOAD — INDIVIDUAL UPLOAD AND UPLOAD BY DATE
+================================================================================
+
+ENGLISH EXPLANATION:
+There are two ways to upload photos. "Individual upload" uses the system image
+picker (like any other app's file chooser) — the user taps Upload Photos and
+selects up to 40 photos from any album. "Upload by date" lets the user pick a
+calendar date and automatically uploads all camera photos from that day.
+
+The filename problem:
+  On Android, the system image picker sometimes renames files to generic IDs
+  (e.g., "43911.jpg") instead of using the original filename (e.g.,
+  "20260614_190514.jpg"). Upload by date uses MediaLibrary directly and always
+  gets the original filename. This means the pre-check in Upload by date may
+  not recognise photos already uploaded individually (filename mismatch).
+  The pHash backend catches them as duplicates anyway — no wrong data is stored.
+  Status: PARKED — harmless in practice.
+
+Individual upload (app/event.tsx → Upload Photos button):
+  - System image picker, up to 40 photos
+  - Sequential upload
+  - Shows duplicate/upgrade review popup after
+
+Upload by date (app/event.tsx → Upload by date option):
+  - User selects date from calendar
+  - App scans Camera roll for all assets on that date
+  - Pre-check: skips filenames already in event (local check, no backend call)
+  - Uploads remaining 3 at a time (CONCURRENCY=3)
+  - Backend duplicate detection still runs on each
+
+
+================================================================================
+SECTION 11: NOTIFICATIONS SYSTEM
+================================================================================
+
+TWO TYPES OF NOTIFICATIONS:
+
+1. LOCAL NOTIFICATIONS (lib/notifications.ts, expo-notifications):
+   - Fires on the same device only
+   - Used for: upload complete, download complete
+   - scheduleNotificationAsync — triggers after process finishes
+
+2. SERVER NOTIFICATIONS (Supabase notifications table + /api/native/notifications):
+   - Poll-based (app fetches when event screen opens)
+   - Used for: photo quality upgrade alerts ("your photo was replaced")
+   - Bell icon panel shows these with red dot badge
+   - Expires 48 hours after creation
+   - User can mark read, delete individual, or delete all
+
+Bell icon panel (in-app):
+   - Opens modal showing notification history
+   - Red dot clears when panel is opened
+   - API: GET/PATCH/DELETE /api/native/notifications
+
+NOT BUILT YET — Push notifications:
+   Push notifications are scoped to 4 specific types only (see PENDING TASKS).
+   No Expo push tokens stored anywhere. No remote delivery yet.
+
+
+================================================================================
+SECTION 12: WHITELIST SYSTEM AND MASTER ADMIN
+================================================================================
+
+ENGLISH EXPLANATION:
+Only phone numbers on the whitelist can create organiser accounts. The whitelist
+is managed by the master admin (Akriti). There is a separate master password
+that unlocks the master admin dashboard — this is different from any event's
+organiser password.
+
+Whitelist table: organiser_whitelist in Supabase
+Master dashboard: app/(master)/ screens (only accessible with master password)
+
+Whitelist delete cascade (implemented 2026-08-13, commit 4318dbb):
+  When master removes a number from whitelist:
+  1. All events owned by that number → all S3 photos deleted
+  2. All photo DB records for those events deleted
+  3. All event records deleted
+  4. App user account is NOT deleted (they can still use the app as a guest)
+  Flow: master enters password to confirm → final confirm modal → loading overlay
+  Backend: DELETE /api/native/whitelist/{phone}
+
+
+================================================================================
+SECTION 13: ROLES AND PERMISSIONS
+================================================================================
+
+ROLES (per event):
+  - Organiser: created the event, full control (view all, delete any, manage guests,
+    manage settings, manage co-admins, cannot be blocked, cannot be demoted)
+  - Co-Admin: promoted by organiser, admin toolbar access, can delete any photo,
+    cannot add other co-admins, cannot delete the event, cannot block organiser
+  - Guest: joined via event code, uploads own photos, can delete own photos
+    (if organiser allows), can be blocked
+
+ADMIN TOOLBAR visibility:
+  - Shown only if logged-in phone number matches organiser OR any co-admin
+  - Plain guests never see it
+
+Co-Admin management:
+  - Organiser adds phone numbers as co-admins from Manage Event screen
+  - Co-admin accesses event normally (enter event code), app auto-recognises their number
+  - Co-admin cannot be blocked by other co-admins (only by organiser)
+  - Co-admin events do NOT appear on their All Events page (only created events do)
+
+Guest blocking:
+  - Blocked guests can still view photos but cannot upload
+  - Block/unblock from Manage Guests screen
+
+Allow Guest Delete toggle:
+  - Organiser toggle: "Allow guests to delete their own photos"
+  - ON by default
+  - When OFF: Delete Photos button hidden for all guests
+  - Co-admins and organiser ALWAYS have delete regardless of this toggle
+
+Event settings (SETTINGS section in Manage Event):
+  1. Allow Guest Delete toggle
+  2. Closed event toggle (invite-only vs open) — ALREADY LIVE (see below)
+  3. View Only toggle — ALREADY LIVE (see Section 28)
+  4. Find My Photos toggle
+  Additional: Trusted Circle toggle (SPEC FINALISED, NOT CODED YET)
+
+CLOSED / INVITE-ONLY EVENTS — ALREADY LIVE (not a Phase 3 feature):
+  is_closed column: live and working in events table
+  Allowed guests list: fully implemented
+    - listAllowedGuests, addAllowedGuests, removeAllowedGuest, clearAllowedGuests
+    — all API routes exist and are active
+  Phase 3 only adds: self-serve UI for organiser to set this when CREATING an event
+  Current flow: master admin sets is_closed + allowed list manually via backend
+
+
+================================================================================
+SECTION 14: NOTIFICATIONS PANEL (IMPLEMENTED)
+================================================================================
+
+Server notifications infrastructure is fully built:
+  - Supabase: notifications table
+  - Backend: GET/PATCH/DELETE /api/native/notifications
+  - App: bell icon in event header, red dot badge, modal panel
+  - Notifications expire after 48 hours
+
+The bell icon shows server notifications (upgrade alerts, etc).
+Upload history and results are saved to AsyncStorage per event slug.
+
+
+================================================================================
+SECTION 15: PHOTO DOWNLOAD LOGIC
+================================================================================
+
+ENGLISH EXPLANATION:
+Single photo download: app asks backend for a temporary secure download link
+(presigned S3 URL), then downloads it and saves to device gallery.
+Bulk download: app asks backend to prepare a ZIP file on the server, then
+downloads the ZIP to device.
+
+Single photo:
+  POST /api/native/photos/{photoId}/download-url
+  Returns presigned S3 download URL (1-hour expiry)
+  App downloads file and saves to gallery using photo-saver native module
+
+ZIP download (>40 photos or user selects ZIP option):
+  POST /api/native/events/{slug}/prepare-zip
+  Backend creates ZIP on server from S3 photos
+  Returns ZIP URL for download
+
+Photo-saver native module (modules/photo-saver/):
+  Saves downloaded photo to device gallery WITH original EXIF metadata
+  Includes original filename, correct date in gallery
+  MUST be listed in package.json or requireNativeModule returns null at runtime
+
+
+================================================================================
+SECTION 16: KEY BACKEND FILES
+================================================================================
+
+src/lib/supabase-admin.ts
+  - Service-role Supabase client
+  - Server-side only, session persistence disabled
+  - Used by ALL API routes
+
+src/lib/s3.ts
+  - S3Client with useAccelerateEndpoint: true, region ap-south-1
+  - getPresignedUploadUrl() and getPresignedDownloadUrl() helpers
+
+src/lib/exif.ts
+  - extractBestDate(filePath, uploadTimestamp) → { takenAt, dateSource }
+  - HEIC fallback: raw TIFF block scan when exifr fails
+  - belongsInMainTimeline(dateSource) → true only for "exif"
+
+src/lib/image-processing.ts
+  - preDecodeIfHeic() — converts HEIC to JPEG buffer
+  - convertToJpg() — JPEG conversion
+  - stampIstExif() — writes IST timezone EXIF
+  - stripGpsExif() — removes GPS data before S3 write
+  - getImageDimensions() — width + height
+
+src/lib/duplicate-detection.ts
+  - computePhash(imagePath) → hex string
+  - hammingDistance(hash1, hash2) → number
+  - isDuplicate(newPhoto, existing) → boolean
+  - resolveDuplicate(newPhoto, existing) → { action, winner, loser }
+
+src/lib/device.ts (no longer has PHOTO_UPLOAD_LIMIT — removed 2026-08-13)
+
+src/app/api/upload-url/route.ts — Phase 1: presigned URL
+src/app/api/upload/route.ts — Phase 2: process + store (60s timeout needed)
+
+lib/api.ts (mobile) — all API functions. Key ones:
+  processUpload() — uses 60000ms timeout (all others use 15000ms)
+  findMyPhotos() — returns { photos, otherPhotos }
+  listJoinedGuestsForUser() — use this, not the removed listJoinedGuests()
+
+
+================================================================================
+SECTION 17: PENDING TASKS — FULL LIST
+================================================================================
+
+Show this list at the start of every session and ask what to pick up.
+Numbers are stable — always include them.
+
+--- OTA (no native build needed) ---
+
+1. Privacy Policy link in app — PARKED: waiting for lawyer review
+
+--- Next native build ---
+
+2. Android native splash screen logo too small
+   WHAT: Replace assets/splash-screen.png with a version where the logo
+   fills more of the canvas. Current version has a small logo centred in
+   a large black canvas; with resizeMode: "cover", Android fills the screen
+   with the canvas and the logo appears tiny.
+   FIX: New splash-screen.png asset only — no code change.
+   NOTE: iOS is unaffected (different rendering path).
+   CANNOT fix via OTA — native asset change requires rebuild.
+
+3. In-app camera + live colour filters
+   STATUS: SPEC FINALISED, CODING NOT STARTED
+   See full spec in SECTION 18 below.
+
+--- Future build (decide later) ---
+
+4. Trusted Circle
+   STATUS: SPEC FINALISED (24 rules), CODING NOT STARTED
+   See full spec in SECTION 19 below.
+
+5. Self-serve events (Phase 3)
+   STATUS: SPEC FINALISED, CODING NOT STARTED
+   See full spec in SECTION 20 below.
+
+6. Red/green face oval in Find My Photos
+   DEFERRED: needs react-native-vision-camera-face-detector compatible with
+   VisionCamera 5.2.2. Try version 2.0.7-0 (pre-release) in next native build.
+
+7. Video support — needs new native video package (e.g., expo-video)
+
+--- Deferred / decide later (OTA only) ---
+
+8. Push notifications — 4 types ONLY (see SECTION 21)
+   NOT BUILT. Do not add push for new photo uploads (too spammy).
+
+9. Slideshow mode — full-screen auto-advance for venue projection
+
+10. Auto OTA update on launch — Updates.checkForUpdateAsync() on cold start
+
+11. Haptic feedback — expo-haptics (already in SDK 54, OTA only)
+
+--- Admin ---
+
+12. Android developer verification — DEADLINE: September 30, 2026
+    Must complete in Play Console or app gets removed from Play Store.
+
+--- Done (most recent first) ---
+
+✅ Dead code cleanup — 2026-08-13: 13 files deleted + 8 edits across both repos
+✅ Whitelist delete cascade — master removes number → events + S3 + DB deleted
+✅ Upload false failures fixed — processUpload timeout 15s → 60s
+✅ Screenshots routed to Other Photos — Make field required alongside DateTimeOriginal
+✅ New photos badge — green pill showing new-since-last-visit count
+✅ Storage used in Manage Event header — "32 photos · 90.5 MB · Event Code: 343257"
+✅ Find My Photos — AWS Rekognition face search, two-section gallery
+✅ Notifications panel — bell icon, server notifications, red dot badge
+✅ Co-Admin system — add/remove, badge, role enforcement
+✅ Guest Uploads panel — full rework to screen-based navigation
+✅ Manage Guests screen — modal → screen migration
+✅ WhatsApp OTP — Meta Cloud API, live on both mobile and web
+✅ My Photos lightbox — Uploaded by + Taken on footer
+✅ Drag-to-select — long press sets anchor, pan to range-select
+✅ VisionCamera v4 → v5 + Skia — Build 34 (now rolled back to expo-camera)
+✅ AWS Rekognition setup — IAM policy, same region as S3
+✅ S3 Transfer Acceleration — enabled on wedding-app-trial bucket
+✅ Web app — momentsinframe.com with WhatsApp OTP login, guest + organiser
+
+
+================================================================================
+SECTION 18: IN-APP CAMERA (SPEC FINALISED — CODING NOT STARTED)
+================================================================================
+
+ENGLISH EXPLANATION:
+The app will have a built-in camera screen where users can take photos with live
+colour filters applied in real time. After taking a photo, they see a preview
+and can choose to upload it to the current event (and save to their gallery).
+This sits alongside the existing "Upload Photos" (choose from library) option.
+
+ENTRY POINT:
+  On Event screen: two buttons side by side —
+    "Take Photo" (dark outlined, left)
+    "Upload Photos" (yellow, right)
+  Helper text below both buttons
+
+CAMERA SCREEN LAYOUT (top to bottom):
+  1. Top bar: X (close) + flash toggle only
+  2. 3:4 viewfinder — fixed ratio, live filter applied in real time
+  3. Filter section: category tabs + horizontal scrollable filter strip
+  4. Bottom row: last gallery photo (left) | capture button (centre) | flip camera (right)
+
+FILTER CATEGORIES AND TABS:
+  Classic | Aesthetic | Film (tabs above the filter strip)
+
+FILTER THUMBNAILS:
+  - Static pre-baked sample photo with each filter's colour matrix applied
+  - Circular thumbnails in the horizontal strip
+  - NOT coloured dots, NOT live frame previews (GPU overhead not worth it)
+  - Selected filter has white border ring
+  - Sample photo: warm outdoor scene, works across all 20 filter styles
+  - Thumbnails can be updated via OTA (no rebuild needed)
+
+AFTER CAPTURE:
+  - Full-screen preview screen with the captured photo
+  - Two buttons at bottom: Retake (dark) | Post (white)
+  - Post → saves to device gallery AND uploads to current event
+
+OTHER DECISIONS:
+  - Flash: on/off/auto toggle — works on both iOS and Android
+  - No intensity slider — full strength on single tap (slider possible via OTA later)
+  - No Live Photos — Apple restricts this to native camera; user confirmed this is fine
+  - Captures standard JPEG/HEIC with filter colour matrix baked in
+  - Works on all phone brands — iOS and Android
+
+TECH STACK (for this feature):
+  - Camera: react-native-vision-camera v5 (upgrade from current expo-camera)
+  - Filters: @shopify/react-native-skia colour matrix frame processor
+  - Worklets: react-native-worklets-core (for off-thread processing)
+  - iOS build image: macos-tahoe-26.5-xcode-26.6 (required for VisionCamera v5)
+  - All processing on-device GPU — zero API cost, zero licensing fee
+
+THE 20 FILTERS (colour matrices — completely free):
+
+  CLASSIC (8 filters):
+    1. Normal       — No filter (identity matrix)
+    2. Warm         — Golden/cozy, boosts reds and oranges
+    3. Cool         — Fresh/airy, boosts blues
+    4. Vivid        — Punchy, saturated
+    5. Fade         — Matte/faded aesthetic
+    6. B&W          — Classic black and white (desaturation matrix)
+    7. Drama        — High contrast, moody, deep shadows
+    8. Vintage      — Warm + faded + slight vignette
+
+  AESTHETIC (8 filters):
+    9.  Golden Hour   — Deep orange warmth, like sunset on skin
+    10. Sunset        — Pink + orange tones, popular for portraits
+    11. Teal & Orange — Cinematic look (hugely popular, used in movies)
+    12. Moody         — Dark, desaturated, cool shadows
+    13. Soft          — Gentle pastel brightening, dreamy
+    14. Rose          — Subtle pink warmth, flattering for skin
+    15. Forest        — Cool green tones, outdoorsy
+    16. Matte         — Flat, no blacks, popular on Instagram Reels
+
+  FILM (4 filters):
+    17. Kodak         — Warm, slightly faded, slight yellow in highlights
+    18. Fuji          — Cool greens in shadows, clean whites
+    19. Cinematic     — High contrast, crushed blacks, slight blue
+    20. Lo-Fi         — Oversaturated, high contrast, retro feel
+
+Filters are colour matrix values in JS → new filters can be added via OTA after
+the build ships. No native recompilation needed to add more filters.
+
+BUILD NOTES:
+  - VisionCamera v5 was already planned; this combines both into one build
+  - Previous iOS build failures (Builds 34-37) resolved by using
+    macos-tahoe-26.5-xcode-26.6 image (see Section 17 build history)
+  - eas.json testflight profile already has the correct image set
+
+
+================================================================================
+SECTION 19: TRUSTED CIRCLE (SPEC FINALISED — CODING NOT STARTED)
+================================================================================
+
+ENGLISH EXPLANATION:
+Trusted Circle lets guests in an event make their photos visible only to people
+they personally trust, rather than everyone in the event. It's opt-in per event
+(organiser enables it). Guests can invite each other to their circle — both must
+accept before either can see the other's restricted photos. Organisers and
+co-admins always see everything regardless.
+
+Full 24-rule spec:
+
+CORE RULES:
+
+1. WHAT IS A TRUSTED CIRCLE?
+   A private circle of guests within a single event. Completely contained —
+   no data exists outside the event.
+
+2. OPT-IN PER EVENT — OFF by default. Organiser must explicitly enable it.
+
+3. ORGANISER TOGGLE — "Trusted Circle" in SETTINGS section of Manage Event
+   (4th toggle, below "View only event"). Description is dynamic:
+   OFF state: "Guests can create private photo circles"
+   ON state:  "Active — private circles enabled"
+
+   Alert when ENABLING:
+     Title: "Enable Trusted Circle?"
+     Message: "Guests can make their photos visible only to guests they've
+     personally connected with. Both must accept the invite before they can
+     see each other's restricted photos. Organisers and Co-Admins always see
+     all photos."
+     Buttons: Cancel | Enable
+
+   Alert when DISABLING:
+     Title: "Disable Trusted Circle?"
+     Message: "All restricted photos will become visible to everyone in the
+     event. Guest circle connections will be preserved — re-enabling will
+     restore them instantly. Organisers and Co-Admins are not affected."
+     Buttons: Cancel | Disable
+
+4. SENDING AN INVITE — Guest A sends invite to Guest B. Both must be in the
+   same event. Only available when Trusted Circle is enabled. Uses contacts
+   to show which contacts are in the same event.
+
+5. ACCEPTING — Guest B gets a bell notification. Can accept or decline from
+   the ⋮ menu on the event screen.
+
+6. MUTUAL ACTIVATION — Circle activates only when BOTH have accepted.
+
+7. ONE-TO-ONE — A↔B and A↔C are completely separate circles.
+
+8. PHOTO VISIBILITY — Each guest has ONE visibility setting for ALL their
+   photos in the event: public (everyone) or restricted (trusted circle only).
+
+9. DEFAULT — Public. Guests must actively choose to restrict.
+
+10. EMPTY CIRCLE RULE — If a guest has 0 accepted connections, their photos
+    stay public regardless of any restriction setting. If they try to restrict
+    with empty circle, show warning:
+    "Your photos will be hidden from all guests until you add trusted connections."
+
+11. BACKDATED ACCESS — Connecting later gives immediate access to all past
+    photos too.
+
+12. ORGANISER UPLOADS — Always visible to everyone. No restriction possible.
+
+13. CO-ADMIN UPLOADS — Always visible to everyone. Same as Organiser. No
+    restriction possible.
+
+14. ORGANISER — Always sees every photo regardless of visibility setting.
+
+15. CO-ADMINS — Always see every photo regardless of visibility setting.
+    Co-Admins do NOT see the Trusted Circle menu on the event screen (only
+    shown to regular guests).
+
+PENDING INVITE EDGE CASES:
+
+16. B NOT YET REGISTERED — Invite stored as pending in DB. When B joins the
+    event, they see it in their bell notification immediately. If B never joins,
+    invite stays pending indefinitely but never activates.
+
+LOGOUT / DELETE EDGE CASES:
+
+17. GUEST LOGS OUT — Photos revert to public immediately. Circle connections
+    preserved in DB. On log back in, they can re-restrict manually.
+
+18. GUEST DELETES ACCOUNT — Account becomes "Unknown user", photos remain in
+    event. Photos revert to public. Circle connections removed.
+
+CO-ADMIN ROLE CHANGE MID-EVENT:
+
+19. GUEST PROMOTED TO CO-ADMIN — Immediately sees all photos including
+    restricted ones. Their own photos become public (Co-Admin = always public).
+    Trusted Circle menu disappears. Any pending circle invites they sent/received
+    are cleared.
+
+20. CO-ADMIN DEMOTED TO GUEST — Loses Co-Admin privileges; restricted photos
+    hidden again. Their photos revert to public (safe default). Trusted Circle
+    menu reappears. They start fresh — no circle connections, can build them.
+
+KEY PRINCIPLE: Role change or account change = photos revert to public,
+state resets cleanly.
+
+TOGGLE OFF (DORMANT MODE):
+
+21. TOGGLE OFF — All photos become visible to everyone (feature paused). Circle
+    connections preserved in DB. If re-enabled, circles restore instantly and
+    guests can re-restrict.
+
+UI PLACEMENT:
+
+22. EVENT SCREEN — "Trusted Circle" option in the ⋮ menu. Only shown to regular
+    guests when Trusted Circle is enabled for the event.
+
+23. TRUSTED CIRCLE PANEL — Pending requests shown on top, trusted members below.
+    Same visual design as Manage Guests panel on Manage Event page.
+
+LIFECYCLE:
+
+24. EVENT DELETED — All trusted circle data, connections, and visibility settings
+    deleted. Nothing persists.
+
+NOTE: Trusted Circle was previously called "Phase 4" in early planning. The spec
+in memory supersedes the older Phase 4 notes about "forever trusted circles" and
+"event trusted circles". The current final spec is event-scoped only (rules 1-24).
+
+
+================================================================================
+SECTION 20: SELF-SERVE EVENTS / PHASE 3 (SPEC FINALISED — CODING NOT STARTED)
+================================================================================
+
+ENGLISH EXPLANATION:
+Currently, only Akriti (the master admin) can create events. Phase 3 changes this
+so any user who downloads the app can create and manage their own events. When
+registering, users choose whether they want to be an Organiser (create events) or
+a Guest (join events). Organisers get a full event management dashboard.
+
+REGISTRATION FLOW:
+  1. Name + phone number (same as today)
+  2. OTP verification via WhatsApp (backend built, UI to be shown)
+  3. Choice screen: Organiser or Guest
+
+  IF GUEST selected:
+    → Opens directly to Enter Event Code page
+    → Everything from there works as today
+    → Back arrow returns to Organiser/Guest choice screen
+
+  IF ORGANISER selected:
+    → Create master/organiser password
+    → Goes to All Events page (manage their own events)
+    → Back arrow returns to Organiser/Guest choice screen
+
+ADMIN MODEL:
+  - Organiser who creates an event is automatically admin — linked by phone number
+  - No separate admin login button needed
+  - Event Admin Login button REMOVED entirely
+  - App recognises organiser/co-admin automatically from phone number
+
+ALL EVENTS PAGE (new screen):
+  - Shows only events the organiser created (NOT co-admin events)
+  - Shows: event name, date, guest count, and other existing info
+  - Co-admin events do NOT appear here
+
+CO-ADMIN FLOW:
+  - Organiser adds phone number as co-admin from Manage Event screen
+  - Backend checks if that number is registered:
+    - If YES → push notification: "You've been made co-admin of [Event Name]"
+    - If NO → SMS/WhatsApp: "You've been added as co-admin, download: [link]"
+      (when they register with that number, app auto-recognises them as co-admin)
+  - Co-admin accesses event via guest flow (enter event code)
+  - App sees their phone number, gives admin toolbar automatically
+
+CO-ADMIN PERMISSIONS:
+  - Exactly what today's Event Admin Login gives — no more, no less
+  - Cannot add other co-admins (only the organiser can)
+  - Cannot delete the event (only the creator/organiser can)
+  - No OTP required to become co-admin (number already verified at registration)
+  - Organiser can remove co-admins anytime — access revoked immediately
+
+OPEN VS CLOSED EVENTS:
+  - Open: anyone with the event code can join (same as today)
+  - Closed: organiser manually adds phone numbers; only those can join
+  - Stored as: is_closed boolean default false on events table
+
+GUEST DELETE TOGGLE:
+  - Toggle: "Allow guests to delete their own photos" — ON by default
+  - Stored as: allow_guest_delete on events table
+  - Co-admins and organiser ALWAYS have delete regardless of this toggle
+
+APP STATE MEMORY:
+  - App remembers last mode — reopens directly to guest home or organiser events
+  - Back arrow on home screens returns to Organiser/Guest choice screen anytime
+
+WEB APP (same changes apply to both):
+  - Identical registration flow changes needed on web (momentsinframe.com)
+  - Identity-based admin toolbar (remove manual organiser login)
+  - Both apps updated in parallel
+
+MONETISATION (PARKED — Phase 3 plan):
+  - One-time download fee via Apple/Google In-App Purchase (IAP)
+  - In-app storage purchase (e.g., 10GB for ₹199) via IAP
+  - Manual billing first, IAP when enough paying customers
+  - Both handled via Apple/Google IAP (15-30% cut)
+  - Needs new build when implemented
+
+TIME ESTIMATE: ~5-6 weeks (covers both mobile + web)
+
+STATUS: Phase 3. Ready to start when user decides to begin.
+
+
+================================================================================
+SECTION 21: PUSH NOTIFICATIONS (NOT BUILT — SPEC FINALISED)
+================================================================================
+
+ENGLISH EXPLANATION:
+Push notifications are planned but not yet built. The app currently uses server
+notifications (poll-based, bell icon) for in-app alerts. Push would deliver alerts
+to the device even when the app is closed. The scope is intentionally narrow —
+only 4 specific types that are infrequent and personally relevant.
+
+WILL NOT add push notifications for new photo uploads — events with 100+ people
+uploading every 10-15 minutes would be unacceptably noisy.
+
+THE 4 APPROVED NOTIFICATION TYPES:
+  1. Co-admin added / removed — notify the affected user
+  2. Photo replaced by higher quality — notify the original uploader
+  3. Event expiring in 24 hours — notify the organiser to extend
+  4. Event closed / reopened — notify guests
+
+WHAT NEEDS TO BE BUILT:
+  - Store Expo push token in Supabase when user joins/opens an event
+  - Backend sends push via Expo Push API for each of the 4 trigger points
+  - The server notification infrastructure (Supabase table + API routes) is
+    already in place — push is just a delivery layer on top
+
+
+================================================================================
+SECTION 22: WEB APP STATUS
+================================================================================
+
+URL: https://momentsinframe.com (live)
+Deployed to: Vercel
+
+WHAT IS WORKING:
+  /setup — name + mobile registration
+  /      — home screen with Guest login card
+  /join  — enter event code
+  /e/[slug] — photo gallery, upload, delete, download
+  WhatsApp OTP login — fully working
+  Organiser recognition — checks mobile number, shows "Organiser" button
+
+WHAT IS NOT ON WEB (by design):
+  Creating events, managing events — organiser uses mobile app for this
+  (Organisers can join as guest on web and get admin privileges automatically)
+
+PENDING WEB CHANGE (parked 2026-08-08):
+  Registration screen (/setup): first/last name fields need alphabets-only filter,
+  maxLength 15, spaces allowed, auto-capitalise first letter — to match mobile.
+
+
+================================================================================
+SECTION 23: STORE LISTING AND DISTRIBUTION STATUS
+================================================================================
+
+App Store (iOS):
+  - Description: drafted ✅
+  - Privacy Policy: https://sites.google.com/view/momentsinframeprivatepolicy ✅
+  - Support email: support@momentsinframe.com ✅
+  - Screenshots: needed (see sizes below)
+
+Play Store (Android):
+  - Description: drafted ✅
+  - Feature graphic: uploaded ✅ (gold camera + MOMENTS IN FRAME, 1024×500px)
+  - App icon listing: uploaded ✅ (gold camera on black, 512×512px)
+  - Screenshots: uploaded ✅
+  - Privacy Policy: linked ✅
+  - Production access: BLOCKED — needs 12 opt-in testers for 14 days on Closed
+    Testing track before Google allows Production access
+
+Short description (Play Store, 80 chars):
+  "Share and relive every moment from your group events, together."
+
+Screenshot sizes needed:
+  Android: 1080×1920px minimum, up to 8 screenshots
+  iOS 6.9": 1320×2868px — required
+  iOS 6.5": 1242×2688px — required
+
+Suggested screens for screenshots:
+  1. Home screen — joined events list
+  2. Photo gallery — event with lots of photos
+  3. My Uploads view
+  4. Lightbox — photo full screen
+  5. Notifications panel
+  6. Manage event screen (organiser view)
+
+Trademark assets (PNG, ready for IP India Class 42 filing):
+  Icon: 1024×1024px (assets/Logo.png)
+  Feature graphic: 2124×849px (assets/feature_graphic.png)
+
+
+================================================================================
+SECTION 24: ANDROID DEVELOPER VERIFICATION DEADLINE
+================================================================================
+
+DEADLINE: September 30, 2026
+
+If not completed, the app will be removed from the Play Store.
+Must complete developer verification in Play Console.
+Link: Google Play Console → Developer Account → Verification
+
+
+================================================================================
+SECTION 25: ENVIRONMENT VARIABLES REFERENCE
+================================================================================
+
+Backend (.env.local / Vercel Environment Variables):
+
+  # Supabase (safe to be public)
+  NEXT_PUBLIC_SUPABASE_URL=https://byibaathhnbsotwchgwm.supabase.co
+  NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_AcrJ0MLX0-YPirG_7WANTg_1cBtoocn
+
+  # Supabase (server-only — NEVER expose to client)
+  SUPABASE_SERVICE_ROLE_KEY=<secret>
+
+  # AWS (server-only — NEVER expose to client)
+  AWS_REGION=ap-south-1
+  AWS_ACCESS_KEY_ID=<secret>
+  AWS_SECRET_ACCESS_KEY=<secret>
+  AWS_S3_BUCKET=wedding-app-trial
+
+  # WhatsApp Meta Cloud API (server-only)
+  WHATSAPP_ACCESS_TOKEN=<secret>
+  WHATSAPP_PHONE_NUMBER_ID=<secret>
+  WHATSAPP_TEMPLATE_NAME=momentsinframe_otp
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN=<secret>
+
+  # Cron jobs
+  CRON_SECRET=<secret>
+
+
+================================================================================
+SECTION 26: IMPORTANT FILES MAP
+================================================================================
+
+MOBILE APP (MomentsInFrame/):
+  app/event.tsx             — Main event screen (gallery, upload, select, delete)
+  app/my-photos.tsx         — Find My Photos screen (camera → search → results)
+  app/(auth)/home.tsx       — Home screen (joined events list, gear menu)
+  app/(auth)/login.tsx      — Login screen (phone + OTP entry)
+  app/(auth)/join-event.tsx — Enter event code screen
+  app/(auth)/name-entry.tsx — Registration screen (name + phone)
+  app/(master)/dashboard.tsx      — Master admin: list all events
+  app/(master)/event-detail.tsx   — Master admin: manage single event
+  lib/api.ts                — ALL API calls to backend
+  lib/storage.ts            — AsyncStorage + SecureStore helpers
+  lib/notifications.ts      — Local notification helpers
+  modules/photo-saver/      — Native module: save photo to gallery with EXIF
+  modules/background-upload/ — Native module: background upload
+  constants/config.ts       — API_BASE_URL and other constants
+  eas.json                  — Build profiles (testflight, preview)
+  app.json                  — Expo config (plugins, permissions, icons)
+
+BACKEND (onealbum-trial/src/):
+  app/api/upload-url/route.ts              — Phase 1: presigned URL
+  app/api/upload/route.ts                  — Phase 2: process + store
+  app/api/events/[slug]/photos/route.ts    — List photos for event
+  app/api/events/[slug]/photo-urls/route.ts — Batch URL resolve
+  app/api/native/events/route.ts           — List/create organiser events
+  app/api/native/events/[slug]/route.ts    — Get/delete event
+  app/api/native/events/[slug]/settings/route.ts  — PATCH event settings
+  app/api/native/events/[slug]/coadmins/route.ts  — Co-admin management
+  app/api/native/events/[slug]/joined-guests/route.ts — Guest list
+  app/api/native/events/[slug]/allowed-guests/route.ts — Invite-only list
+  app/api/native/events/[slug]/guests/[mobile]/route.ts — Block/unblock
+  app/api/native/events/[slug]/find-my-photos/route.ts — Rekognition search
+  app/api/native/events/[slug]/prepare-zip/route.ts   — ZIP creation
+  app/api/native/photos/[id]/download-url/route.ts    — Single photo DL URL
+  app/api/native/whitelist/route.ts        — Whitelist management
+  app/api/native/whitelist/[phone]/route.ts — Delete with cascade
+  app/api/native/otp/send/route.ts         — Send WhatsApp OTP
+  app/api/native/otp/verify/route.ts       — Verify OTP code
+  app/api/native/users/route.ts            — User management
+  app/api/native/notifications/route.ts    — Server notifications
+  lib/supabase-admin.ts                    — Service-role Supabase client
+  lib/s3.ts                                — S3 client with acceleration
+  lib/exif.ts                              — Date extraction + dateSource
+  lib/image-processing.ts                  — HEIC conversion, GPS strip
+  lib/duplicate-detection.ts               — pHash compute + duplicate logic
+  lib/web-storage.ts                       — Browser localStorage helpers
+  lib/device.ts                            — Device utilities
+
+
+================================================================================
+SECTION 27: DEAD CODE REMOVED (2026-08-13) — FOR REFERENCE
+================================================================================
+
+MOBILE APP — FILES DELETED:
+  App.tsx, index.ts — Expo boilerplate, bypassed by expo-router
+  app/(app)/_layout.tsx, app/(app)/albums.tsx — unreachable scaffold
+  app/(master)/change-master-password.tsx — broken + unreachable
+
+MOBILE APP — EDITS:
+  lib/storage.ts — removed hasUnreadNotifications() (zero callers)
+  lib/api.ts — removed postRaw() and listJoinedGuests() (replaced by listJoinedGuestsForUser)
+  app/event.tsx — removed uploading state, uploadCancelRequested state,
+                  two dead if-blocks, uploading from useEffect deps, ScrollView import
+  app/(auth)/name-entry.tsx — removed 3 unused styles
+  app/(auth)/join-event.tsx — removed 2 unused styles
+
+BACKEND — FILES DELETED:
+  src/app/admin-login/page.tsx — broken + unreachable
+  src/app/create/page.tsx — replaced by /admin/create
+  src/app/api/events/route.ts — only caller was the dead create page
+  src/app/api/native/events/[slug]/download-zip/route.ts — replaced by prepare-zip
+  src/app/api/native/photos/[id]/download/route.ts — replaced by download-url
+  src/app/api/ping/route.ts — zero callers
+  src/lib/supabase.ts — never imported, all routes use supabase-admin
+  src/lib/app-info.ts — only imported by dead create page
+
+BACKEND — EDITS:
+  src/lib/web-storage.ts — removed 4 dead exports (saveAdminSession, getAdminSession,
+                           saveMasterSession, getMasterSession)
+  src/lib/device.ts — removed PHOTO_UPLOAD_LIMIT = 30 (zero callers)
+  .env.example — removed stale ADMIN_PASSWORD, added 5 missing WhatsApp + cron vars
+
+
+================================================================================
+SECTION 28: VIEW-ONLY MODE AND EXTEND EVENT
+================================================================================
+
+VIEW-ONLY MODE (toggle in Manage Event → SETTINGS):
+
+ENGLISH EXPLANATION:
+When the organiser turns on "View only event", guests can look at and download
+photos but cannot upload anything new. The organiser and all co-admins are
+completely unaffected — they retain full upload ability regardless.
+
+Rules:
+  - Guests: can VIEW and DOWNLOAD photos. Cannot upload.
+  - Organiser: unaffected. Can still upload as normal.
+  - Co-Admins: unaffected. Can still upload as normal.
+  - Toggle is in the SETTINGS section of Manage Event screen.
+
+EXTEND EVENT:
+
+  Function: extendEvent() in lib/api.ts
+  Organiser can extend the event's expiry date from the Manage Event screen.
+  No restrictions on how far the date can be extended.
+  Any date in the future is valid.
+
+
+================================================================================
+SECTION 29: EVENT EXPIRY BEHAVIOUR
+================================================================================
+
+ENGLISH EXPLANATION:
+When an event's expiry date passes, different roles lose different levels of
+access. The organiser never loses control of their event.
+
+When an event expires:
+  - Guests:     Lose access entirely. Cannot view, upload, or download.
+  - Co-Admins:  Can only VIEW and DOWNLOAD photos. Cannot upload or manage.
+  - Organiser:  FULL ACCESS retained. Can delete, download, and view everything.
+                Can also extend the event from Manage Event to restore guest access.
+
+Frontend check (app/event.tsx):
+  const isEventExpired = expiresAt ? new Date(expiresAt) < new Date() : false;
+  This is a client-side check using the expiresAt string from the event record.
+
+
+================================================================================
+SECTION 30: MY UPLOADS FILTER
+================================================================================
+
+ENGLISH EXPLANATION:
+The "My Uploads" pill on the event screen filters the gallery to show only
+photos uploaded by the logged-in user. Several other controls change behaviour
+while this filter is active.
+
+When My Uploads filter is ON:
+  - ⋮ menu (three-dot):  DISABLED and greyed out (opacity 0.35)
+  - Upload button:        DISABLED and greyed out (opacity 0.5)
+  - Select mode:          NOT affected. Fully available. Gallery is filtered to
+                          the user's own photos, and select mode works on those.
+
+My Uploads pill itself:
+  - Becomes DISABLED while in select mode or delete mode (cannot toggle mid-action)
+  - If the user tries to turn ON My Uploads while already in select/delete mode,
+    the app exits select/delete mode first, then activates the filter.
+
+Code: app/event.tsx — myUploadsFilter state controls all of the above.
+
+
+================================================================================
+SECTION 31: NEW PHOTOS BADGE
+================================================================================
+
+ENGLISH EXPLANATION:
+The event gallery shows a green "New" pill on section headers and on individual
+photo thumbnails to highlight photos that were uploaded since the user last
+visited the event.
+
+How it works:
+  Storage key: mif_last_visited_{slug}  (AsyncStorage, per user, per event)
+  Stores: ISO timestamp of when the user last opened the event
+  On event open: count photos where uploaded_at > last_visited_at → show badge
+  On event close: last_visited_at is updated to now
+
+Badge display:
+  - Green "New" pill on Photo Gallery and Other Photos section headers
+    (shows count of new photos in that section)
+  - Green "New" pill on individual photo thumbnails
+  - New badge is HIDDEN when My Uploads filter is active
+  - Badge handles deletions correctly (deleted photos don't inflate count)
+
+Badge clears:
+  - After the user opens the event, the next visit will show fresh count
+  - Existing photos seen before the last visit never show as "New"
+
+
+================================================================================
+SECTION 32: ACCOUNT DELETION BEHAVIOUR
+================================================================================
+
+ENGLISH EXPLANATION:
+When a user deletes their account, their personal record is removed but their
+photos remain in all events they uploaded to. This preserves the event's
+photo collection for other guests.
+
+What happens on deleteAccount:
+  - User record removed from app_users table
+  - User's phone number removed from all event-level role tables (co-admins, etc.)
+  - Photos STAY in all events — they are NOT deleted
+  - All retained photos show as uploaded by "Unknown user"
+  - The user cannot log back in with the same number (account is gone)
+  - They can re-register with the same number as a fresh account
+
+
+================================================================================
+SECTION 33: EXIF TIMEZONE HANDLING — DO NOT TOUCH
+================================================================================
+
+ENGLISH EXPLANATION:
+Whatever time the phone displays when a photo is taken is exactly what the app
+shows — for photos taken anywhere in the world. An Indian photo taken at 9:18 PM
+shows as 9:18 PM. A Thai photo taken at 4:55 PM shows as 4:55 PM. Verified by
+real uploads (2026-08-14).
+
+How the code achieves this (backend: src/lib/exif.ts):
+  - exifr.parse() is called with ONLY ["DateTimeOriginal", "CreateDate", "Make"]
+  - OffsetTimeOriginal is deliberately NOT requested
+  - Without an offset, exifr cannot do timezone conversion — it returns the raw
+    local time exactly as written in the EXIF
+  - The backend then subtracts 5.5 hours before storing
+
+How display recovers the original time (frontend: app/event.tsx line ~2568):
+  new Date(taken_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', ... })
+  - This adds 5.5 hours back (IST conversion)
+  - The −5.5h on save and +5.5h on display cancel out perfectly
+  - Result: original EXIF local time is always shown, regardless of country
+
+Hidden dependency — Vercel server must be in UTC:
+  The cancellation works because Vercel runs in UTC. On a UTC server, exifr
+  treats the raw EXIF local time string as UTC (no conversion applied).
+  On a developer's IST machine, exifr converts IST→UTC first, then the backend
+  subtracts 5.5h again — causing local test results to show wrong times.
+  LOCAL TESTING OF THE EXIF PATH WILL SHOW WRONG TIMES. This is expected.
+  Trust production behaviour only.
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+DO NOT CHANGE ANY OF THE FOLLOWING WITHOUT A FULL IMPACT ANALYSIS:
+  1. The istOffsetMs subtraction in src/lib/exif.ts
+  2. The timeZone: 'Asia/Kolkata' in the frontend display
+  3. Adding OffsetTimeOriginal to the exifr parse tag list
+
+Any change to one side MUST be paired with a matching change on the other side
+PLUS a DB migration to add/subtract 5.5h from ALL existing taken_at rows.
+Removing either the −5.5h or the +5.5h alone will break display for all photos.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+Cross-timezone events (e.g., photos from Thailand and India in the same event):
+  Each photo shows its own local time. Photos sort correctly by date since
+  different-country photos are typically on different calendar dates.
+  Same-day photos from two countries will sort in the correct real-time order
+  (the stored values preserve chronological order even though they are not
+  true UTC). For MomentsInFrame's use case (single-occasion events), this is
+  not a practical issue.
+
+
+================================================================================
+END OF REFERENCE FILE
+Created: 2026-08-13, Updated: 2026-08-14 — MomentsInFrame v2.0.5
+Use this file to fully brief any AI assistant. No prior context needed.
+================================================================================

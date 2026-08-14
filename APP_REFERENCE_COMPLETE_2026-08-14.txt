@@ -1,6 +1,6 @@
 ================================================================================
 MOMENTSINFRAME — COMPLETE AI BRIEFING REFERENCE
-Last updated: 2026-08-13
+Last updated: 2026-08-14
 ================================================================================
 
 READ THIS FIRST — THE SINGLE MOST IMPORTANT RULE IN THIS FILE
@@ -263,20 +263,29 @@ saving the final record to the database.
 
 PHASE 1 — Get presigned URL:
   POST /api/upload-url
-  - Validates event exists
+  - Validates event exists and checks event expiry (organiser bypass applies)
   - Generates staging key: staging/{eventId}/{uuid}.{ext}
-  - Returns presigned PUT URL (15-minute expiry)
+  - Returns presigned PUT URL (5-minute expiry / 300 seconds)
   Files: src/app/api/upload-url/route.ts
 
 PHASE 2 — Process upload:
   POST /api/upload
+  - Checks view_only flag: if event is view-only AND caller is not organiser
+    or co-admin → returns 403 "This event is view only."
+  - Rejects video uploads → returns 400 "Video uploads are not available
+    at this time" (even if Phase 1 accepted the extension)
   - Backend fetches file from S3 staging key
+  - Converts HEIC → JPEG FIRST (before duplicate check — ensures stored JPEG
+    size is used for the quality comparison, not the HEIC size)
   - Runs EXIF extraction (extractBestDate)
-  - Converts HEIC → JPEG if needed
   - Strips GPS data (privacy)
   - Computes pHash for duplicate detection
   - Checks for duplicates and runs quality upgrade logic
-  - Moves file from staging/ to final location
+  - Saves THREE S3 objects per photo:
+      1. Full-res JPEG (final storage path)
+      2. Thumbnail: 400px wide, 75% quality mozjpeg (thumbnail_path)
+      3. Display: 1200px wide, 85% quality mozjpeg (display_path)
+    Sharp auto-rotates all three from EXIF orientation before saving.
   - Writes record to Supabase photos table
   - Sends upgrade notification if a higher-quality version replaced an old one
   - Timeout: 60 seconds (client-side) — NOT the default 15s
@@ -284,12 +293,13 @@ PHASE 2 — Process upload:
 
 IMPORTANT TIMEOUT RULE:
 processUpload() in lib/api.ts uses 60000ms (60s) timeout.
-ALL other API calls use the default 15000ms (15s) timeout.
+del() and findMyPhotos() have NO timeout set.
+All other API calls use the default 15000ms (15s) timeout.
 This is because processUpload does pHash + S3 move + DB write which can exceed 15s.
 
 Upload concurrency:
-  Individual upload: sequential (one at a time)
-  Upload by date: 3 at a time (CONCURRENCY=3)
+  Individual upload: 4 at a time (CONCURRENCY=4)
+  Upload by date: 4 at a time (CONCURRENCY=4)
 
 Pre-check (Upload by date only):
   Before calling backend, app checks if filename already exists in event.
@@ -377,12 +387,28 @@ isDuplicate logic — three scenarios based on dateSource:
     - Hamming distance === 0 (pixel-perfect match) → duplicate
     - Hamming distance > 0 → NOT duplicate (different screenshots)
 
+Thresholds:
+  HASH_THRESHOLD        = 10  (outer — used in all three scenario checks above)
+  HASH_THRESHOLD_STRICT =  4  (inner — used only for WhatsApp timestamp-shift
+                                sub-case: distance ≤ 4 but timestamps far apart
+                                → treat as originals, not duplicates)
+
+merge_self_duplicate action:
+  Same quality (within ±2% file size) + same dateSource + same timestamp (±1s)
+  → resolves silently without touching S3 or DB. No notification sent.
+
 Quality upgrade (resolveDuplicate — keep_new):
   When a duplicate is found, pick the BETTER version:
   - "exif" source always beats "file_meta" / "upload_time" on trustworthiness
   - Between same dateSource: larger file size wins
-  - A screenshot can NEVER replace a real camera photo
-  - The winning photo replaces the existing one in S3 and DB
+  - A screenshot very rarely replaces a real camera photo: since screenshots
+    typically have no EXIF and smaller file size, the camera photo almost always
+    wins. However this is NOT an absolute rule — if a screenshot has a larger
+    file size than the existing camera photo (rare), it would pass the quality
+    check and replace it.
+  - keep_new updates the EXISTING ROW IN PLACE — same UUID is preserved.
+    14 columns are overwritten on the existing photo row (storage_path,
+    thumbnail_path, display_path, file_size_bytes, taken_at, dateSource, etc.)
   - The original uploader receives a server notification: "your photo was
     replaced by a higher quality version"
 
@@ -417,12 +443,18 @@ backend to verify. If it matches and hasn't expired, the user is authenticated.
 
 Backend:
   POST /api/native/otp/send
+  - Validates phone: must match /^\d{10,15}$/ or returns 400
+  - Deletes any existing OTP for that phone before inserting new one
   - Generates 6-digit code
   - Stores in otp_codes table with 5-minute expiry
-  - Sends via Meta Cloud API WhatsApp template: momentsinframe_otp
+  - Sends via Meta Cloud API (https://graph.facebook.com/v21.0/{phoneNumberId}/messages)
+    using template: momentsinframe_otp
+    Template sends: body text + URL auto-fill button (one-tap fill on Android)
 
   POST /api/native/otp/verify
   - Checks code matches and hasn't expired
+  - On success: OTP row deleted from otp_codes
+  - On wrong code: OTP row is PRESERVED (user can retry until expiry)
 
 App functions (lib/api.ts):
   sendOtp(phone) — throws if backend returns error
@@ -493,16 +525,27 @@ The filename problem:
   The pHash backend catches them as duplicates anyway — no wrong data is stored.
   Status: PARKED — harmless in practice.
 
-Individual upload (app/event.tsx → Upload Photos button):
-  - System image picker, up to 40 photos
-  - Sequential upload
-  - Shows duplicate/upgrade review popup after
+ENTRY POINT — both modes are reached via an action sheet:
+  Tapping "Upload Photos" shows an action sheet with three options:
+    1. "Choose from library" → individual upload (system image picker)
+    2. "Upload by date"      → upload by date flow
+    3. "Cancel"
 
-Upload by date (app/event.tsx → Upload by date option):
+Individual upload (app/event.tsx → "Choose from library"):
+  - System image picker, up to 40 photos
+  - Confirmation dialog shown before upload starts ("Start upload?")
+  - Uploads 4 at a time (CONCURRENCY=4)
+  - Shows duplicate/upgrade review popup after
+  - Failed Uploads Viewer: if any photos fail, a modal grid shows each failed
+    photo with Retry and Dismiss buttons; Retry merges back into the existing
+    notification entry (does not create a duplicate notification)
+
+Upload by date (app/event.tsx → "Upload by date"):
   - User selects date from calendar
-  - App scans Camera roll for all assets on that date
+  - Full-screen photo selection modal shows all Camera photos from that date
+  - User can deselect unwanted photos before upload starts
   - Pre-check: skips filenames already in event (local check, no backend call)
-  - Uploads remaining 3 at a time (CONCURRENCY=3)
+  - Uploads remaining 4 at a time (CONCURRENCY=4)
   - Backend duplicate detection still runs on each
 
 
@@ -519,10 +562,29 @@ TWO TYPES OF NOTIFICATIONS:
 
 2. SERVER NOTIFICATIONS (Supabase notifications table + /api/native/notifications):
    - Poll-based (app fetches when event screen opens)
-   - Used for: photo quality upgrade alerts ("your photo was replaced")
    - Bell icon panel shows these with red dot badge
    - Expires 48 hours after creation
    - User can mark read, delete individual, or delete all
+
+   All 6 notification types (type column in notifications table):
+     quality_upgrade    — "Your photo was replaced by a higher quality version"
+     blocked            — Guest was blocked from the event
+     unblocked          — Guest was unblocked from the event
+     made_coadmin       — User was promoted to co-admin for an event
+     removed_coadmin    — User was removed as co-admin for an event
+     invite_only_added  — User was added to the allowed-guests list
+
+   Triggers:
+     - Co-admin add/remove → made_coadmin / removed_coadmin sent automatically
+     - Allowed-guest add → invite_only_added sent to each added phone
+     - Quality upgrade → quality_upgrade sent to original uploader
+
+   API behaviour (GET /api/native/notifications):
+     - Accepts ?slug= query param to filter by event
+     - Hard limit: 50 notifications returned per call
+     - Side effect: prunes notifications older than 48h on every GET call
+     PATCH: accepts event_slug to scope mark-read to a specific event
+     DELETE: deletes individual notification by ID
 
 Bell icon panel (in-app):
    - Opens modal showing notification history
@@ -547,14 +609,28 @@ organiser password.
 Whitelist table: organiser_whitelist in Supabase
 Master dashboard: app/(master)/ screens (only accessible with master password)
 
+Master account details:
+  MASTER_PHONE = "8826388388" — hardcoded in backend, cannot be deleted from whitelist
+  Master password verified via SHA-256 hash + Node.js crypto.timingSafeEqual()
+  (constant-time comparison to prevent timing attacks)
+
 Whitelist delete cascade (implemented 2026-08-13, commit 4318dbb):
   When master removes a number from whitelist:
   1. All events owned by that number → all S3 photos deleted
+     S3 deletion uses DeleteObjectsCommand in batches of 1,000 keys.
+     Each photo has 3 S3 keys (full-res + thumbnail + display) — all 3 deleted.
   2. All photo DB records for those events deleted
   3. All event records deleted
   4. App user account is NOT deleted (they can still use the app as a guest)
   Flow: master enters password to confirm → final confirm modal → loading overlay
   Backend: DELETE /api/native/whitelist/{phone}
+
+CRITICAL — isClosed = false auto-clears allowed-guest list:
+  When the organiser reopens a closed (invite-only) event by setting
+  is_closed = false, ALL rows in event_allowed_phones are silently deleted.
+  An organiser who closes → opens → re-closes their event will find the
+  allowed-guest list completely empty and must re-add all guests.
+  This is current backend behaviour (not a bug that will be fixed imminently).
 
 
 ================================================================================
@@ -564,7 +640,8 @@ SECTION 13: ROLES AND PERMISSIONS
 ROLES (per event):
   - Organiser: created the event, full control (view all, delete any, manage guests,
     manage settings, manage co-admins, cannot be blocked, cannot be demoted)
-  - Co-Admin: promoted by organiser, admin toolbar access, can delete any photo,
+  - Co-Admin: promoted by organiser, admin toolbar access, can delete guest photos
+    but NOT the organiser's photos or other co-admins' photos,
     cannot add other co-admins, cannot delete the event, cannot block organiser
   - Guest: joined via event code, uploads own photos, can delete own photos
     (if organiser allows), can be blocked
@@ -624,24 +701,45 @@ SECTION 15: PHOTO DOWNLOAD LOGIC
 ================================================================================
 
 ENGLISH EXPLANATION:
-Single photo download: app asks backend for a temporary secure download link
-(presigned S3 URL), then downloads it and saves to device gallery.
+Single photo download: app calls the backend /download route, which fetches the
+photo from S3, stamps the correct IST date into the EXIF (preserving the iOS
+camera info fix), and streams the file to the app. The app saves it to the
+device gallery (photo-saver on iOS, MediaStore on Android).
 Bulk download: app asks backend to prepare a ZIP file on the server, then
 downloads the ZIP to device.
 
 Single photo:
-  POST /api/native/photos/{photoId}/download-url
-  Returns presigned S3 download URL (1-hour expiry)
-  App downloads file and saves to gallery using photo-saver native module
+  GET /api/native/photos/{photoId}/download (+ ?adminPhone= query param)
+  Backend fetches photo from S3, calls stampIstExif() to stamp correct IST
+  date into EXIF, then streams the file directly to the app.
+  This is the route that preserves the iOS camera info + date/time fix.
+  DO NOT replace this with a presigned URL — stampIstExif would be skipped.
+  App saves to gallery using photo-saver native module (iOS) or MediaStore (Android).
 
-ZIP download (>40 photos or user selects ZIP option):
+  Note: /api/native/photos/{photoId}/download-url (POST) is a SEPARATE endpoint
+  used only for the Share button — it returns a presigned S3 URL for sharing,
+  not for saving to gallery.
+
+ZIP download (>40 photos selected, or user chooses ZIP for ≤40):
   POST /api/native/events/{slug}/prepare-zip
-  Backend creates ZIP on server from S3 photos
-  Returns ZIP URL for download
+  - Fetches photos from S3 in batches of 10 (8-second per-stream timeout each)
+  - Creates ZIP using archiver at compression level 0 (store, no compression —
+    JPEGs are already compressed; level 0 is faster with no size penalty)
+  - ZIP organised into two folders: Photos/ (dateSource=exif) and Others/
+  - Returns: { zipUrl, filename } — zipUrl is a presigned S3 URL (1-hour expiry)
+  Each file named via buildDownloadFilename() (src/lib/download-filename.ts):
+    Format: YYYYMMDD_HHMM_<6-char-id>.<ext>  (times in IST)
+    Example: 20260814_2130_a3f9bc.jpg
+    Used by both /download route and prepare-zip.
+
+JPG vs ZIP choice (event screen):
+  ≤40 photos selected: tap Download → dialog offers "Save as JPG" or "Save as ZIP"
+  >40 photos selected: forced into ZIP, no JPG option (warning shown during selection)
+  All three screens (event, my-photos, guest-uploads) use JPG_LIMIT = 40.
 
 Photo-saver native module (modules/photo-saver/):
-  Saves downloaded photo to device gallery WITH original EXIF metadata
-  Includes original filename, correct date in gallery
+  iOS only — saves photo to Photos library with correct taken_at date via iOS APIs
+  On Android: MediaStore.saveToDownloads() is used instead (no photo-saver)
   MUST be listed in package.json or requireNativeModule returns null at runtime
 
 
@@ -664,11 +762,20 @@ src/lib/exif.ts
   - belongsInMainTimeline(dateSource) → true only for "exif"
 
 src/lib/image-processing.ts
-  - preDecodeIfHeic() — converts HEIC to JPEG buffer
-  - convertToJpg() — JPEG conversion
-  - stampIstExif() — writes IST timezone EXIF
-  - stripGpsExif() — removes GPS data before S3 write
-  - getImageDimensions() — width + height
+  - ISOBMFF box parser (~140 lines of custom binary parsing for HEIC EXIF extraction):
+      readN(), parseBoxes(), findBox(), extractHeicExif(), injectExifFromHeic()
+  - preDecodeIfHeic() — converts HEIC to JPEG buffer AND injects original HEIC EXIF
+    into the converted JPEG (camera name, date, orientation, GPS all preserved)
+  - convertToJpg() — JPEG conversion via sharp (mozjpeg, quality 95, auto-rotate)
+  - stampIstExif() — stamps IST date into EXIF; called in GET /download route (native
+    photo download) and web download routes; NOT called during upload
+  - stripGpsExif() — removes GPS data before S3 write (called during processUpload)
+  - getImageDimensions() — defined but has ZERO callers; effectively dead code
+
+src/lib/download-filename.ts
+  - buildDownloadFilename(id, takenAt, ext) → string
+  - Format: YYYYMMDD_HHMM_<first-6-chars-of-id>.<ext> (all times in IST)
+  - Used by: GET /download route and prepare-zip route
 
 src/lib/duplicate-detection.ts
   - computePhash(imagePath) → hex string
@@ -682,8 +789,10 @@ src/app/api/upload-url/route.ts — Phase 1: presigned URL
 src/app/api/upload/route.ts — Phase 2: process + store (60s timeout needed)
 
 lib/api.ts (mobile) — all API functions. Key ones:
-  processUpload() — uses 60000ms timeout (all others use 15000ms)
-  findMyPhotos() — returns { photos, otherPhotos }
+  processUpload() — uses 60000ms timeout (60s)
+  del() — NO timeout set (no AbortController)
+  findMyPhotos() — NO timeout set; returns { photos, otherPhotos }
+  All other API calls use the default 15000ms (15s) timeout.
   listJoinedGuestsForUser() — use this, not the removed listJoinedGuests()
 
 
@@ -1110,8 +1219,18 @@ WHAT IS WORKING:
   Organiser recognition — checks mobile number, shows "Organiser" button
 
 WHAT IS NOT ON WEB (by design):
-  Creating events, managing events — organiser uses mobile app for this
-  (Organisers can join as guest on web and get admin privileges automatically)
+  Creating events, managing events — web app is for guests only.
+  The /admin organiser management pages (web login, event list, event management)
+  were removed on 2026-08-14. All organiser functions remain on the mobile app.
+  (Organisers who join as guests on web get organiser privileges automatically)
+
+WEB DOWNLOAD ROUTES (serve momentsinframe.com):
+  /api/download-photo — POST, single-photo download; fetches from S3, calls stampIstExif(),
+                        streams file; uses original_filename for Content-Disposition
+                        (not buildDownloadFilename like native)
+  /api/download-zip   — POST, ZIP download; processes photos in batches of 10, calls
+                        stampIstExif() on each; organises into Photos/ and Others/ folders;
+                        returns a 1-hour presigned download URL
 
 PENDING WEB CHANGE (parked 2026-08-08):
   Registration screen (/setup): first/last name fields need alphabets-only filter,
@@ -1205,9 +1324,10 @@ SECTION 26: IMPORTANT FILES MAP
 MOBILE APP (MomentsInFrame/):
   app/event.tsx             — Main event screen (gallery, upload, select, delete)
   app/my-photos.tsx         — Find My Photos screen (camera → search → results)
-  app/(auth)/home.tsx       — Home screen (joined events list, gear menu)
-  app/(auth)/login.tsx      — Login screen (phone + OTP entry)
-  app/(auth)/join-event.tsx — Enter event code screen
+  app/(auth)/home.tsx       — Home screen (Guest login card + Organiser login card + gear menu)
+  app/(auth)/login.tsx      — Redirect only: contains <Redirect href="/(auth)/home" />; actual login UI is in name-entry.tsx
+  app/(auth)/name-entry.tsx — Login + registration screen (phone entry → OTP → name fields)
+  app/(auth)/join-event.tsx — Enter event code screen (previously joined events list + QR scanner)
   app/(auth)/name-entry.tsx — Registration screen (name + phone)
   app/(master)/dashboard.tsx      — Master admin: list all events
   app/(master)/event-detail.tsx   — Master admin: manage single event
@@ -1234,20 +1354,30 @@ BACKEND (onealbum-trial/src/):
   app/api/native/events/[slug]/guests/[mobile]/route.ts — Block/unblock
   app/api/native/events/[slug]/find-my-photos/route.ts — Rekognition search
   app/api/native/events/[slug]/prepare-zip/route.ts   — ZIP creation
-  app/api/native/photos/[id]/download-url/route.ts    — Single photo DL URL
+  app/api/native/photos/[id]/download/route.ts         — Single photo download (GET, streams file with stampIstExif — iOS fix)
+  app/api/native/photos/[id]/download-url/route.ts    — Single photo share URL (POST, returns presigned S3 URL for sharing only)
   app/api/native/whitelist/route.ts        — Whitelist management
   app/api/native/whitelist/[phone]/route.ts — Delete with cascade
+  app/api/native/whitelist/check/route.ts  — Check if phone is whitelisted
   app/api/native/otp/send/route.ts         — Send WhatsApp OTP
   app/api/native/otp/verify/route.ts       — Verify OTP code
-  app/api/native/users/route.ts            — User management
-  app/api/native/notifications/route.ts    — Server notifications
+  app/api/native/users/route.ts            — User management (CRUD)
+  app/api/native/users/[mobile]/route.ts   — Get/delete specific user
+  app/api/native/notifications/route.ts    — Server notifications (GET/PATCH/DELETE)
+  app/api/native/cron/purge-notifications/route.ts — Cron: prune old notifications
+  app/api/native/join-user/route.ts        — Register guest joining an event
+  app/api/events/[slug]/photo-urls/route.ts — Batch presigned URL resolution
+  app/api/whatsapp/webhook/route.ts        — WhatsApp webhook (Meta verification)
   lib/supabase-admin.ts                    — Service-role Supabase client
   lib/s3.ts                                — S3 client with acceleration
   lib/exif.ts                              — Date extraction + dateSource
-  lib/image-processing.ts                  — HEIC conversion, GPS strip
+  lib/image-processing.ts                  — HEIC conversion, GPS strip, ISOBMFF parser
   lib/duplicate-detection.ts               — pHash compute + duplicate logic
+  lib/download-filename.ts                 — buildDownloadFilename() helper
   lib/web-storage.ts                       — Browser localStorage helpers
   lib/device.ts                            — Device utilities
+  app/api/download-photo/route.ts          — Web: single-photo download (POST, stampIstExif, streams file)
+  app/api/download-zip/route.ts            — Web: ZIP download (POST, stampIstExif, Photos/ + Others/ folders)
 
 
 ================================================================================
@@ -1268,11 +1398,17 @@ MOBILE APP — EDITS:
   app/(auth)/join-event.tsx — removed 2 unused styles
 
 BACKEND — FILES DELETED:
+  src/app/admin/page.tsx         — Web organiser login + events list (removed 2026-08-14)
+  src/app/admin/create/page.tsx  — Web create event form (removed 2026-08-14)
+  src/app/admin/[slug]/page.tsx  — Web event management UI (removed 2026-08-14)
   src/app/admin-login/page.tsx — broken + unreachable
   src/app/create/page.tsx — replaced by /admin/create
   src/app/api/events/route.ts — only caller was the dead create page
   src/app/api/native/events/[slug]/download-zip/route.ts — replaced by prepare-zip
-  src/app/api/native/photos/[id]/download/route.ts — replaced by download-url
+  src/app/api/native/photos/[id]/download/route.ts — INCORRECTLY deleted in this
+    cleanup (commit e036c08); RESTORED in commit fedb8a7 (2026-08-14). This route
+    is actively used by all three screens for JPG downloads and must not be deleted.
+    The /download-url route serves a different purpose (share URL only).
   src/app/api/ping/route.ts — zero callers
   src/lib/supabase.ts — never imported, all routes use supabase-admin
   src/lib/app-info.ts — only imported by dead create page
@@ -1280,6 +1416,10 @@ BACKEND — FILES DELETED:
 BACKEND — EDITS:
   src/lib/web-storage.ts — removed 4 dead exports (saveAdminSession, getAdminSession,
                            saveMasterSession, getMasterSession)
+  src/lib/web-storage.ts — removed saveOrganiserSession, clearOrganiserSession,
+                           saveLastAdminEventCode, getLastAdminEventCode (all dead after
+                           admin page deletion on 2026-08-14); getOrganiserSession
+                           retained (still used by join/page.tsx)
   src/lib/device.ts — removed PHOTO_UPLOAD_LIMIT = 30 (zero callers)
   .env.example — removed stale ADMIN_PASSWORD, added 5 missing WhatsApp + cron vars
 
@@ -1300,6 +1440,16 @@ Rules:
   - Organiser: unaffected. Can still upload as normal.
   - Co-Admins: unaffected. Can still upload as normal.
   - Toggle is in the SETTINGS section of Manage Event screen.
+
+Frontend UI changes when view-only is active (for guests):
+  - Upload button replaced by a disabled "View Only Event" button (greyed out)
+  - My Uploads pill hidden entirely (guests have nothing to filter by)
+  - Organiser and co-admin see normal upload button regardless
+
+Server-side enforcement:
+  Phase 2 (POST /api/upload) checks view_only flag for every upload attempt.
+  Non-organiser, non-co-admin callers receive 403 "This event is view only."
+  This is enforced server-side — a guest bypassing the UI still cannot upload.
 
 EXTEND EVENT:
 
@@ -1326,6 +1476,17 @@ When an event expires:
 Frontend check (app/event.tsx):
   const isEventExpired = expiresAt ? new Date(expiresAt) < new Date() : false;
   This is a client-side check using the expiresAt string from the event record.
+
+Backend check (GET /download route):
+  Server also checks expiry for every single-photo download attempt.
+  Organiser bypass: ?adminPhone= query param is checked against event.owner_phone.
+
+Expiry banner:
+  A banner appears inside the event screen when the event is expiring soon or
+  has already expired. It does NOT only appear on expiry day — it appears early.
+  - ≤3 days remaining: "This event closes on [date]"
+  - Expires today:     "This event closes today"
+  - Already expired:   "This event closed on [date]"
 
 
 ================================================================================
@@ -1366,11 +1527,17 @@ How it works:
   On event open: count photos where uploaded_at > last_visited_at → show badge
   On event close: last_visited_at is updated to now
 
+  isNew covers two sources (both combined with OR):
+    1. Photos uploaded before this session but after last_visited_at (timestamp-based)
+    2. Photos the user uploaded IN THE CURRENT SESSION (tracked in newlyUploadedIds)
+  So a photo you just uploaded also shows the "New" badge immediately.
+
 Badge display:
   - Green "New" pill on Photo Gallery and Other Photos section headers
     (shows count of new photos in that section)
   - Green "New" pill on individual photo thumbnails
-  - New badge is HIDDEN when My Uploads filter is active
+  - New badge on SECTION HEADERS is hidden when My Uploads filter is active
+  - New badge on INDIVIDUAL THUMBNAILS is still shown regardless of My Uploads filter
   - Badge handles deletions correctly (deleted photos don't inflate count)
 
 Badge clears:
@@ -1436,7 +1603,178 @@ DO NOT CHANGE ANY OF THE FOLLOWING WITHOUT A FULL IMPACT ANALYSIS:
 Any change to one side MUST be paired with a matching change on the other side
 PLUS a DB migration to add/subtract 5.5h from ALL existing taken_at rows.
 Removing either the −5.5h or the +5.5h alone will break display for all photos.
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+================================================================================
+SECTION 34: APP UI DETAILS AND PLATFORM BEHAVIOUR
+================================================================================
+
+APP IDENTITY:
+  App display name: "Moments" (this is what appears under the icon on the home screen)
+  Bundle ID: com.momentsinframe.app
+  Platform minimum versions: iOS 18.0, Android minSdk 26
+
+OTA UPDATE CHECK — MANUAL ONLY:
+  checkAutomatically: "NEVER" — the app does NOT check for OTA updates on launch.
+  Updates are only found when the user opens the gear menu → "Check for Updates"
+  (calls Updates.checkForUpdateAsync()).
+
+iOS DEEP LINKS:
+  associatedDomains: ["applinks:momentsinframe.com"]
+  Deep links from momentsinframe.com (e.g. event invite URLs) open the app directly.
+
+CUSTOM EXPO PLUGINS (app.json):
+  withBackgroundUpload  — registers background upload native module
+  withExcludeFromBackup — excludes app data from iCloud backup
+  expo-contacts         — used for co-admin and allowed-guest management
+                          (reading device contacts to find names/numbers)
+
+PLATFORM VERSIONS:
+  iOS: 18.0 minimum
+  Android: minSdkVersion 26 (Android 8.0 Oreo)
+
+HOME SCREEN (app/(auth)/home.tsx):
+  Shows two cards: "Guest login" and "Organiser login"
+  Gear icon (top right) opens a menu with:
+    - "Check for Updates" → calls Updates.checkForUpdateAsync()
+    - "See user details" → shows logged-in name + mobile, with Logout and
+      Delete Account buttons
+
+LOGIN / REGISTRATION (app/(auth)/name-entry.tsx):
+  Two-step flow:
+    Step 1: Enter phone number → "Send OTP" → backend lookup
+      - If returning user: pre-fills name fields (read-only)
+      - If new user: shows "Details once entered cannot be changed" warning
+    Step 2: Name fields (first + last) + OTP code entry + "Resend" button
+      - On success: user record created/confirmed, navigates into app
+  app/(auth)/login.tsx contains ONLY <Redirect href="/(auth)/home" />
+
+JOIN EVENT (app/(auth)/join-event.tsx):
+  - QR code scanner (camera-based) for scanning event QR codes
+  - Previously joined events list with "Rejoin" buttons for each
+  - After joining a new event: calls checkAdminStatus() to detect if the
+    joining user is a co-admin for that event
+
+LOGOUT FLOW:
+  Checks if organiser has any active (non-expired) events first.
+  If yes: blocks logout and shows message (organiser must not abandon events).
+  If no active events: logout proceeds.
+
+DELETE ACCOUNT FLOW:
+  Checks event count; if organiser has active events → blocked.
+  If whitelisted (organiser account): requires master password before deletion.
+  On success: app_users row removed, photos retained in all events.
+
+LIGHTBOX EXTRAS (all screens that have a lightbox):
+  - Pinch-to-zoom: 1× minimum, 5× maximum
+  - Double-tap: zooms to 2.5× (second double-tap returns to 1×)
+  - Pan while zoomed: drag to see different parts of the photo
+  - Share button: calls /download-url (POST) to get presigned S3 URL, then
+    opens native share sheet
+
+SORT AND DISPLAY SETTINGS:
+  - Sort order and "Group by date" preference are persisted per device
+    to SecureStore (not AsyncStorage — survives app reinstall wipe)
+  - SecureStore key: gallery_sort_order, gallery_group_by_date
+
+ANDROID DOWNLOAD FOLDER NAMING:
+  - First time a user downloads from an event, they are prompted to name
+    the download folder for that event
+  - The chosen name is stored and reused for all subsequent downloads
+  - SecureStore key: downloads_folder_name_{slug}
+
+iOS LIMITED PHOTO ACCESS ALERT:
+  - When the user has granted "Limited" photo library access (not Full Access),
+    a one-time alert prompts them to grant Full Access
+  - Shown only once per device (flag stored in SecureStore)
+  - SecureStore key: mif_limited_access_shown
+
+SCROLL-TO-TOP BUTTON (event screen):
+  - A "↑ Top" button appears on the event gallery screen after the user scrolls
+    down more than 300px
+  - Tapping it scrolls the list back to the top instantly
+  - Hidden at the top of the list (within first 300px of scroll position)
+
+BACKGROUND UPLOAD MODULE API (modules/background-upload/):
+  iOS-only native module that keeps uploads running when the app is backgrounded.
+  API surface:
+    startService(jobId, options)  — starts a background upload job
+    updateService(jobId, updates) — updates progress/state for a running job
+    stopService(jobId)            — stops and cleans up a background job
+    isRunning(jobId)              — returns boolean: is this job still active?
+
+ANDROID NOTIFICATION CHANNELS (expo-notifications):
+  Two channels created at app startup:
+    uploads   — importance: LOW (silent, no sound)
+    downloads — importance: DEFAULT (sound on completion)
+
+SECURESTORE KEYS REFERENCE:
+  gallery_sort_order          — "asc" or "desc", per device
+  gallery_group_by_date       — "true" or "false", per device
+  mif_limited_access_shown    — "true" once iOS limited access alert shown
+  downloads_folder_name_{slug} — Android download folder name per event
+  last_event_params           — last event the user joined (for re-entry)
+  last_event_code             — last event code entered
+
+ASYNCSTORAGE KEYS REFERENCE:
+  mif_last_visited_{slug}     — ISO timestamp of last event visit (new badge)
+  Upload history stored per event slug (notifications panel source)
+
+
+================================================================================
+SECTION 35: DATABASE SCHEMA — KEY TABLES
+================================================================================
+
+All tables have Row-Level Security (RLS) enabled with restrictive policies.
+All API routes use the service role key (supabaseAdmin) which bypasses RLS.
+Never use the anon key for server-side operations.
+
+events table (key columns):
+  id, slug, name, owner_phone, event_admin_password_hash
+  expires_at, is_closed, view_only, find_my_photos_enabled
+  join_code    — short numeric code guests enter to join
+  region       — deployment region tag
+  created_at
+
+photos table (key columns):
+  id (UUID), event_id, storage_path, thumbnail_path, display_path
+  original_filename, original_format (e.g. "heic"), media_type
+  file_size_bytes, taken_at, dateSource
+  uploaded_by_mobile, uploaded_by_name, uploaded_at
+  deleted_at (soft-delete; NULL = live), is_duplicate_of (UUID ref)
+
+app_users table (key columns):
+  id, mobile (unique), name, created_at
+  is_active  — boolean; gates visibility in co-admin and allowed-guest lists
+               throughout the backend. Inactive users are hidden from these lists.
+
+event_coadmins table:
+  id, event_id, mobile, name, created_at
+
+event_allowed_phones table:
+  id, event_id, mobile, name, created_at
+  WARNING: ALL rows deleted when is_closed set to false (see Section 12)
+
+event_users table — CENTRAL TO GUEST MANAGEMENT:
+  Completely undocumented in earlier reference versions. This is the table
+  that tracks every guest who has ever joined an event.
+  id, event_id, mobile, name, is_blocked
+  is_blocked = true → guest can view but cannot upload
+  Used by: block/unblock flows, Manage Guests screen, joined-guests API
+
+organiser_whitelist table:
+  mobile (primary key), created_at
+  Only phones here can create organiser accounts.
+  Master phone (8826388388) is always present and cannot be deleted.
+
+notifications table:
+  id, mobile, event_id, type, payload (JSONB), read, created_at
+  type is one of the 6 values listed in Section 11.
+  Pruned on every GET /api/native/notifications call (>48h rows deleted).
+
+otp_codes table:
+  mobile, code, expires_at
+  Existing row deleted before new OTP inserted (one active OTP per phone).
 
 Cross-timezone events (e.g., photos from Thailand and India in the same event):
   Each photo shows its own local time. Photos sort correctly by date since

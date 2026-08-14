@@ -1509,7 +1509,7 @@ export default function EventScreen() {
     ]);
   }
 
-  const JPG_LIMIT = 25;
+  const JPG_LIMIT = 40;
 
   async function getDownloadFolder(): Promise<string | null> {
     if (Platform.OS !== 'android') return null;

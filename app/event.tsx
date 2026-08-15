@@ -462,6 +462,7 @@ export default function EventScreen() {
   const [loading, setLoading] = useState(true);
   const [userMobile, setUserMobile] = useState<string | null>(null);
   const userMobileRef = useRef<string | null>(null);
+  const hasInitiallyLoadedRef = useRef(false);
   const [userName, setUserName] = useState<string | null>(null);
   const [eventUserId, setEventUserId] = useState<string | null>(null);
   const [deviceId, setDeviceId] = useState<string | null>(null);
@@ -591,27 +592,6 @@ export default function EventScreen() {
   }
 
   useEffect(() => {
-    getUserProfile().then(async p => {
-      const phone = p?.mobile ?? params.adminPhone ?? null;
-      if (p) {
-        setUserMobile(p.mobile);
-        userMobileRef.current = p.mobile;
-        setUserName(`${p.firstName} ${p.lastName}`.trim());
-
-      }
-      loadPhotos();
-      const notifPerm = await Notifications.getPermissionsAsync();
-      if (notifPerm.status === 'granted') {
-        setupNotifications();
-      } else if (notifPerm.canAskAgain) {
-        requestAppPermission('notifications', setupNotifications, phone);
-      }
-      if (p) {
-        refreshNotifications(p.mobile);
-      } else {
-        refreshNotifications();
-      }
-    });
     getEventUserId().then(id => { if (id) setEventUserId(id); });
     getDeviceId().then(id => { if (id) setDeviceId(id); });
     SecureStore.getItemAsync('gallery_sort_order').then(v => { if (v === 'asc' || v === 'desc') { setSortOrder(v); setDraftSortOrder(v); } });
@@ -632,6 +612,33 @@ export default function EventScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      let saveTimer: ReturnType<typeof setTimeout> | undefined;
+      if (!hasInitiallyLoadedRef.current) {
+        hasInitiallyLoadedRef.current = true;
+        saveTimer = setTimeout(async () => {
+          await saveLastVisitedAt(slug, new Date().toISOString());
+        }, 200);
+        getUserProfile().then(async p => {
+          const phone = p?.mobile ?? params.adminPhone ?? null;
+          if (p) {
+            setUserMobile(p.mobile);
+            userMobileRef.current = p.mobile;
+            setUserName(`${p.firstName} ${p.lastName}`.trim());
+          }
+          loadPhotos(true);
+          const notifPerm = await Notifications.getPermissionsAsync();
+          if (notifPerm.status === 'granted') {
+            setupNotifications();
+          } else if (notifPerm.canAskAgain) {
+            requestAppPermission('notifications', setupNotifications, phone);
+          }
+          if (p) {
+            refreshNotifications(p.mobile);
+          } else {
+            refreshNotifications();
+          }
+        });
+      }
       const mobileAtCallTime = userMobileRef.current;
       getEventPhotos(slug, params.adminPhone || undefined, mobileAtCallTime ?? undefined).then(data => {
         if (data?.event) {
@@ -642,6 +649,7 @@ export default function EventScreen() {
           if (data.event.role && mobileAtCallTime) setUserRole(data.event.role);
         }
       });
+      return () => { clearTimeout(saveTimer); };
     }, [])
   );
 
@@ -681,14 +689,14 @@ export default function EventScreen() {
     prevSelectedSize.current = selected.size;
   }, [selected.size, selectMode, deleteMode]);
 
-  async function loadPhotos() {
+  async function loadPhotos(skipSave = false) {
     setLoading(true);
     setUploadSummary(null);
     setNewlyUploadedIds(new Set());
     setNewPhotoIds(new Set());
     const visitedAt = new Date().toISOString();
     const lastVisitedAt = await getLastVisitedAt(slug);
-    await saveLastVisitedAt(slug, visitedAt);
+    if (!skipSave) await saveLastVisitedAt(slug, visitedAt);
     async function attempt() {
       const data = await getEventPhotos(slug, params.adminPhone || undefined, userMobileRef.current ?? undefined);
       if (data.error) { setLoading(false); showAlert('Error', data.error); return; }

@@ -34,6 +34,7 @@ export default function ManageGuestsScreen() {
     adminPhone: string;
     viewerRole: string;
     userMobile: string;
+    eventName: string;
   }>();
   const { showAlert } = useAlert();
 
@@ -140,7 +141,7 @@ export default function ManageGuestsScreen() {
               const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
               return (
                 <TouchableOpacity key={guest.mobile} style={styles.row} activeOpacity={0.7}
-                  onPress={() => router.push({ pathname: '/guest-uploads', params: { slug: params.slug, adminPhone: params.userMobile || params.adminPhone || '', viewerRole: params.viewerRole, guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: contactMap[guest.mobile] ?? '' } })}>
+                  onPress={() => router.push({ pathname: '/guest-uploads', params: { slug: params.slug, adminPhone: params.userMobile || params.adminPhone || '', viewerRole: params.viewerRole, guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: contactMap[guest.mobile] ?? '', eventName: params.eventName ?? '' } })}>
                   <View style={styles.guestInfo}>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                       <Text style={styles.guestName}>{displayName}</Text>
@@ -160,7 +161,7 @@ export default function ManageGuestsScreen() {
             const appName = guest.name || guest.mobile;
             return (
               <TouchableOpacity key={guest.mobile} style={[styles.row, guest.is_blocked && styles.blockedRow]} activeOpacity={0.7}
-                onPress={() => router.push({ pathname: '/guest-uploads', params: { slug: params.slug, adminPhone: params.userMobile || params.adminPhone || '', viewerRole: params.viewerRole, guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: contactMap[guest.mobile] ?? '' } })}>
+                onPress={() => router.push({ pathname: '/guest-uploads', params: { slug: params.slug, adminPhone: params.userMobile || params.adminPhone || '', viewerRole: params.viewerRole, guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: contactMap[guest.mobile] ?? '', eventName: params.eventName ?? '' } })}>
                 <View style={styles.guestInfo}>
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                     <Text style={[styles.guestName, guest.is_blocked && styles.blockedText]}>{appName}</Text>

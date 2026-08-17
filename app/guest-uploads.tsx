@@ -101,12 +101,14 @@ export default function GuestUploadsScreen() {
     guestName: string;
     guestRole: string;
     guestContactName: string;
+    eventName: string;
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showAlert, alertOverlay } = useAlert();
 
   const eventSlug = params.slug;
+  const eventName = params.eventName || eventSlug;
   const adminPhone = params.adminPhone;
   const viewerRole = params.viewerRole as 'organiser' | 'coadmin';
   const guest = {
@@ -523,12 +525,16 @@ export default function GuestUploadsScreen() {
             const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
             if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
             if (Platform.OS === 'android') {
-              const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`) ?? eventSlug;
+              let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`);
+              if (!folderName) {
+                folderName = eventName;
+                await SecureStore.setItemAsync(`downloads_folder_name_${eventSlug}`, folderName);
+              }
               const localPath = dlResult.uri.replace('file://', '');
               await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', dateTakenMs);
             } else {
               if (PhotoSaver) {
-                await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs, eventSlug);
+                await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs, eventName);
               } else {
                 await MediaLibrary.saveToLibraryAsync(cacheUri);
               }
@@ -650,7 +656,11 @@ export default function GuestUploadsScreen() {
   async function doDownloadJpgs(ids: string[]) {
     setActionLoading(true);
     try {
-      const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`) ?? eventSlug;
+      let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`);
+      if (!folderName) {
+        folderName = eventName;
+        await SecureStore.setItemAsync(`downloads_folder_name_${eventSlug}`, folderName);
+      }
       let saved = 0;
       let failed = 0;
 
@@ -669,7 +679,7 @@ export default function GuestUploadsScreen() {
             await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', dateTakenMs);
           } else {
             if (PhotoSaver) {
-              await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs, eventSlug);
+              await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs, eventName);
             } else {
               await MediaLibrary.saveToLibraryAsync(cacheUri);
             }
@@ -697,7 +707,11 @@ export default function GuestUploadsScreen() {
     const dlResult = await FileSystem.downloadAsync(url, cacheUri);
     if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
     if (Platform.OS === 'android') {
-      const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`) ?? eventSlug;
+      let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`);
+      if (!folderName) {
+        folderName = eventName;
+        await SecureStore.setItemAsync(`downloads_folder_name_${eventSlug}`, folderName);
+      }
       const localPath = dlResult.uri.replace('file://', '');
       await MediaStore.saveToDownloads(localPath, filename, folderName, 'application/zip');
     } else {

@@ -138,6 +138,7 @@ export default function MyPhotosScreen() {
   const listDataRef = useRef<ListItem[]>([]);
 
   const slug = params.slug;
+  const eventName = params.eventName || slug;
   const adminPhone = params.adminPhone || undefined;
   const userMobile = params.userMobile || undefined;
   const totalPhotos = parseInt(params.totalPhotos ?? '0', 10);
@@ -425,12 +426,16 @@ export default function MyPhotosScreen() {
             const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
             if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
             if (Platform.OS === 'android') {
-              const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? slug;
+              let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`);
+              if (!folderName) {
+                folderName = eventName;
+                await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
+              }
               const localPath = dlResult.uri.replace('file://', '');
               await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', 0);
             } else {
               if (PhotoSaver) {
-                await PhotoSaver.saveToPhotos(cacheUri, 0, slug);
+                await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);
               } else {
                 await MediaLibrary.saveToLibraryAsync(cacheUri);
               }
@@ -600,7 +605,11 @@ export default function MyPhotosScreen() {
   async function doDownloadJpgs(ids: string[]) {
     setActionLoading(true);
     try {
-      const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? slug;
+      let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`);
+      if (!folderName) {
+        folderName = eventName;
+        await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
+      }
       let saved = 0;
       for (const id of ids) {
         try {
@@ -616,7 +625,7 @@ export default function MyPhotosScreen() {
             await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', 0);
           } else {
             if (PhotoSaver) {
-              await PhotoSaver.saveToPhotos(cacheUri, 0, slug);
+              await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);
             } else {
               await MediaLibrary.saveToLibraryAsync(cacheUri);
             }
@@ -651,7 +660,11 @@ export default function MyPhotosScreen() {
         const dlResult = await FileSystem.downloadAsync(zipRes.zipUrl, cacheUri);
         if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
         if (Platform.OS === 'android') {
-          const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? slug;
+          let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`);
+          if (!folderName) {
+            folderName = eventName;
+            await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
+          }
           const localPath = dlResult.uri.replace('file://', '');
           await MediaStore.saveToDownloads(localPath, filename, folderName, 'application/zip');
         } else {

@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
-  Modal, ActivityIndicator, Dimensions, TextInput,
+  Modal, ActivityIndicator, Dimensions,
   Platform, BackHandler, AppState, RefreshControl, Alert, InteractionManager,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
@@ -541,9 +541,6 @@ export default function EventScreen() {
   const [deselectedPhotoIds, setDeselectedPhotoIds] = useState<Set<string>>(new Set());
   const [photoSelectLoading, setPhotoSelectLoading] = useState(false);
 
-  const [folderSetupVisible, setFolderSetupVisible] = useState(false);
-  const [folderNameDraft, setFolderNameDraft] = useState('MomentsInFrame');
-  const folderSetupResolveRef = useRef<((name: string | null) => void) | null>(null);
   const [duplicateResults, setDuplicateResults] = useState<UploadFileResult[]>([]);
   const [duplicateViewerVisible, setDuplicateViewerVisible] = useState(false);
   const [duplicateViewerIndex, setDuplicateViewerIndex] = useState(0);
@@ -1524,12 +1521,7 @@ export default function EventScreen() {
     const storeKey = `downloads_folder_name_${slug}`;
     let folderName = await SecureStore.getItemAsync(storeKey);
     if (!folderName) {
-      folderName = await new Promise<string | null>(resolve => {
-        setFolderNameDraft(params.name);
-        folderSetupResolveRef.current = resolve;
-        setFolderSetupVisible(true);
-      });
-      if (!folderName) return null;
+      folderName = params.name;
       await SecureStore.setItemAsync(storeKey, folderName);
     }
     const folderPath = `${RNFetchBlob.fs.dirs.DownloadDir}/${folderName}`;
@@ -1578,7 +1570,11 @@ export default function EventScreen() {
 
   async function saveZipToDownloads(filename: string, url: string): Promise<void> {
     if (Platform.OS === 'android') {
-      const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
+      let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`);
+      if (!folderName) {
+        folderName = params.name;
+        await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
+      }
       const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
       const dlResult = await FileSystem.downloadAsync(url, cacheUri);
       if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
@@ -2692,7 +2688,7 @@ export default function EventScreen() {
               <Text style={styles.menuItemText}>Sort & Display</Text>
             </TouchableOpacity>
             {isAdmin && (
-              <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); requestAppPermission('contacts', () => router.push({ pathname: '/manage-guests', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', userMobile: userMobile ?? '' } }), userMobile ?? params.adminPhone ?? null); }}>
+              <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); requestAppPermission('contacts', () => router.push({ pathname: '/manage-guests', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', userMobile: userMobile ?? '', eventName: params.name ?? '' } }), userMobile ?? params.adminPhone ?? null); }}>
                 <Text style={styles.menuItemText}>Manage Guests</Text>
               </TouchableOpacity>
             )}
@@ -2748,42 +2744,6 @@ export default function EventScreen() {
               </TouchableOpacity>
               <TouchableOpacity style={[alertStyles.btn, alertStyles.btnCancel]} onPress={() => setSortPanelVisible(false)}>
                 <Text style={[alertStyles.btnText, alertStyles.btnCancelText]}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Folder name setup — first download only */}
-      <Modal visible={folderSetupVisible} transparent animationType="fade" onRequestClose={() => {
-        setFolderSetupVisible(false);
-        folderSetupResolveRef.current?.(null);
-      }}>
-        <View style={alertStyles.overlay}>
-          <View style={alertStyles.card}>
-            <Text style={alertStyles.title}>Name your downloads folder</Text>
-            <Text style={alertStyles.message}>Your files will be saved to Downloads / [name]. This only happens once.</Text>
-            <TextInput
-              value={folderNameDraft}
-              onChangeText={setFolderNameDraft}
-              style={styles.folderNameInput}
-              autoFocus
-              selectTextOnFocus
-              placeholderTextColor={Colors.textMuted}
-            />
-            <View style={[alertStyles.buttons, { flexDirection: 'row', gap: 8 }]}>
-              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnCancel, { flex: 1 }]} onPress={() => {
-                setFolderSetupVisible(false);
-                folderSetupResolveRef.current?.(null);
-              }}>
-                <Text style={[alertStyles.btnText, alertStyles.btnCancelText]}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnPrimary, { flex: 1 }]} onPress={() => {
-                const name = folderNameDraft.trim() || 'MomentsInFrame';
-                setFolderSetupVisible(false);
-                folderSetupResolveRef.current?.(name);
-              }}>
-                <Text style={[alertStyles.btnText, alertStyles.btnPrimaryText]}>OK</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -3301,8 +3261,6 @@ const styles = StyleSheet.create({
   dupUpgradeLabel: { fontSize: 13, fontWeight: '700', color: Colors.accent, textAlign: 'center' },
   dupUpgradePhoto: { flex: 1, width: '100%', borderRadius: 12, backgroundColor: '#111' },
   dupUpgradeMsg: { fontSize: 13, color: Colors.textMuted, textAlign: 'center', paddingHorizontal: 8 },
-
-  folderNameInput: { backgroundColor: '#2c2c2e', color: Colors.white, fontSize: 15, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, marginBottom: 16, borderWidth: 1, borderColor: '#444' },
 
   // Failed viewer
   failedViewerCard: { maxHeight: '85%' },

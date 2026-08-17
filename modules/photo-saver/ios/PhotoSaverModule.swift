@@ -38,11 +38,23 @@ public class PhotoSaverModule: Module {
               promise.reject("ERR_ALBUM_FAILED", "Could not find or create album '\(albumName)'")
               return
             }
+            let fetchOpts = PHFetchOptions()
+            fetchOpts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: true)]
+            let existingAssets = PHAsset.fetchAssets(in: collection, options: fetchOpts)
+            var insertIndex = existingAssets.count
+            if let insertDate = dateTaken {
+              existingAssets.enumerateObjects { asset, idx, stop in
+                if let d = asset.creationDate, d > insertDate {
+                  insertIndex = idx
+                  stop.pointee = true
+                }
+              }
+            }
             PHPhotoLibrary.shared().performChanges({
               if let creationRequest = PHAssetCreationRequest.creationRequestForAssetFromImage(atFileURL: saveUrl) {
                 if let date = dateTaken { creationRequest.creationDate = date }
                 if let placeholder = creationRequest.placeholderForCreatedAsset {
-                  PHAssetCollectionChangeRequest(for: collection)?.addAssets([placeholder] as NSArray)
+                  PHAssetCollectionChangeRequest(for: collection)?.insertAssets([placeholder] as NSArray, at: IndexSet(integer: insertIndex))
                 }
               }
             }) { success, error in

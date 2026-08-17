@@ -32,6 +32,11 @@
       }
     },
     "android": {
+      "splash": {
+        "image": "./assets/android-splash.png",
+        "resizeMode": "contain",
+        "backgroundColor": "#000000"
+      },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.momentsinframe.app",

@@ -1,0 +1,926 @@
+================================================================================
+MOMENTSINFRAME — COMPLETE APP REFERENCE FILE
+Generated: 2026-08-17
+================================================================================
+
+================================================================================
+SECTION 0: CRITICAL WORKING RULES — READ FIRST, NEVER SKIP
+================================================================================
+
+RULE 1: ALWAYS ASK BEFORE ANY CODE CHANGE
+Never make any code change without explicit user approval in that same turn.
+Always present the plan first and wait for a "yes" or "go ahead". This applies
+even when the fix is obvious, and even when you are in the middle of a discussion.
+Violating this rule upsets the user.
+
+RULE 2: WAIT FOR PERMISSION BEFORE STARTING CODE CHANGES
+After all discussions are done and the logic is finalised, the user must
+explicitly give permission before any code changes start. Do not start writing
+or editing any file until that permission is given in that same conversation turn.
+
+RULE 3: PUSH OTA AND VERCEL AFTER CODE CHANGES ARE APPROVED
+After code changes are done and the user approves them, push an OTA update for
+the mobile app (always to the "preview" branch, never production) and deploy the
+backend to Vercel. Do both before marking the task complete.
+
+RULE 4: PUSH TO GITHUB ONLY AFTER USER TESTS AND CONFIRMS
+Pushing changes to GitHub (the backend repo) happens only after the user has
+tested the changes and explicitly confirms they are working correctly. Never push
+to GitHub before the user has tested the changes.
+
+================================================================================
+SECTION 1: APP OVERVIEW
+================================================================================
+
+MomentsInFrame is a private photo-sharing app for events (weddings, birthdays,
+reunions, etc). Guests join an event using a 6-digit code or QR scan, then
+upload and view photos together. Organisers manage the event, co-admins help
+with moderation, and all identity is tied to a mobile number verified by
+WhatsApp OTP.
+
+TECH STACK:
+- Mobile app: Expo SDK 54 / React Native — runs on iOS and Android
+- Backend: Next.js API routes deployed to Vercel (3 regions: Mumbai, Singapore, Frankfurt)
+- Photo storage: AWS S3 Mumbai with Transfer Acceleration enabled
+- Database: Supabase (free tier) — all structured data lives here
+- OTP: WhatsApp via Meta Cloud API
+- Face search: AWS Rekognition (Find My Photos feature)
+- OTA updates: EAS pushed to "preview" branch only (never production)
+- iOS distribution: TestFlight
+- Android distribution: Google Play Internal Testing (app bundle / AAB)
+- Web app: momentsinframe.com — hosted on Vercel, used for deep link joins
+
+USER ROLES:
+- Organiser: the person who created the event; has full control
+- Co-Admin: elevated guest; can delete photos (except organiser's photos and other
+  co-admin photos)
+- User (guest): regular participant; can upload and view photos, optionally delete
+  their own photos if the organiser enables that setting
+- Master: a special hardcoded phone number (8826388888) that can manage the
+  whitelist of who is allowed to be an organiser
+
+All role checks use the user's mobile number. Device IDs and session tokens
+are never used for permissions — only the mobile number matters.
+
+UPLOAD FLOW (two-phase, bypasses Vercel body limit):
+1. The app asks the backend for a signed permission (presigned URL) to upload
+   directly to S3. The backend validates the event and creates a temporary
+   "staging" slot in S3.
+2. The app uploads the photo file directly from the device to S3 — this never
+   passes through Vercel's servers, which have a 4.5 MB limit.
+3. After the upload succeeds, the app sends a small JSON message to the backend
+   saying "a file was uploaded to this staging slot".
+4. The backend fetches the file from the staging slot, runs duplicate detection,
+   EXIF date extraction, HEIC conversion if needed, strips GPS data, and either
+   stores it as a new photo or upgrades an existing one if this is higher quality.
+
+DUPLICATE DETECTION:
+Photos are compared using a perceptual hash (pHash). The difference between two
+hashes is measured as a Hamming distance. A distance of 10 or less means the
+photos look the same. A distance of 4 or less is used for stricter comparisons.
+The system handles five specific duplicate cases:
+- WhatsApp copy (one photo missing EXIF date)
+- WhatsApp HD (both have EXIF dates, close timestamps, big size difference)
+- Burst shots (two photos taken within 2 seconds, similar size — NOT a duplicate)
+- No EXIF on either photo (only counts as duplicate if hashes are identical)
+- WhatsApp timestamp shift (timestamps differ by exactly 5.5 hours — known
+  WhatsApp export behaviour)
+If the new upload is a higher-quality version of an existing photo (lower hash
+distance AND larger file size), the old photo is replaced with the new one, and
+the original uploader is notified.
+
+EXIF AND DATES:
+Photos with a camera "Make" field in EXIF metadata (i.e. taken by a real camera
+app) land in the main Photo Gallery, sorted by the date they were taken.
+Photos without a Make field (screenshots, WhatsApp forwards, etc.) land in the
+Other Photos Gallery and are sorted by upload time instead.
+EXIF dates are treated as India Standard Time (+5:30). GPS location data is
+stripped from all photos on upload.
+
+HEIC HANDLING:
+iPhone photos in HEIC format with 48 or more internal reference boxes crash
+the standard HEIC library. The app uses a custom box parser to handle these,
+then converts them using a WASM-based HEIC decoder before storing as JPG.
+
+NOTIFICATIONS:
+When a photo is replaced by a higher-quality version, the original uploader
+gets a notification. Upgrade notifications are grouped within 10-minute windows
+per event per uploader — multiple upgrades in a row appear as one notification
+rather than a flood. Notifications are stored in the database and fetched by the
+app each time the event screen is opened.
+
+NEW PHOTO BADGE:
+The app tracks when a user last visited each event. On returning to the event,
+any photos uploaded after that last visit get a "new" badge. A 200ms delay is
+applied before saving the "last visited" timestamp — this prevents a race
+condition where a fast page load would mark photos as seen before the user
+actually sees them.
+
+================================================================================
+SECTION 2: FRONTEND SCREENS (17 TOTAL)
+================================================================================
+
+── SCREEN 1: App Startup ────────────────────────────────────────────────────────
+
+This screen runs every time the app opens. It shows the MomentsInFrame logo and
+checks whether an update is available from the server.
+
+In development mode, it skips the update check entirely and goes straight to
+the app.
+
+In production mode, it checks the EAS update server. If the update check fails
+(no internet, server error), the app continues normally — the check is
+non-blocking. If an update is found, a screen appears with an "Update Now" button.
+The user must tap it to download and install the update. If the download fails,
+a "Retry" button appears.
+
+After the update check completes (whether an update was installed or not), the
+app checks whether the user already has a profile. If they do, it routes them to
+the home screen. If they don't, it routes them to the registration screen.
+
+On every navigation change, the app re-checks whether the user's profile still
+exists. If someone logs out or deletes their account on another screen, the app
+detects this and immediately redirects to the registration screen.
+
+The OfflineBanner component is mounted globally here — it appears on every screen
+when the device loses internet connection.
+
+── SCREEN 2: Entry Point ────────────────────────────────────────────────────────
+
+This screen has no visible content. It runs once on startup.
+
+It checks whether the user has a "last event" saved on the device (an event they
+were viewing when they last closed the app). If one exists, it takes the user
+directly back to that event. If not, it takes them to the home screen.
+
+── SCREEN 3: Login Redirect ─────────────────────────────────────────────────────
+
+This is a legacy one-line screen that exists only to redirect old deep links and
+app installs to the current home screen. It does nothing except perform a redirect.
+
+── SCREEN 4: Registration Screen ────────────────────────────────────────────────
+
+This is where new users register and existing users verify their identity.
+
+Step 1: The user enters their 10-digit Indian mobile number. The app sends an OTP
+to their WhatsApp number and simultaneously checks whether they already have an
+account. Both happen in parallel.
+
+Step 2: The user enters the 6-digit OTP from WhatsApp. If they already have an
+account, their name fields are pre-filled and cannot be changed. New users type
+their first and last name.
+
+After OTP verification succeeds, the profile is saved to the device and the user
+is registered in the database. They are then taken to the home screen.
+
+── SCREEN 5: Home Screen ────────────────────────────────────────────────────────
+
+This is the first screen authenticated users see.
+
+When the screen comes into focus, it loads the user's profile and checks two
+things in parallel: whether the account is still active (the user hasn't been
+removed), and whether the user is whitelisted as an organiser.
+
+If the account is inactive (removed from the system), the profile is deleted from
+the device and the user is redirected to the registration screen.
+
+If the user is whitelisted, an organiser card appears offering access to the
+organiser dashboard.
+
+A gear icon in the top right opens a dropdown with two options:
+- "Check for Updates" — manually triggers an OTA update check
+- "See user details" — opens a modal showing name, mobile number, and options to
+  log out or delete the account
+
+Organisers must delete all their events before they can log out or delete their
+account.
+
+── SCREEN 6: Join Event Screen ──────────────────────────────────────────────────
+
+This is where users join an event using a 6-digit code or QR scan.
+
+A button at the top shows how many events the user has already joined. Tapping
+it opens a bottom sheet listing all their joined events, sorted by role
+(organiser first, then co-admins, then regular users). Tapping any event in the
+list opens it.
+
+The main input is a 6-digit code field. The user can also tap a QR scan button
+to open the camera and scan an event QR code (the QR scanner can also scan QR
+codes from the user's photo gallery).
+
+When a valid code is submitted, the app verifies it with the server, registers
+the user to the event, checks whether they have admin status, and saves the event
+to the device's local cache. It then opens the event screen.
+
+Expired events are detected when a user tries to re-open them from the cached list
+and are automatically removed from the cache.
+
+Events are shown immediately from the local cache and refreshed in the background
+from the server — this keeps the screen fast while still showing up-to-date info.
+
+── SCREEN 7: Organiser Login Screen ─────────────────────────────────────────────
+
+This screen handles the organiser's password for accessing the dashboard.
+
+On load, it checks whether a saved password already exists on the device. If one
+is found, it skips the login screen entirely and goes straight to the organiser
+dashboard.
+
+If no saved password is found, it checks whether an organiser password has ever
+been set up. First-time users see a setup flow (enter + confirm a new password).
+Returning users see a login form.
+
+Forgot Password is a 3-step flow:
+1. The app sends a WhatsApp OTP to the organiser's number
+2. The organiser enters the OTP to verify identity
+3. The organiser enters and confirms a new password
+
+── SCREEN 8: Create Event Screen ────────────────────────────────────────────────
+
+This screen lets an organiser create a new event.
+
+The event name field has a 50-character limit with a live character counter.
+
+The expiry date picker works differently on iOS and Android:
+- On iOS: a modal appears with a calendar widget the user taps to pick a date
+- On Android: the native system date picker sheet is used
+
+After the event is created, it is added to the organiser's local event cache
+(marked as organiser-created), and the organiser is taken back to the dashboard.
+
+── SCREEN 9: My Events / Dashboard ──────────────────────────────────────────────
+
+This is the organiser's main screen. It lists all events they have created.
+
+Each event card shows the event name, expiry date, photo count, and event code.
+Tapping "Open Event →" takes the organiser into the event as an organiser.
+Tapping "Tap to manage" opens the Manage Event screen.
+
+The gear icon in the top right offers:
+- "Change Password" — always visible
+- "Manage Whitelist" — only visible to the master phone number (8826388888)
+
+A "Switch to Guest" button at the bottom takes the organiser back to the home
+screen where they can join events as a regular guest.
+
+The Android hardware back button exits the app from this screen (it doesn't go
+back to the login screen).
+
+Pull-to-refresh reloads the event list from the server.
+
+── SCREEN 10: Manage Event Screen ───────────────────────────────────────────────
+
+This is the organiser's control panel for a specific event.
+
+SHARE section:
+- Event Code: copies a pre-formatted invite message to the clipboard (includes
+  the event name, the 6-digit code, and a join link)
+- Show QR: opens the QR code screen
+
+ACTIONS section:
+- Extend Expiry: opens a date picker; iOS shows a modal calendar, Android uses
+  the system picker
+- Co-Admins: opens a panel showing all co-admins. Co-admins can be added from
+  the device's contacts or by manually entering a phone number. Each can be removed.
+
+SETTINGS section (four toggles):
+- Allow guests to delete photos: guests can delete only their own photos (locked off
+  while View Only mode is active)
+- Invite Only Event: when on, only guests on a specific allowed list can join.
+  If guests have already joined, the organiser is asked whether to auto-add them
+  all to the allowed list or remove them all. After turning this on, an Allowed
+  Guests panel opens to manage the list.
+- View Only Event: guests can only view and download, not upload or delete
+- My Photos: enables or disables the face search feature for the event
+
+DELETE event is a 2-step process: first enter the organiser password, then confirm.
+All photos are permanently deleted from storage when an event is deleted.
+
+A gear icon at top right opens "Manage Guests" — shows all joined guests, their
+photo counts, and their roles, with Block/Unblock buttons.
+
+── SCREEN 11: Whitelist Screen ──────────────────────────────────────────────────
+
+Only accessible to the master phone number (8826388888). Regular organisers cannot
+see or reach this screen.
+
+Shows a list of all phone numbers that are allowed to register as organisers.
+Numbers can be added (small modal with a 10-digit input field) or removed.
+
+Removing a number is a 2-step process: first enter the master password to verify
+identity, then confirm. Removing a number permanently deletes all events that
+organiser created and all photos in those events. The person's app account remains
+— they can still join events as a guest.
+
+── SCREEN 12: QR Code Screen ────────────────────────────────────────────────────
+
+This screen shows a large QR code for an event.
+
+The QR code encodes the event's 6-digit join code.
+
+Two share options:
+- Share as Image: captures the QR card (including event name and code) as a JPEG
+  and opens the native share sheet
+- Share as PDF: captures just the QR, builds an HTML page with the event name,
+  code, and QR image, renders it as a PDF, and opens the native share sheet
+
+── SCREEN 13: QR Deep Link Handler ──────────────────────────────────────────────
+
+This screen has no visible UI (just a loading spinner).
+
+When someone taps a momentsinframe.com/join/XXXXXX link, the web app saves the
+6-digit code and the app's deep link system brings the user here. This screen
+immediately saves that code to device storage and redirects to the Join Event
+screen, where the code will be pre-filled.
+
+── SCREEN 14: Manage Guests Screen ──────────────────────────────────────────────
+
+Shows all users who have joined the event, sorted by role (organiser first, then
+co-admins, then regular users).
+
+Each row shows the guest's name, their contact name (from the device's contacts if
+available), mobile number, and photo count.
+
+Tapping any guest opens their uploads screen to see their photos.
+
+Block and Unblock buttons control whether a guest can access the event. Blocked
+guests' rows appear dimmed with a "BLOCKED" badge. Co-admins can block regular
+users but not other co-admins or the organiser. Organisers can block anyone.
+
+── SCREEN 15: Guest Uploads Screen ──────────────────────────────────────────────
+
+Shows all photos uploaded by one specific guest, grouped by date, oldest first.
+
+Tap any photo to open the lightbox (full-screen viewer). In the lightbox, the
+user can swipe left/right to navigate photos, pinch to zoom, double-tap to
+toggle zoom, and drag while zoomed to pan.
+
+Delete Photos and Download Photos buttons appear above the grid. Long-pressing
+any photo enters selection mode. In selection mode, drag across the grid to
+select or deselect photos in bulk. Tapping a date group header selects or
+deselects all photos on that date.
+
+For downloads:
+- 40 or fewer photos: user chooses between individual JPG files or a ZIP file
+- More than 41 photos: automatically downloads as a ZIP (user is warned when they
+  cross this threshold)
+- Android: JPGs are saved to the Downloads folder; ZIPs are saved to Downloads
+- iOS: JPGs are saved to the Photos library; ZIPs are shared via the share sheet
+
+Delete permission rules:
+- Organiser can delete anyone's photos
+- Co-admin can delete their own photos and guest photos, but not organiser or
+  other co-admin photos
+- Regular user can only delete their own photos (if the organiser has enabled it)
+
+── SCREEN 16: Find My Photos Screen ─────────────────────────────────────────────
+
+This screen uses facial recognition to find photos that contain the user.
+
+Step 1: The camera opens. The user lines up their face and takes a selfie.
+An oval guide indicates where to position the face.
+
+Step 2: The selfie is sent to the server. AWS Rekognition detects if exactly
+one face is present in the selfie. It then compares that face against all photos
+in the event in batches (up to 5 photos compared in parallel). A match requires
+80% or higher similarity.
+
+Step 3: Results appear in two sections:
+- Photo Gallery section: photos that had EXIF date data (grouped by date)
+- Other Photos Gallery section: all other matched photos (screenshots, WhatsApp
+  forwards, etc.)
+
+In results mode, the user can long-press to enter selection mode and
+drag-select photos. Download works the same as on the Guest Uploads screen
+(individual JPGs under 40 photos, ZIP above 40).
+
+The lightbox supports zoom (pinch, double-tap) and pan.
+
+A privacy notice appears the first time the screen is opened, explaining that
+the selfie is only used for this search and not stored.
+
+── SCREEN 17: Main Event Screen ─────────────────────────────────────────────────
+
+This is the largest and most complex screen in the app. It is the primary screen
+guests see when inside an event.
+
+GALLERY:
+Photos are displayed in a scrollable grid grouped by date. The gallery has two
+sections: Photo Gallery (photos with camera EXIF dates) and Other Photos Gallery
+(screenshots, WhatsApp forwards, etc.). A "new" badge appears on photos uploaded
+since the user last visited the event.
+
+UPLOAD:
+Guests can upload photos from their device's library. The "Upload by date" flow
+scans only the Camera album for photos taken on a specific date. Photos already
+uploaded by the same user (matched by filename) are skipped before they even
+reach the server, to avoid wasteful duplicate checks. After uploading, a summary
+shows how many were added, how many were duplicates, and how many upgraded an
+existing photo.
+
+During upload, the screen shows a progress indicator. The upload can be cancelled.
+The device screen is kept awake during upload using a keep-awake lock.
+
+SELECTION MODE:
+Long-pressing any photo enters selection mode (delete or download). Users can
+drag across the grid to bulk-select photos. A "My Uploads" filter shows only the
+logged-in user's photos.
+
+LIGHTBOX:
+Tapping a photo opens a full-screen viewer. Pinch to zoom, double-tap to toggle
+zoom, drag to pan when zoomed, swipe horizontally to navigate. Delete and download
+buttons appear at the top.
+
+NOTIFICATIONS BELL:
+An icon in the top bar shows a red dot when there are unread notifications.
+Tapping it opens an upload history panel that shows a list of past upload sessions
+with their outcomes, plus any quality upgrade notifications.
+
+CO-ADMIN AND ORGANISER MENUS:
+Co-admins and organisers see an additional menu button. This opens options to
+manage guests, view guest-specific uploads, and access event settings.
+
+GHOST MOUNT FIX:
+When the screen loads, it waits 200ms before saving the "last visited" timestamp.
+This prevents a race condition where the timestamp would be saved before the user
+actually sees the new photos, which would cause the "new" badge to not appear.
+
+================================================================================
+SECTION 3: BACKEND LOGIC FILES (24 TOTAL)
+================================================================================
+
+── BACKEND 1: Duplicate Detection ───────────────────────────────────────────────
+
+This is the most critical piece of logic in the backend. It decides whether an
+incoming photo is a duplicate of one already in the event, and if so, whether
+the new photo is a higher-quality version.
+
+A perceptual hash (pHash) is computed for each photo. The similarity between two
+photos is measured as the Hamming distance between their hashes. A distance of
+10 or less means the photos look visually the same. A stricter threshold of 4 is
+used in some cases.
+
+The five specific duplicate scenarios handled:
+
+1. WhatsApp copy: one photo has EXIF date data, the other does not. The WhatsApp
+   app strips EXIF when sharing a copy. This is considered a duplicate if the
+   hashes are close enough.
+
+2. WhatsApp HD: both photos have EXIF dates that are close in time, but one is
+   much larger. WhatsApp has a feature that sends photos at reduced size by default
+   and HD on request. If the sizes differ significantly, the larger one is treated
+   as the higher-quality version.
+
+3. Burst shots: two photos taken within 2 seconds with similar file sizes are NOT
+   treated as duplicates — they are likely intentional burst shots of slightly
+   different moments.
+
+4. No EXIF on either photo: only treated as a duplicate if the hashes match exactly
+   (distance = 0).
+
+5. WhatsApp timestamp shift: timestamps that differ by exactly 5.5 hours are a
+   known WhatsApp timezone conversion artifact. These are still compared by hash.
+
+The decision for each comparison is one of:
+- keep_new: replace the existing photo with this new one (higher quality)
+- keep_existing: this photo is a lower-quality duplicate, discard it
+- merge_self_duplicate: the same user uploaded the same photo twice (self-upload
+  deduplication, no notification needed)
+
+── BACKEND 2: Photo Upload Processor ────────────────────────────────────────────
+
+This is the main logic that runs after a photo is uploaded directly to S3. It is
+called by the app after the S3 upload completes.
+
+Phase 1 — Fetch from staging:
+The server retrieves the photo from its temporary staging slot in S3.
+
+Phase 2 — Prepare the photo:
+If the photo is a HEIC file, it is decoded and converted to JPG. This step
+determines the accurate file size for the quality comparison that follows.
+
+Phase 3 — Duplicate detection:
+The server computes a perceptual hash for the incoming photo and compares it
+against all existing photos in the event.
+
+If the result is "keep_new" (this photo is better quality):
+- The existing database record is updated to point to the new file
+- The new S3 files (full, thumbnail, display) are uploaded
+- The original uploader of the old photo is notified that a better version
+  was uploaded
+
+If the result is "keep_existing" or "merge" (incoming is a duplicate):
+- The server returns a duplicate response to the app
+- Nothing is stored
+
+Phase 4 — Store as new photo:
+If no duplicate was found, the photo is converted (if needed), GPS data is
+stripped, thumbnails and display versions are generated, and the photo is
+stored in S3 and its metadata is recorded in the database.
+
+The temporary staging slot is always deleted at the end, whether the upload
+succeeded or failed.
+
+── BACKEND 3: EXIF Date Extraction ──────────────────────────────────────────────
+
+This logic figures out when a photo was actually taken.
+
+It uses a three-tier hierarchy:
+1. EXIF metadata (highest confidence): the date from the camera's internal clock.
+   Only trusted if the photo also has a camera "Make" field — this confirms it
+   was taken by a real camera app and not a screenshot or forwarded image.
+2. File metadata (medium confidence): the file's creation or modification date,
+   used as a fallback.
+3. Upload time (lowest confidence): the moment the file arrived at the server,
+   used only if nothing else is available.
+
+The EXIF date is treated as India Standard Time. The server stores all dates in
+UTC, so 5 hours 30 minutes are subtracted from the EXIF date when converting.
+
+For HEIC files with many internal reference boxes (the ones that crash standard
+parsers), a raw scan of the file's binary data is used to extract the date
+directly.
+
+A photo only qualifies for the main Photo Gallery (date-sorted) if its date came
+from EXIF. Files that relied on fallback dating land in the Other Photos Gallery
+because their dates are unreliable.
+
+── BACKEND 4: Image Processing ──────────────────────────────────────────────────
+
+This handles all the image transformation steps the backend performs.
+
+HEIC decoding: iPhone photos in HEIC format are detected by checking the file's
+binary structure (a specific box marker near the start of the file). They are
+then decoded using a WASM-based library (heic-convert). For files with an unusually
+large number of internal reference boxes (48 or more), a custom box parser runs
+first to handle them without crashing.
+
+JPG conversion: decoded HEIC files (and any other non-JPG images) are converted
+to JPG at 95% quality using mozjpeg. This is the format stored on S3.
+
+GPS stripping: all GPS coordinates are removed from photos before they are stored.
+Privacy is the reason — the app never reveals where a photo was taken.
+
+Date stamping on download: when a user downloads a photo, the server writes the
+photo's "taken at" date back into the downloaded file's EXIF data in India
+Standard Time. This ensures that photos downloaded from the app show the correct
+date in the device's photo library.
+
+Image dimensions: width and height are extracted for storage in the database.
+
+── BACKEND 5: Role Checking ─────────────────────────────────────────────────────
+
+This is the single function called any time the backend needs to know whether a
+person is an organiser, co-admin, or regular user for a specific event.
+
+It checks in this order:
+1. If the person's mobile number matches the event's owner phone → organiser
+2. If the person's mobile number is in the event's co-admin list → co-admin
+3. Otherwise → user (regular guest)
+
+Every permission check in the app uses this function. Role checks are always
+done by mobile number — never by device ID or session token.
+
+── BACKEND 6: Notification Creation ─────────────────────────────────────────────
+
+Two functions handle notifications:
+
+Simple notification: creates a single notification for any event type (e.g. a
+co-admin role change).
+
+Upgrade notification: created when a photo is replaced by a higher-quality version.
+Instead of sending one notification per photo replaced, upgrade notifications are
+grouped. If multiple photos by the same uploader in the same event are upgraded
+within a 10-minute window, they are merged into a single notification. This
+prevents a flood of notifications when many photos are upgraded at once.
+
+Errors in notification creation are silently swallowed — a notification failing
+to save should never cause the upload itself to fail.
+
+── BACKEND 7: S3 Storage Client ─────────────────────────────────────────────────
+
+This file sets up the connection to AWS S3 and provides two utility functions.
+
+The S3 bucket is in the Mumbai region (ap-south-1) and uses Transfer Acceleration
+to speed up uploads from anywhere in the world. AWS credentials are read from
+environment variables and are never exposed to the client.
+
+Function 1 — Presigned upload URL: generates a temporary permission slip for the
+app to upload a file directly to S3. The permission expires after 5 minutes. The
+file goes into a temporary "staging" area in the bucket.
+
+Function 2 — Presigned download URL: generates a temporary permission for the
+server to download a file from S3. This is used to retrieve staged files for
+processing.
+
+── BACKEND 8: Database Client ───────────────────────────────────────────────────
+
+This file creates the Supabase database connection used by all backend code.
+
+It uses the service role key — a high-privilege key that bypasses all row-level
+security rules. This key must never leave the server. It is only used in API
+routes and never in any client-side code.
+
+If the required environment variables are missing, the server crashes immediately
+with a clear error message rather than failing silently later.
+
+── BACKEND 9: Organiser Password Verification ───────────────────────────────────
+
+This handles verifying an organiser's password.
+
+Passwords are stored in the database as SHA-256 hashes. When a password is
+verified, the input is hashed and compared to the stored hash using a
+timing-safe comparison. This prevents timing attacks where a bad actor could
+determine the correct password by measuring how long the comparison takes.
+
+── BACKEND 10: Presigned URL Generator (Upload Permission) ──────────────────────
+
+When the app wants to upload a photo, it first calls this route to get permission.
+
+The route validates that the event exists and has not expired. It then generates
+a unique staging slot name (a random ID under the "staging/" folder in S3) and
+creates a temporary presigned URL that gives the app direct write access to that
+slot. It returns both the URL and the staging slot name.
+
+The app then PUTs the file directly to S3 using the URL. After the S3 upload
+completes, the app calls the Photo Upload Processor route (Backend 2) with the
+staging slot name.
+
+This two-step flow exists because Vercel serverless functions have a 4.5 MB
+request body limit — too small for photos. Direct S3 uploads have no such limit.
+
+── BACKEND 11: Photo Download Route ─────────────────────────────────────────────
+
+When a user downloads a photo, the app calls this route, which acts as a streaming
+proxy between S3 and the user's device.
+
+The route looks up the photo in the database and checks that it hasn't been
+deleted. It then checks whether the event is still active — expired events can
+only be accessed by the organiser.
+
+The photo file is fetched directly from S3 (not via a presigned URL, but a
+direct server-side fetch). Before sending it to the user, the server writes the
+photo's taken-at date into the EXIF metadata in India Standard Time. This ensures
+the correct date appears in the user's photo library.
+
+The file is sent with the correct content type and a filename that includes the
+event slug and the taken-at date.
+
+── BACKEND 12: Get Event Photos Route ───────────────────────────────────────────
+
+This route returns all photos for an event, along with signed URLs the app can
+use to show thumbnails and full-size versions.
+
+It returns two lists: the main Photo Gallery photos (those with camera EXIF dates)
+and the Other Photos Gallery photos (everything else). Each photo entry includes
+metadata like the taken-at date, uploader name, uploader mobile number, and the
+date source (so the app knows which gallery to put it in).
+
+Signed URLs are generated for thumbnail, display, and download versions of each
+photo. These URLs expire after a short time and are never stored — they are
+regenerated each time the photos are fetched.
+
+── BACKEND 13: Delete Photos Route ──────────────────────────────────────────────
+
+This route handles deleting one or more photos from an event.
+
+Permission rules:
+- Organiser can delete any photo at any time (even after the event expires)
+- Co-admin can delete photos uploaded by regular guests, but not the organiser's
+  photos or other co-admins' photos
+- Regular user can delete only their own photos if their mobile number matches
+  the uploader (the allow_guest_delete setting is enforced on the frontend only
+  — the backend verifies ownership by mobile number, not the setting)
+- After the event expires, only the organiser can delete photos
+
+When a photo is deleted, three files are removed from S3: the full-quality version,
+the thumbnail, and the display (medium) version. The database record is hard-deleted
+— the row is permanently removed from the database.
+
+── BACKEND 14: Find My Photos Route ─────────────────────────────────────────────
+
+This route powers the face-search feature.
+
+The app sends a selfie photo. The route passes it to AWS Rekognition to detect
+faces in the selfie. If anything other than exactly one face is detected, the
+route returns an error ("no face found" or "multiple faces found").
+
+If exactly one face is found in the selfie, Rekognition's FaceSearch is used to
+compare that face against all photos in the event. Comparisons happen in batches
+of up to 5 photos in parallel. A match requires at least 80% similarity.
+
+The route returns matched photos in two groups:
+- Photos with EXIF camera dates (goes into Photo Gallery section in the results)
+- All other photos (goes into Other Photos Gallery section)
+
+── BACKEND 15: Join Event Route ─────────────────────────────────────────────────
+
+When a guest enters a 6-digit code, this route validates it.
+
+It looks up the event by the code and checks that the event has not expired.
+
+For closed (invite-only) events, it checks whether the guest's mobile number is
+on the allowed list. The organiser always has access. Guests not on the list get
+a clear error message telling them to ask the organiser to add them.
+
+If all checks pass, the event details are returned to the app so it can register
+the user and open the event.
+
+── BACKEND 16: Notifications Route ──────────────────────────────────────────────
+
+Three operations:
+
+Fetch notifications (GET): returns the most recent 50 notifications for a phone
+number, optionally filtered by event. Notifications older than 48 hours are
+automatically deleted when they are fetched.
+
+Mark as read (PATCH): marks all unread notifications as read, optionally scoped
+to a specific event.
+
+Delete notifications (DELETE): deletes a single notification by ID, or all
+notifications for a phone number, optionally scoped to a specific event.
+
+── BACKEND 17: Event Settings Route ─────────────────────────────────────────────
+
+This route updates the four toggleable settings for an event:
+- Whether guests can delete their own photos
+- Whether the event is invite-only (closed)
+- Whether the event is view-only
+- Whether the Find My Photos face search is enabled
+
+The organiser password is verified before any change is applied. Settings are
+updated individually — changing one does not reset the others.
+
+Important side effect: when the event is reopened (invite-only is turned OFF),
+the server automatically deletes the entire allowed guests list. This prevents
+stale entries from persisting if the event is later closed again.
+
+── BACKEND 18: Co-Admin Management Route ────────────────────────────────────────
+
+Handles adding and removing co-admins from an event.
+
+Adding a co-admin: the organiser provides the person's phone number and name.
+The route checks that the person is not the organiser themselves. The phone number
+is added to the co-admin list. The new co-admin receives a "made_coadmin"
+notification so they know they have been given elevated access.
+
+Removing a co-admin: the organiser provides the phone number to remove. It is
+deleted from the co-admin list. The removed person receives a "removed_coadmin"
+notification.
+
+Listing co-admins: returns all current co-admins for the event with their names,
+phone numbers, and when they were added.
+
+All operations require organiser password verification.
+
+── BACKEND 19: Guest Management Routes ──────────────────────────────────────────
+
+Two separate routes handle guest management:
+
+BLOCK / UNBLOCK ROUTE:
+Handles blocking and unblocking individual guests.
+
+When a guest is blocked, they can no longer open the event. If the event is
+invite-only, blocking a guest also removes them from the allowed list.
+
+When a guest is unblocked, they regain access. For invite-only events, they may
+need to be added back to the allowed list manually.
+
+Co-admins can block and unblock regular users. Only the organiser can block and
+unblock co-admins.
+
+ALLOWED GUESTS ROUTE:
+Manages the invite-only allowed list for an event (separate from blocking).
+
+List: returns all phone numbers currently on the allowed list (excludes blocked
+and inactive accounts).
+
+Add: adds one or more phone numbers to the allowed list. Each person added
+receives an "invite_only_added" notification so they know they can join the event.
+Uses upsert — adding a number already on the list is safe.
+
+Remove: removes a single phone number from the allowed list, or clears the
+entire list at once.
+
+Note: when the event is reopened (is_closed set to false via the settings route),
+the entire allowed list is cleared automatically by the settings route — not by
+this route.
+
+── BACKEND 20: Storage Stats Route ──────────────────────────────────────────────
+
+Calculates how much total storage an event is using.
+
+Sums the file sizes of all non-deleted photos in the event. Returns the total in
+bytes (the frontend formats this as KB, MB, or GB for display).
+
+── BACKEND 21: User Routes (lookup, register, status, delete) ───────────────────
+
+Lookup: given a mobile number, returns whether the user already has an account
+and their name. Used during registration to pre-fill the name for returning users.
+
+Register: creates a new user record in the database with the provided name and
+mobile number.
+
+Status: checks whether a user's account is still active. Used by the home screen
+to detect if an account has been removed since the app was last opened.
+
+Delete: anonymizes the user's account rather than hard-deleting it. The database
+row is kept but all identifying information is scrubbed: the name is set to
+"Unknown User", the phone number is nulled out, and is_active is set to false.
+All photos they uploaded have their uploader name and mobile number wiped. All
+events they owned have owner_phone set to null. They are removed from all event
+guest lists, co-admin lists, allowed guest lists, and the organiser whitelist.
+The user's app profile is also deleted from the device.
+
+── BACKEND 22: OTP Routes (send and verify) ─────────────────────────────────────
+
+Send OTP: generates a 6-digit OTP, saves it to the database with a 5-minute
+expiry, and sends it to the user's WhatsApp number via the Meta Cloud API.
+
+Verify OTP: checks the submitted code against the stored OTP. Returns success if
+the code matches and has not expired. The OTP is deleted after a successful
+verification to prevent reuse.
+
+── BACKEND 23: Organiser Password Routes (setup, login, change, reset) ──────────
+
+Setup: sets an organiser password for the first time. Checks that the phone number
+is on the whitelist before allowing setup.
+
+Login: verifies the submitted password against the stored hash. Returns success or
+failure with a clear error message.
+
+Change Password: verifies the current password, then updates it to the new one.
+
+Reset Password (forgot flow): only runs after OTP verification. Updates the
+password without requiring the old one.
+
+All passwords are stored as SHA-256 hashes — the plain-text password is never
+saved anywhere.
+
+── BACKEND 24: Whitelist Management Routes ──────────────────────────────────────
+
+These routes are only accessible by the master phone number (8826388888).
+
+List: returns all phone numbers on the whitelist.
+
+Add: adds a new phone number to the whitelist, allowing that person to register
+as an organiser.
+
+Remove: removes a phone number from the whitelist. This is a cascade delete:
+all events created by that organiser are deleted, and all photos in those events
+are deleted from S3 and the database. The person's app account remains — they
+can still join events as a guest.
+
+All three operations require master password verification.
+
+================================================================================
+SECTION 4: KEY NON-OBVIOUS DECISIONS
+================================================================================
+
+WHY DIRECT S3 UPLOAD:
+Vercel serverless functions cap request bodies at 4.5 MB. Photos from modern
+phones can easily exceed this. The app uploads photos directly to S3 using a
+presigned URL, then tells the backend about it. This way Vercel only receives
+small JSON payloads.
+
+WHY MOBILE NUMBER AS IDENTITY:
+Mobile number is the most reliable identity in India. No email required, no
+password for guests. All permissions, notifications, and deduplication are tied
+to the mobile number — never to device ID or session tokens.
+
+WHY OTA TO PREVIEW BRANCH ONLY:
+The installed APK and TestFlight build listen to the "preview" EAS channel, not
+"production". All OTA pushes go to preview. This prevents accidentally pushing
+broken updates to a "production" channel that doesn't have any installs.
+
+WHY 200ms DELAY ON LAST-VISITED TIMESTAMP:
+If the timestamp is saved the instant the event screen mounts, it gets saved
+before photos are actually visible to the user. On a fast device, this would
+cause the "new" badge to not appear. The 200ms delay gives the gallery time to
+render before the timestamp is saved.
+
+WHY EXIF IS TREATED AS IST:
+Most Indian phones do not store a UTC offset in the EXIF timestamp — they store
+local time without saying which timezone. Since the app is designed for Indian
+users, all EXIF dates are assumed to be IST (+5:30). This is a product decision,
+not a technical one. Do not change this without a full analysis of the impact.
+
+WHY GPS IS STRIPPED:
+The app is designed for sharing memories, not locations. Storing GPS coordinates
+would create a privacy risk. GPS is always removed from photos before storing
+them on S3.
+
+WHY BURST SHOTS ARE NOT DUPLICATES:
+Two photos taken within 2 seconds of each other with similar sizes are almost
+certainly intentional burst shots. Treating them as duplicates would cause one to
+be silently dropped, which would be unexpected and frustrating.
+
+WHY THE HEIC CUSTOM BOX PARSER:
+The standard HEIC library (libheif) crashes on files with 48 or more internal
+reference (iref) boxes. Some iPhone models produce files with this structure.
+The custom parser reads these files directly to extract the date before passing
+them to the WASM decoder.
+
+================================================================================
+END OF FILE
+================================================================================

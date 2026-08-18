@@ -203,18 +203,6 @@ Follow these steps in order. Do not start coding until all 5 steps are done.
   STEP 5 — START CODING
 
 
-OPEN DECISIONS (resolve before coding starts)
----------------------------------------------
-1. Offline access? (view files without internet)
-
-2. PIN/biometric lock on app open?
-
-3. Share a file with a doctor/teacher via a one-time link?
-
-4. Can regular users upload files, or only the master?
-
-5. Are categories fixed (Medical, School, Finance) or can users create custom ones?
-
 ================================================================================
 END OF STARTER FILE
 ================================================================================

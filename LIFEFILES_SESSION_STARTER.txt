@@ -1,0 +1,220 @@
+================================================================================
+LIFEFILES — NEW SESSION STARTER FILE
+Paste this at the start of every new Claude session for the LifeFiles app.
+================================================================================
+
+WHAT IS LIFEFILES
+-----------------
+A private personal document vault for storing medical reports, blood reports,
+doctor reports, school reports, and other important family documents.
+File types: images (JPG/PNG) and PDFs.
+Status: Idea stage — name chosen, stack decided, no code written yet.
+
+
+FOLDER STRUCTURE (one folder, everything inside)
+-------------------------------------------------
+D:\Downloads D Drive\LifeFiles\
+    app\        ← Expo React Native mobile app
+    backend\    ← Node.js API (deployed to Vercel)
+    web\        ← Web app (deployed to a separate Vercel project)
+
+All three live in one Git repo. Each sub-folder deploys independently.
+Claude sessions should be opened with the root LifeFiles\ folder as the
+working directory so all three can be worked on in the same session.
+
+
+SETUP STATUS — WHAT EXISTS AND WHAT NEEDS TO BE CREATED
+---------------------------------------------------------
+The laptop folder D:\Downloads D Drive\LifeFiles\ has been created.
+EVERYTHING ELSE listed below must be created fresh in the first new session.
+Nothing is linked to MomentsInFrame or any existing project in any way.
+
+  TO CREATE IN FIRST SESSION:
+  1. GitHub          — new repo under AkritiRathi (e.g. AkritiRathi/lifefiles)
+  2. AWS S3          — new bucket (e.g. lifefiles-app) in ap-south-1
+  3. Supabase        — new org + new project (nothing under "App Trial")
+  4. Vercel          — new org + new project (nothing under "OneAlbum")
+  5. EAS             — new Expo project, new bundle ID
+  6. App Store       — new app listing (same Apple Developer account login)
+  7. Play Store      — new app listing (same Google account login)
+
+  ISOLATION RULE: Deleting any LifeFiles project/folder above will never
+  affect MomentsInFrame. Deleting any MomentsInFrame project will never
+  affect LifeFiles. They are completely separate everywhere.
+
+
+CRITICAL WORKING RULES (apply to every session, no exceptions)
+---------------------------------------------------------------
+1. ALWAYS present a plan and wait for "yes" or "go ahead" before any code change.
+   This applies even when the fix is obvious.
+2. After code changes: deploy to Vercel for backend/web, or push OTA for mobile
+   (LifeFiles has its own OTA channel — set it up in the first session).
+   Stop and wait — do not commit to GitHub until user tests and confirms.
+3. Each git action needs its own explicit approval:
+   "go ahead" on code = edit files only. Commit and push each need a separate "yes".
+4. Never compress files before upload — breaks file integrity.
+5. No local dev builds ever — all testing via TestFlight (iOS) and Play Store
+   Internal Testing (Android).
+
+
+AUTH SYSTEM
+-----------
+NO OTP. Password-based login only.
+
+  Master user (the app owner):
+  - Has a special master account
+  - Adds new users manually — enters their mobile number + name
+  - System auto-generates a random password for each new user
+  - Master copies the generated password and sends it to the user manually
+  - Master can remove users at any time
+
+  Regular users:
+  - Log in with mobile number + password
+  - Must change password on first login
+  - Can change password any time after that
+
+  Password storage:
+  - Never store plain text passwords — store bcrypt hash in Supabase
+  - Session token returned on login, stored in SecureStore on device
+
+
+REFERENCE BACKEND (READ ONLY — do not modify anything here)
+------------------------------------------------------------
+The user has an existing backend at:
+  D:\Downloads D Drive\onealbum-trial\src\
+
+Read these files for code patterns only — never edit them, never link to them:
+  lib/s3.ts                  — S3 client setup pattern
+  lib/supabase-admin.ts      — Supabase admin client pattern
+
+This is a code reference only. It is not shared infrastructure.
+LifeFiles gets its own S3 bucket, its own Supabase project, its own everything.
+
+
+NEW BACKEND TO BUILD
+--------------------
+Location: D:\Downloads D Drive\LifeFiles\backend\
+Framework: Node.js
+Deploy: New Vercel org + new project (not under OneAlbum)
+Database: New Supabase org + new project (not under App Trial)
+Storage: New S3 bucket (not wedding-app-trial)
+
+New Supabase tables:
+  lf_users
+    id, mobile, first_name, last_name, password_hash,
+    is_master (boolean), must_change_password (boolean), created_at
+
+  lf_files
+    id, user_id, name, category, s3_key, file_type (image/pdf),
+    file_size_bytes, thumbnail_s3_key (for images), created_at, updated_at
+
+  lf_categories
+    id, name (e.g. Medical, School, Finance, Personal), icon, user_id (or global)
+
+New S3 folder structure (inside new lifefiles bucket):
+  {user_id}/
+    {category}/
+      {filename}                  ← full file
+      thumbnails/{filename}       ← thumbnail (images only)
+
+New API routes needed:
+  POST   /auth/login                — mobile + password → session token
+  POST   /auth/change-password      — change password (required on first login)
+  POST   /master/add-user           — master only: add new user, returns auto-generated password
+  DELETE /master/remove-user/:id    — master only: remove a user
+  GET    /master/users              — master only: list all users
+  POST   /upload/presign            — get presigned S3 URL for direct upload
+  POST   /upload/confirm            — confirm upload complete, save to DB
+  GET    /files                     — list user's files (optionally by category)
+  GET    /file/:id/download         — serve signed S3 URL for download/view
+  DELETE /file/:id                  — delete file from S3 + DB
+  GET    /categories                — list categories
+  POST   /categories                — create custom category
+
+
+NEW MOBILE APP TO BUILD
+-----------------------
+Location: D:\Downloads D Drive\LifeFiles\app\
+New Expo project. New EAS project. New bundle ID.
+New App Store listing. New Play Store listing.
+Nothing shared with MomentsInFrame EAS or store listings.
+
+Screens needed:
+  - Login screen (mobile number + password)
+  - Change password screen (forced on first login)
+  - Home / file list (grouped by category)
+  - Upload screen (pick image or PDF, assign category)
+  - File viewer (image viewer + PDF viewer)
+  - Category management
+  - Master screen: add user, view users, remove user (visible to master only)
+
+Key packages:
+  - expo-document-picker    — pick PDFs from device
+  - expo-image-picker       — pick images from gallery/camera
+  - react-native-pdf        — PDF viewer
+  - expo-secure-store       — store session token
+  - expo-file-system        — file handling
+
+
+NEW WEB APP TO BUILD (if needed)
+---------------------------------
+Location: D:\Downloads D Drive\LifeFiles\web\
+Deploy: New project under the new LifeFiles Vercel org (not OneAlbum)
+Decide on framework when ready (Next.js recommended)
+
+
+FIRST SESSION CHECKLIST — DO THIS BEFORE ANY CODING
+-----------------------------------------------------
+Follow these steps in order. Do not start coding until all 5 steps are done.
+
+  STEP 1 — SET UP ALL 7 SERVICES (guide the user through each one by one)
+    1. GitHub       — create new repo AkritiRathi/lifefiles
+    2. AWS S3       — create new bucket (e.g. lifefiles-app) in ap-south-1
+    3. Supabase     — create new org + new project (not under App Trial)
+    4. Vercel       — create new org + new project (not under OneAlbum)
+    5. EAS          — create new Expo project, new bundle ID
+    6. App Store    — register new app listing (same Apple Developer account)
+    7. Play Store   — register new app listing (same Google account)
+
+  STEP 2 — COLLECT ALL .ENV VALUES
+    After each service is set up, ask the user for the credentials.
+    Never guess or hardcode any keys. Store them in a .env file in backend\.
+    Keys needed:
+      - AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET_NAME
+      - SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+      - Any other keys the new services require
+
+  STEP 3 — RESOLVE 5 OPEN DECISIONS
+    Ask the user these questions before designing any screen or API:
+      1. Offline access? (can users view files without internet?)
+      2. PIN/biometric lock on app open?
+      3. Share a file with a doctor/teacher via a one-time link?
+      4. Can regular users upload files, or only the master?
+      5. Are categories fixed (Medical, School, Finance) or can users create custom ones?
+
+  STEP 4 — SET UP MEMORY
+    Create the memory directory and MEMORY.md index.
+    Create these files:
+      project_overview.md       — app goals, stack, infrastructure
+      project_pending_tasks.md  — running list of what's built and what's next
+      user_profile.md           — who the user is, working preferences
+    Keep MEMORY.md updated every session.
+
+  STEP 5 — START CODING
+
+
+OPEN DECISIONS (resolve before coding starts)
+---------------------------------------------
+1. Offline access? (view files without internet)
+
+2. PIN/biometric lock on app open?
+
+3. Share a file with a doctor/teacher via a one-time link?
+
+4. Can regular users upload files, or only the master?
+
+5. Are categories fixed (Medical, School, Finance) or can users create custom ones?
+
+================================================================================
+END OF STARTER FILE
+================================================================================

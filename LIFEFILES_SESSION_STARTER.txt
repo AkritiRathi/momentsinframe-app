@@ -78,18 +78,6 @@ NO OTP. Password-based login only.
   - Session token returned on login, stored in SecureStore on device
 
 
-REFERENCE BACKEND (READ ONLY — do not modify anything here)
-------------------------------------------------------------
-The user has an existing backend at:
-  D:\Downloads D Drive\onealbum-trial\src\
-
-Read these files for code patterns only — never edit them, never link to them:
-  lib/s3.ts                  — S3 client setup pattern
-  lib/supabase-admin.ts      — Supabase admin client pattern
-
-This is a code reference only. It is not shared infrastructure.
-LifeFiles gets its own S3 bucket, its own Supabase project, its own everything.
-
 
 NEW BACKEND TO BUILD
 --------------------

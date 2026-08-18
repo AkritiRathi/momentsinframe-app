@@ -27,20 +27,19 @@ SETUP STATUS — WHAT EXISTS AND WHAT NEEDS TO BE CREATED
 ---------------------------------------------------------
 The laptop folder D:\Downloads D Drive\LifeFiles\ has been created.
 EVERYTHING ELSE listed below must be created fresh in the first new session.
-Nothing is linked to MomentsInFrame or any existing project in any way.
+Nothing is linked to any existing project in any way.
 
   TO CREATE IN FIRST SESSION:
   1. GitHub          — new repo under AkritiRathi (e.g. AkritiRathi/lifefiles)
   2. AWS S3          — new bucket (e.g. lifefiles-app) in ap-south-1
-  3. Supabase        — new org + new project (nothing under "App Trial")
-  4. Vercel          — new org + new project (nothing under "OneAlbum")
+  3. Supabase        — new org + new project — completely new
+  4. Vercel          — new org + new project — completely new
   5. EAS             — new Expo project, new bundle ID
   6. App Store       — new app listing (same Apple Developer account login)
   7. Play Store      — new app listing (same Google account login)
 
   ISOLATION RULE: Deleting any LifeFiles project/folder above will never
-  affect MomentsInFrame. Deleting any MomentsInFrame project will never
-  affect LifeFiles. They are completely separate everywhere.
+  affect any other app or project. Each service is completely independent.
 
 
 CRITICAL WORKING RULES (apply to every session, no exceptions)
@@ -78,14 +77,13 @@ NO OTP. Password-based login only.
   - Session token returned on login, stored in SecureStore on device
 
 
-
 NEW BACKEND TO BUILD
 --------------------
 Location: D:\Downloads D Drive\LifeFiles\backend\
 Framework: Node.js
-Deploy: New Vercel org + new project (not under OneAlbum)
-Database: New Supabase org + new project (not under App Trial)
-Storage: New S3 bucket (not wedding-app-trial)
+Deploy: New Vercel org + new project — completely new
+Database: New Supabase org + new project — completely new
+Storage: New S3 bucket — completely new
 
 New Supabase tables:
   lf_users
@@ -125,7 +123,7 @@ NEW MOBILE APP TO BUILD
 Location: D:\Downloads D Drive\LifeFiles\app\
 New Expo project. New EAS project. New bundle ID.
 New App Store listing. New Play Store listing.
-Nothing shared with MomentsInFrame EAS or store listings.
+All new — not linked to any existing EAS project or store listing.
 
 Screens needed:
   - Login screen (mobile number + password)
@@ -147,7 +145,7 @@ Key packages:
 NEW WEB APP TO BUILD (if needed)
 ---------------------------------
 Location: D:\Downloads D Drive\LifeFiles\web\
-Deploy: New project under the new LifeFiles Vercel org (not OneAlbum)
+Deploy: New project under the new LifeFiles Vercel org — completely new
 Decide on framework when ready (Next.js recommended)
 
 
@@ -158,8 +156,8 @@ Follow these steps in order. Do not start coding until all 5 steps are done.
   STEP 1 — SET UP ALL 7 SERVICES (guide the user through each one by one)
     1. GitHub       — create new repo AkritiRathi/lifefiles
     2. AWS S3       — create new bucket (e.g. lifefiles-app) in ap-south-1
-    3. Supabase     — create new org + new project (not under App Trial)
-    4. Vercel       — create new org + new project (not under OneAlbum)
+    3. Supabase     — create new org + new project — completely new
+    4. Vercel       — create new org + new project — completely new
     5. EAS          — create new Expo project, new bundle ID
     6. App Store    — register new app listing (same Apple Developer account)
     7. Play Store   — register new app listing (same Google account)

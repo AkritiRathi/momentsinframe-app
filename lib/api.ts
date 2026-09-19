@@ -136,8 +136,8 @@ export async function getPhotoUrls(slug: string, ids: string[], adminPhone?: str
   return post(`/api/events/${slug}/photo-urls`, { ids, ...(adminPhone ? { adminPhone } : {}) });
 }
 
-export async function getUploadUrl(eventSlug: string, filename: string, contentType: string) {
-  return post('/api/upload-url', { eventSlug, filename, contentType });
+export async function getUploadUrl(eventSlug: string, filename: string, contentType: string, uploaderMobile?: string) {
+  return post('/api/upload-url', { eventSlug, filename, contentType, uploaderMobile });
 }
 
 export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, uploaderMobile?: string, uploaderName?: string, eventUserId?: string) {

@@ -136,6 +136,7 @@ export default function JoinEventScreen() {
         createdAt: result.event.created_at ?? new Date().toISOString(),
         allowGuestDelete: result.event.allow_guest_delete ?? false,
         viewOnly: result.event.view_only ?? false,
+        isOrganiser: adminRole === 'organiser',
         ownerPhone: result.event.owner_phone ?? '',
         role: adminRole || 'user',
       });

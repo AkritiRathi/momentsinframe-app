@@ -293,7 +293,7 @@ async function backgroundUploadTask(): Promise<void> {
   }
 
   const presignedUrls = await Promise.all(toUpload.map(async (asset, i) => {
-    try { return await getUploadUrl(slug, asset.filename, getMimeType(localUris[i])); }
+    try { return await getUploadUrl(slug, asset.filename, getMimeType(localUris[i]), userMobile ?? undefined); }
     catch { return { error: true as const }; }
   }));
 
@@ -1152,7 +1152,7 @@ export default function EventScreen() {
     // Pre-fetch all presigned URLs in parallel
     const presignedUrls = await Promise.all(assets.map(async (asset, i) => {
       const filename = resolvedFilenames[i];
-      try { return await getUploadUrl(slug, filename, getMimeType(localUris[i])); }
+      try { return await getUploadUrl(slug, filename, getMimeType(localUris[i]), userMobile ?? params.adminPhone ?? undefined); }
       catch { return { error: true as const }; }
     }));
 

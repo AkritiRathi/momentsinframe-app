@@ -141,6 +141,8 @@ export default function MyPhotosScreen() {
   const eventName = params.eventName || slug;
   const adminPhone = params.adminPhone || undefined;
   const userMobile = params.userMobile || undefined;
+  // Logged-in number for downloads/links; the server decides the role
+  const idPhone = userMobile ?? adminPhone;
   const totalPhotos = parseInt(params.totalPhotos ?? '0', 10);
 
   const allIds = useMemo(() => [
@@ -420,7 +422,7 @@ export default function MyPhotosScreen() {
           try {
             const photo = [...photos, ...otherPhotos].find(p => p.id === id);
             const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
-            const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
+            const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
             const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
             const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
             const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
@@ -460,7 +462,7 @@ export default function MyPhotosScreen() {
     try {
       const photo = [...photos, ...otherPhotos].find(p => p.id === id);
       const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
-      const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
+      const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
       const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
       const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
       const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
@@ -579,7 +581,7 @@ export default function MyPhotosScreen() {
     const batches = chunk(ids, 20);
     await Promise.all(batches.map(async (batch) => {
       try {
-        const result = await getPhotoUrls(slug, batch, adminPhone);
+        const result = await getPhotoUrls(slug, batch, idPhone);
         if (result.urls) setPhotoUrls(prev => ({ ...prev, ...result.urls }));
       } catch {}
     }));
@@ -615,7 +617,7 @@ export default function MyPhotosScreen() {
         try {
           const photo = [...photos, ...otherPhotos].find(p => p.id === id);
           const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
-          const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
+          const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
           const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
           const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
           const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
@@ -654,7 +656,7 @@ export default function MyPhotosScreen() {
         const filename = batches.length > 1
           ? `${slug}-photos-part${i + 1}of${batches.length}.zip`
           : `${slug}-photos.zip`;
-        const zipRes = await prepareZip(slug, batches[i], adminPhone);
+        const zipRes = await prepareZip(slug, batches[i], idPhone);
         if (zipRes.error) throw new Error(zipRes.error);
         const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
         const dlResult = await FileSystem.downloadAsync(zipRes.zipUrl, cacheUri);

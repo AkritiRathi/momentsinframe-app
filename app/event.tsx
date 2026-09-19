@@ -462,6 +462,8 @@ export default function EventScreen() {
   const [loading, setLoading] = useState(true);
   const [userMobile, setUserMobile] = useState<string | null>(null);
   const userMobileRef = useRef<string | null>(null);
+  // Logged-in number for downloads/links; the server decides the role
+  const idPhone = userMobile ?? params.adminPhone;
   const hasInitiallyLoadedRef = useRef(false);
   const [userName, setUserName] = useState<string | null>(null);
   const [eventUserId, setEventUserId] = useState<string | null>(null);
@@ -749,7 +751,7 @@ export default function EventScreen() {
     await Promise.all(
       batches.map(async (batch) => {
         try {
-          const result = await getPhotoUrls(slug, batch, params.adminPhone || undefined);
+          const result = await getPhotoUrls(slug, batch, (userMobileRef.current ?? params.adminPhone) || undefined);
           if (result.urls) {
             setPhotoUrls(prev => ({ ...prev, ...result.urls }));
             const thumbs = Object.values(result.urls).map(u => u.thumbUrl).filter(Boolean) as string[];
@@ -1606,7 +1608,7 @@ export default function EventScreen() {
             const rawExt = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
             const ext = (rawExt === 'heic' || rawExt === 'heif') ? 'jpg' : rawExt;
             const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
-            const adminParam = params.adminPhone ? `?adminPhone=${encodeURIComponent(params.adminPhone)}` : '';
+            const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
             const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
             const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
             await saveFileToDownloads(filename, downloadUrl, 'image/jpeg', folderPath, mode, true, dateTakenMs);
@@ -1627,7 +1629,7 @@ export default function EventScreen() {
     const photo = [...photos, ...otherPhotos].find(p => p.id === id);
     setSharingPhoto(true);
     try {
-      const { url, filename, error } = await getPhotoDownloadUrl(id, params.adminPhone ?? undefined);
+      const { url, filename, error } = await getPhotoDownloadUrl(id, idPhone ?? undefined);
       if (error || !url) throw new Error(error ?? 'Could not get photo URL');
       const rawExt = (photo?.original_filename ?? filename ?? 'photo.jpg').split('.').pop()?.toLowerCase() ?? 'jpg';
       const ext = (rawExt === 'heic' || rawExt === 'heif') ? 'jpg' : rawExt;
@@ -1668,7 +1670,7 @@ export default function EventScreen() {
           const rawExt = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
           const ext = (rawExt === 'heic' || rawExt === 'heif') ? 'jpg' : rawExt;
           const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
-          const adminParam = params.adminPhone ? `?adminPhone=${encodeURIComponent(params.adminPhone)}` : '';
+          const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
           const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
           const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
           await saveFileToDownloads(filename, downloadUrl, 'image/jpeg', folderPath, mode, false, dateTakenMs);
@@ -1720,7 +1722,7 @@ export default function EventScreen() {
         const filename = totalBatches > 1
           ? `${slug}-photos-part${i + 1}of${totalBatches}.zip`
           : `${slug}-photos.zip`;
-        const zipRes = await prepareZip(slug, batchIds, params.adminPhone || undefined);
+        const zipRes = await prepareZip(slug, batchIds, idPhone || undefined);
         if (zipRes.error) throw new Error(zipRes.error);
         await saveZipToDownloads(filename, zipRes.zipUrl);
         savedBatches++;
@@ -1806,6 +1808,8 @@ export default function EventScreen() {
   const totalPhotos = photos.length + otherPhotos.length;
   const isCoadmin = userRole === 'coadmin';
   const isEventExpired = expiresAt ? new Date(expiresAt) < new Date() : false;
+  // Co-admins cannot upload after expiry — button stays, greyed out
+  const uploadsClosed = isEventExpired && isCoadmin;
   const deletablePhotos = myUploadsFilter && userMobile
     ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
     : deleteMode && !isAdmin && userMobile
@@ -2149,14 +2153,16 @@ export default function EventScreen() {
                 <Text style={styles.uploadBtnText}>View Only Event</Text>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.5 }]} onPress={() => requestAppPermission('gallery', showUploadOptions, userMobile ?? params.adminPhone ?? null)} disabled={selectMode || deleteMode || myUploadsFilter}>
+              <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.5 }, uploadsClosed && { opacity: 0.4 }]} onPress={() => requestAppPermission('gallery', showUploadOptions, userMobile ?? params.adminPhone ?? null)} disabled={selectMode || deleteMode || myUploadsFilter || uploadsClosed}>
                 <Text style={styles.uploadBtnText}>Upload Photos</Text>
               </TouchableOpacity>
             )}
             <Text style={styles.uploadHint}>
               {viewOnly && !isAdmin
                 ? 'The organiser has disabled uploads for this event.'
-                : `Max 40 photos per batch.\nKeep the app open while uploading.`}
+                : uploadsClosed
+                  ? 'Uploads are closed for this event'
+                  : `Max 40 photos per batch.\nKeep the app open while uploading.`}
             </Text>
             {uploadSummary && (
               <Text style={styles.uploadSummary}>{uploadSummary}</Text>

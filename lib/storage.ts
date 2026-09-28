@@ -9,7 +9,35 @@ const KEYS = {
   MOBILE: 'user_mobile',
   LAST_EVENT_CODE: 'last_event_code',
   EVENT_USER_ID: 'event_user_id',
+  SESSION_TOKEN: 'session_token',
+  SESSION_EXPIRES: 'session_expires',
 };
+
+// ── Login session token ───────────────────────────────────────────────────────
+// Issued by the server when an OTP is verified, and sent with every request so
+// the server reads the caller's number from the token instead of trusting the
+// number in the request. Expiry is fixed at login and never extended.
+
+export async function saveSessionToken(token: string, expiresAt: string): Promise<void> {
+  await SecureStore.setItemAsync(KEYS.SESSION_TOKEN, token);
+  await SecureStore.setItemAsync(KEYS.SESSION_EXPIRES, expiresAt);
+}
+
+export async function getSessionToken(): Promise<string | null> {
+  const token = await SecureStore.getItemAsync(KEYS.SESSION_TOKEN);
+  if (!token) return null;
+  const expiresAt = await SecureStore.getItemAsync(KEYS.SESSION_EXPIRES);
+  if (expiresAt && new Date(expiresAt) < new Date()) {
+    await clearSessionToken();
+    return null;
+  }
+  return token;
+}
+
+export async function clearSessionToken(): Promise<void> {
+  await SecureStore.deleteItemAsync(KEYS.SESSION_TOKEN);
+  await SecureStore.deleteItemAsync(KEYS.SESSION_EXPIRES);
+}
 
 export type UserProfile = {
   firstName: string;
@@ -62,6 +90,9 @@ export async function clearUserProfile(): Promise<void> {
   await SecureStore.deleteItemAsync(KEYS.FIRST_NAME);
   await SecureStore.deleteItemAsync(KEYS.LAST_NAME);
   await SecureStore.deleteItemAsync(KEYS.MOBILE);
+  // Logout and account deletion both come through here — the login token must
+  // go with the profile, never outlive it on the device.
+  await clearSessionToken();
 }
 
 // ── Last Event ────────────────────────────────────────────────────────────────

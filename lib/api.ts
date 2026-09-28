@@ -1,4 +1,17 @@
 import { API_BASE_URL } from '../constants/config';
+import { getSessionToken, saveSessionToken } from './storage';
+
+// Every request carries the login token issued at OTP verification, so the
+// server can read the caller's number from the token instead of trusting the
+// number in the request body. Added in one place on purpose — a call that
+// forgot the header would start failing once the server requires it.
+async function authHeaders(base: Record<string, string> = {}): Promise<Record<string, string>> {
+  try {
+    const token = await getSessionToken();
+    if (token) return { ...base, Authorization: `Bearer ${token}` };
+  } catch { /* no token — behaves exactly as before */ }
+  return base;
+}
 
 function makeTimeout(ms: number) {
   const controller = new AbortController();
@@ -11,7 +24,7 @@ async function post(path: string, body: object, ms = 15000) {
   try {
     const res = await fetch(`${API_BASE_URL}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
       signal,
     });
@@ -24,7 +37,7 @@ async function post(path: string, body: object, ms = 15000) {
 async function get(path: string, headers: Record<string, string> = {}) {
   const { signal, clear } = makeTimeout(15000);
   try {
-    const res = await fetch(`${API_BASE_URL}${path}`, { headers, signal });
+    const res = await fetch(`${API_BASE_URL}${path}`, { headers: await authHeaders(headers), signal });
     return res.json();
   } finally {
     clear();
@@ -34,7 +47,7 @@ async function get(path: string, headers: Record<string, string> = {}) {
 async function del(path: string, body: object) {
   const res = await fetch(`${API_BASE_URL}${path}`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
   return res.json();
@@ -193,8 +206,12 @@ export async function sendOtp(phone: string): Promise<void> {
 }
 
 export async function verifyOtp(phone: string, code: string): Promise<void> {
-  const data = await post('/api/native/otp/verify', { phone, code });
+  const data = await post('/api/native/otp/verify', { phone, code, platform: 'app' });
   if (data?.error) throw new Error(data.error);
+  // Keep the login token issued with the OTP.
+  if (data?.token && data?.expiresAt) {
+    await saveSessionToken(data.token, data.expiresAt).catch(() => {});
+  }
 }
 
 // Allowed guests API

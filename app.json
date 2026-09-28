@@ -60,7 +60,7 @@
             {
               "scheme": "https",
               "host": "momentsinframe.com",
-              "pathPrefix": "/join"
+              "pathPrefix": "/join/"
             }
           ],
           "category": ["BROWSABLE", "DEFAULT"]

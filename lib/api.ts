@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { API_BASE_URL } from '../constants/config';
 import { getSessionToken, saveSessionToken } from './storage';
 
@@ -205,8 +206,39 @@ export async function sendOtp(phone: string): Promise<void> {
   if (data?.error) throw new Error(data.error);
 }
 
+// A plain label for the user's own device list, e.g. "iPhone 13 Pro".
+//
+// expo-device gives the real marketing name on both platforms and is the
+// long-term answer, but it is a native module: it only works once a build that
+// includes it is installed. Until then — and on any older build still running
+// this bundle — fall back to what React Native itself exposes, which is the
+// model code on Android and just "iPhone"/"iPad" on iOS.
+function describeThisDevice(): string {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Device = require('expo-device');
+    const label = [Device.brand, Device.modelName].filter(Boolean).join(' ').trim();
+    if (label) return label;
+  } catch {
+    // Native module missing (build predates expo-device) — use the fallback.
+  }
+
+  try {
+    if (Platform.OS === 'android') {
+      const c = Platform.constants as { Brand?: string; Model?: string };
+      const brand = c.Brand ? c.Brand.charAt(0).toUpperCase() + c.Brand.slice(1) : '';
+      const model = c.Model ?? '';
+      return `${brand} ${model}`.trim() || 'Android phone';
+    }
+    const kind = Platform.OS === 'ios' ? (Platform.isPad ? 'iPad' : 'iPhone') : 'Phone';
+    return `${kind} (iOS ${Platform.Version})`;
+  } catch { return 'Phone'; }
+}
+
 export async function verifyOtp(phone: string, code: string): Promise<void> {
-  const data = await post('/api/native/otp/verify', { phone, code, platform: 'app' });
+  const data = await post('/api/native/otp/verify', {
+    phone, code, platform: 'Mobile', deviceLabel: describeThisDevice(),
+  });
   if (data?.error) throw new Error(data.error);
   // Keep the login token issued with the OTP.
   if (data?.token && data?.expiresAt) {

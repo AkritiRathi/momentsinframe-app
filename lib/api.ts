@@ -115,7 +115,7 @@ export async function joinEventUser(slug: string, name: string, mobile: string, 
 export async function checkEventExists(slug: string): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE_URL}/api/native/events/${encodeURIComponent(slug)}`);
-    return res.ok;
+    return res.status !== 404; // only a real "not found" drops the event; a server error must not
   } catch { return true; } // assume exists on network error — don't delete from cache
 }
 

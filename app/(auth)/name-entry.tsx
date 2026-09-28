@@ -12,6 +12,11 @@ import { useAlert } from '../../lib/useAlert';
 
 type Step = 'phone' | 'details';
 
+// "MARY jane" -> "Mary Jane". Applied on save only, never while typing.
+function toTitleCase(value: string): string {
+  return value.trim().toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
+
 export default function NameEntryScreen() {
   const router = useRouter();
   const { showAlert, alertOverlay } = useAlert();
@@ -85,8 +90,8 @@ export default function NameEntryScreen() {
     }
 
     try {
-      const first = firstName.trim().replace(/\b\w/g, c => c.toUpperCase());
-      const last = lastName.trim().replace(/\b\w/g, c => c.toUpperCase());
+      const first = toTitleCase(firstName);
+      const last = toTitleCase(lastName);
       const name = `${first} ${last}`;
       await saveUserProfile({ firstName: first, lastName: last, mobile: mobile.trim() });
       await registerUser(mobile.trim(), name).catch(() => {});

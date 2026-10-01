@@ -490,8 +490,9 @@ export default function EventScreen() {
   const [selectMode, setSelectMode] = useState(false);
   const [deleteMode, setDeleteMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [groupByDate, setGroupByDate] = useState(true);
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // newest first by default
+  // Photos are always grouped by date now — the option was removed from Sort & Display.
+  const [groupByDate] = useState(true);
   const [sortPanelVisible, setSortPanelVisible] = useState(false);
   const [myUploadsFilter, setMyUploadsFilter] = useState(false);
   const [coadminPhones, setCoadminPhones] = useState<Set<string>>(new Set());
@@ -499,8 +500,7 @@ export default function EventScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const menuBtnRef = useRef<any>(null);
   const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
-  const [draftSortOrder, setDraftSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [draftGroupByDate, setDraftGroupByDate] = useState(true);
+  const [draftSortOrder, setDraftSortOrder] = useState<'asc' | 'desc'>('desc');
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
   const [selectBarSticky, setSelectBarSticky] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -594,7 +594,6 @@ export default function EventScreen() {
     getEventUserId().then(id => { if (id) setEventUserId(id); });
     getDeviceId().then(id => { if (id) setDeviceId(id); });
     SecureStore.getItemAsync('gallery_sort_order').then(v => { if (v === 'asc' || v === 'desc') { setSortOrder(v); setDraftSortOrder(v); } });
-    SecureStore.getItemAsync('gallery_group_by_date').then(v => { if (v !== null) { const b = v === 'true'; setGroupByDate(b); setDraftGroupByDate(b); } });
     saveLastEvent({
       slug: params.slug,
       name: params.name ?? '',
@@ -1810,6 +1809,13 @@ export default function EventScreen() {
   const isEventExpired = expiresAt ? new Date(expiresAt) < new Date() : false;
   // Co-admins cannot upload after expiry — button stays, greyed out
   const uploadsClosed = isEventExpired && isCoadmin;
+  // Who may delete at all. The Delete button always shows; when this is false
+  // it is greyed out and a hint explains why, like the Upload button.
+  // Guests cannot even open an expired event, so expiry only affects co-admins.
+  const canDelete = isAdmin ? !(isEventExpired && isCoadmin) : (allowGuestDelete && !viewOnly);
+  const deleteClosedHint = !canDelete
+    ? (isEventExpired ? 'Deletes are closed for this event' : 'The organiser has turned off deleting for guests.')
+    : null;
   const deletablePhotos = myUploadsFilter && userMobile
     ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
     : deleteMode && !isAdmin && userMobile
@@ -2164,6 +2170,9 @@ export default function EventScreen() {
                   ? 'Uploads are closed for this event'
                   : `Max 40 photos per batch.\nKeep the app open while uploading.`}
             </Text>
+            {deleteClosedHint && (
+              <Text style={styles.uploadHint}>{deleteClosedHint}</Text>
+            )}
             {uploadSummary && (
               <Text style={styles.uploadSummary}>{uploadSummary}</Text>
             )}
@@ -2173,11 +2182,13 @@ export default function EventScreen() {
       case 'select_photos_btn':
         return (
           <View style={styles.selectPhotosRow}>
-            {((isAdmin && !(isEventExpired && isCoadmin)) || (allowGuestDelete && !(viewOnly && !isAdmin))) && (
-              <TouchableOpacity style={[styles.deleteModeBtn, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setDeleteMode(true); setSelectMode(false); } }}>
-                <Text style={styles.deleteModeBtnText}>Delete Photos</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              style={[styles.deleteModeBtn, (bgUploading || !canDelete) && { opacity: 0.4 }]}
+              disabled={bgUploading || !canDelete}
+              onPress={() => { if (!bgUploading && canDelete) { setDeleteMode(true); setSelectMode(false); } }}
+            >
+              <Text style={styles.deleteModeBtnText}>Delete Photos</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={[styles.selectPhotosBtn, styles.selectPhotosRowRight, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setSelectMode(true); setDeleteMode(false); } }}>
               <Text style={styles.selectPhotosBtnText}>Download Photos</Text>
             </TouchableOpacity>
@@ -2519,9 +2530,9 @@ export default function EventScreen() {
               </TouchableOpacity>
               <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
               <View style={styles.lbActions}>
-                {(
-                  (isAdmin && !(isEventExpired && isCoadmin) && !(userRole === 'coadmin' && (currentPhoto?.uploaded_by_mobile === ownerPhone || coadminPhones.has(currentPhoto?.uploaded_by_mobile ?? '')))) ||
-                  (allowGuestDelete && currentPhoto != null && userPhotoIds.has(currentPhoto.id))
+                {canDelete && (
+                  (isAdmin && !(userRole === 'coadmin' && (currentPhoto?.uploaded_by_mobile === ownerPhone || coadminPhones.has(currentPhoto?.uploaded_by_mobile ?? '')))) ||
+                  (!isAdmin && currentPhoto != null && userPhotoIds.has(currentPhoto.id))
                 ) && (
                   <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>
                     <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
@@ -2690,7 +2701,7 @@ export default function EventScreen() {
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
           <View style={[styles.menuDropdown, menuBtnLayout ? { top: menuBtnLayout.top, right: menuBtnLayout.right } : {}]}>
-            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode) && { opacity: 0.4 }]} disabled={selectMode || deleteMode} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setDraftGroupByDate(groupByDate); setSortPanelVisible(true); }}>
+            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode) && { opacity: 0.4 }]} disabled={selectMode || deleteMode} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setSortPanelVisible(true); }}>
               <Text style={styles.menuItemText}>Sort & Display</Text>
             </TouchableOpacity>
             {isAdmin && (
@@ -2731,19 +2742,10 @@ export default function EventScreen() {
                 <Text style={styles.sortPanelOptionText}>{mode === 'asc' ? 'Oldest first' : 'Newest first'}</Text>
               </TouchableOpacity>
             ))}
-            <View style={styles.sortPanelDivider} />
-            <TouchableOpacity style={styles.sortPanelOption} onPress={() => setDraftGroupByDate(v => !v)}>
-              <View style={[styles.sortCheckbox, draftGroupByDate && styles.sortCheckboxSelected]}>
-                {draftGroupByDate && <Text style={styles.sortCheckboxTick}>✓</Text>}
-              </View>
-              <Text style={styles.sortPanelOptionText}>Display by date</Text>
-            </TouchableOpacity>
             <View style={[alertStyles.buttons, { marginTop: 16 }]}>
               <TouchableOpacity style={[alertStyles.btn, alertStyles.btnPrimary]} onPress={() => {
                 setSortOrder(draftSortOrder);
-                setGroupByDate(draftGroupByDate);
                 SecureStore.setItemAsync('gallery_sort_order', draftSortOrder);
-                SecureStore.setItemAsync('gallery_group_by_date', String(draftGroupByDate));
                 setSortPanelVisible(false);
               }}>
                 <Text style={[alertStyles.btnText, alertStyles.btnPrimaryText]}>Done</Text>

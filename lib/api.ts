@@ -206,23 +206,17 @@ export async function sendOtp(phone: string): Promise<void> {
   if (data?.error) throw new Error(data.error);
 }
 
-// A plain label for the user's own device list, e.g. "iPhone 13 Pro".
+// A plain label for the user's own device list, e.g. "Samsung SM-G991B".
 //
-// expo-device gives the real marketing name on both platforms and is the
-// long-term answer, but it is a native module: it only works once a build that
-// includes it is installed. Until then — and on any older build still running
-// this bundle — fall back to what React Native itself exposes, which is the
-// model code on Android and just "iPhone"/"iPad" on iOS.
+// DO NOT import or require expo-device here until a native build that includes
+// it is installed. expo-device calls requireNativeModule('ExpoDevice') as soon
+// as it loads, and on a build without that module the app CRASHES — a native
+// failure, which a try/catch around the require cannot stop. It crashed iOS
+// logins on 2026-09-29, right after OTP verification, for exactly that reason.
+//
+// The package stays in package.json for the next build. Once that build ships,
+// switch this over to expo-device for real names like "iPhone 13 Pro".
 function describeThisDevice(): string {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Device = require('expo-device');
-    const label = [Device.brand, Device.modelName].filter(Boolean).join(' ').trim();
-    if (label) return label;
-  } catch {
-    // Native module missing (build predates expo-device) — use the fallback.
-  }
-
   try {
     if (Platform.OS === 'android') {
       const c = Platform.constants as { Brand?: string; Model?: string };

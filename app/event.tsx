@@ -520,6 +520,14 @@ export default function EventScreen() {
   const dragAnchorIndexRef = useRef<number | null>(null);
   const dragModeRef = useRef<'select' | 'deselect' | null>(null);
   const committedSelectionRef = useRef<Set<string>>(new Set());
+  // True while the finger that opened select mode is still down, so a drag
+  // flowing out of that long press selects instead of deselecting.
+  const pressOpenedSelectRef = useRef(false);
+  // "Is a selection in progress?" — what the drag handlers actually need to
+  // know. They used to ask whether a long press had set an anchor, which left
+  // the drag dead when select mode was opened with the Download or Delete
+  // button until a photo was tapped.
+  const selectionActiveRef = useRef(false);
   const photoRefsMap = useRef<Map<string, any>>(new Map());
   // anchorFlatIndex: flat photo index; anchorContentY: content-space Y of anchor photo top (scroll-invariant)
   const longPressAnchorRef = useRef<{ anchorFlatIndex: number; anchorContentY: number } | null>(null);
@@ -860,7 +868,7 @@ export default function EventScreen() {
   }
 
   function getPhotoIndexAtPosition(absX: number, absY: number): number | null {
-    if (!longPressAnchorRef.current) return null;
+    if (!selectionActiveRef.current) return null;
 
     const fingerContentY = absY - flatListLayoutRef.current.y + scrollOffsetRef.current;
     const contentX = absX - flatListLayoutRef.current.x;
@@ -907,25 +915,33 @@ export default function EventScreen() {
   }
 
   const onDragStart = useCallback((absX: number, absY: number) => {
-    if (!longPressAnchorRef.current) return;
+    if (!selectionActiveRef.current) return;
     committedSelectionRef.current = new Set(selected);
     const index = getPhotoIndexAtPosition(absX, absY);
     if (index === null) return;
     const anchorId = getPhotoIdAtFlatIndex(index);
-    const mode = anchorId && committedSelectionRef.current.has(anchorId) ? 'deselect' : 'select';
+    // A drag that flows straight out of the long press keeps selecting. Without
+    // this it would deselect, because that long press just selected the photo
+    // under the finger — holding and dragging in one motion wiped the selection.
+    const mode = pressOpenedSelectRef.current
+      ? 'select'
+      : anchorId && committedSelectionRef.current.has(anchorId) ? 'deselect' : 'select';
     dragAnchorIndexRef.current = index;
     dragModeRef.current = mode;
     applyDragRange(index, index, mode);
   }, [selected]);
 
   const onDragUpdate = useCallback((absX: number, absY: number) => {
-    if (!longPressAnchorRef.current) return;
+    if (!selectionActiveRef.current) return;
     const currentIndex = getPhotoIndexAtPosition(absX, absY);
     if (currentIndex === null) return;
     if (dragAnchorIndexRef.current === null) {
       const anchorId = getPhotoIdAtFlatIndex(currentIndex);
       dragAnchorIndexRef.current = currentIndex;
-      dragModeRef.current = committedSelectionRef.current.has(anchorId ?? '') ? 'deselect' : 'select';
+      // Same rule as onDragStart: a drag flowing out of the long press selects.
+      dragModeRef.current = pressOpenedSelectRef.current
+        ? 'select'
+        : committedSelectionRef.current.has(anchorId ?? '') ? 'deselect' : 'select';
     }
     applyDragRange(dragAnchorIndexRef.current, currentIndex, dragModeRef.current!);
   }, []);
@@ -933,10 +949,17 @@ export default function EventScreen() {
   const onDragEnd = useCallback(() => {
     dragAnchorIndexRef.current = null;
     dragModeRef.current = null;
+    pressOpenedSelectRef.current = false;
       }, []);
 
   const dragGesture = useMemo(() => Gesture.Pan()
-    .enabled(selectMode || deleteMode)
+    // Always enabled. Gesture handlers are chosen when the finger lands, so
+    // enabling this only in select mode left the finger that opened select mode
+    // (by long press) without a drag handler — holding and dragging in one
+    // motion could never select. It stays inert outside select mode because
+    // onDragStart / onDragUpdate do nothing without a long-press anchor, and
+    // exitSelectMode clears that anchor.
+    .enabled(true)
     .activeOffsetX([-8, 8])
     .onStart((e) => { 'worklet'; runOnJS(onDragStart)(e.absoluteX, e.absoluteY); })
     .onUpdate((e) => { 'worklet'; runOnJS(onDragUpdate)(e.absoluteX, e.absoluteY); })
@@ -987,8 +1010,15 @@ export default function EventScreen() {
     }
   }, [selectMode, deleteMode]);
 
+  // Keeps the drag handlers' "is a selection in progress?" ref in step, however
+  // select mode was entered — long press, Download Photos or Delete Photos.
+  useEffect(() => {
+    selectionActiveRef.current = selectMode || deleteMode;
+  }, [selectMode, deleteMode]);
+
   const handleThumbLongPress = useCallback((photoId: string) => {
     if (!selectMode && !deleteMode) {
+      pressOpenedSelectRef.current = true;
       setSelectMode(true);
       setDeleteMode(false);
       setAnchorForPhoto(photoId);

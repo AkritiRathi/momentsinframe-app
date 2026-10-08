@@ -608,7 +608,7 @@ export default function EventScreen() {
     setNotifications(notifs);
     const resolvedMobile = mobile ?? userMobile;
     if (resolvedMobile) {
-      const serverNotifs = await fetchServerNotifications(resolvedMobile, slug);
+      const serverNotifs = await fetchServerNotifications(slug);
       setServerNotifications(serverNotifs);
       setHasUnread(notifs.some(n => !n.read) || serverNotifs.some(n => !n.read));
     } else {
@@ -2129,7 +2129,7 @@ export default function EventScreen() {
                   await refreshNotifications(mobile);
                   await markNotificationsRead(slug);
                   if (mobile) {
-                    await markServerNotificationsRead(mobile, slug);
+                    await markServerNotificationsRead(slug);
                     setServerNotifications(prev => prev.map(n => ({ ...n, read: true })));
                   }
                   setHasUnread(false);
@@ -2987,7 +2987,7 @@ export default function EventScreen() {
                 await clearAllUploadNotifications(slug);
                 setNotifications([]);
                 if (userMobile) {
-                  await deleteAllServerNotifications(userMobile, slug);
+                  await deleteAllServerNotifications(slug);
                   setServerNotifications([]);
                 }
                 setHasUnread(false);
@@ -3017,7 +3017,7 @@ export default function EventScreen() {
                         <TouchableOpacity
                           style={{ backgroundColor: '#E53E3E', justifyContent: 'center', alignItems: 'center', width: 80, borderRadius: 12, marginBottom: 10, marginRight: 16 }}
                           onPress={async () => {
-                            if (userMobile) await deleteServerNotification(userMobile, n.id, slug);
+                            if (userMobile) await deleteServerNotification(n.id, slug);
                             setServerNotifications(prev => prev.filter(x => x.id !== n.id));
                           }}
                         >
@@ -3029,7 +3029,7 @@ export default function EventScreen() {
                         <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
                           <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 4, flex: 1 }}>{n.message}</Text>
                           <TouchableOpacity onPress={async () => {
-                            if (userMobile) await deleteServerNotification(userMobile, n.id, slug);
+                            if (userMobile) await deleteServerNotification(n.id, slug);
                             setServerNotifications(prev => prev.filter(x => x.id !== n.id));
                           }} style={{ marginLeft: 8, paddingLeft: 16 }}>
                             <Text style={styles.skippedClose}>×</Text>

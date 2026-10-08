@@ -157,7 +157,7 @@ export async function joinEventUser(slug: string, name: string, mobile: string, 
 
 export async function checkEventExists(slug: string): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/native/events/${encodeURIComponent(slug)}`);
+    const res = await fetch(`${API_BASE_URL}/api/native/events/${encodeURIComponent(slug)}`, { headers: await authHeaders() });
     return res.status !== 404; // only a real "not found" drops the event; a server error must not
   } catch { return true; } // assume exists on network error — don't delete from cache
 }
@@ -296,11 +296,11 @@ export async function clearJoinedGuests(slug: string, organiserPhone: string, or
 export async function setGuestBlocked(slug: string, mobile: string, isBlocked: boolean, organiserPhone: string, organiserPassword: string): Promise<{ success?: boolean; error?: string }> {
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/guests/${mobile}`, {
     method: 'PATCH',
-    headers: {
+    headers: await authHeaders({
       'Content-Type': 'application/json',
       'x-organiser-phone': organiserPhone,
       'x-organiser-password': organiserPassword,
-    },
+    }),
     body: JSON.stringify({ is_blocked: isBlocked }),
   });
   return res.json();
@@ -313,7 +313,7 @@ export async function listJoinedGuestsForUser(slug: string, userPhone: string): 
 export async function setGuestBlockedByUser(slug: string, mobile: string, isBlocked: boolean, userPhone: string): Promise<{ success?: boolean; error?: string }> {
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/guests/${mobile}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', 'x-user-phone': userPhone },
+    headers: await authHeaders({ 'Content-Type': 'application/json', 'x-user-phone': userPhone }),
     body: JSON.stringify({ is_blocked: isBlocked }),
   });
   return res.json();
@@ -326,7 +326,7 @@ export async function joinEvent(joinCode: string, phone?: string) {
 export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean; viewOnly?: boolean; findMyPhotosEnabled?: boolean }) {
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/settings`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ organiserPhone, organiserPassword, ...settings }),
   });
   return res.json();
@@ -362,9 +362,9 @@ export type ServerNotification = {
   read: boolean;
 };
 
-export async function fetchServerNotifications(phone: string, slug: string): Promise<ServerNotification[]> {
+export async function fetchServerNotifications(slug: string): Promise<ServerNotification[]> {
   try {
-    const res = await fetch(`${API_BASE_URL}/api/native/notifications?phone=${encodeURIComponent(phone)}&slug=${encodeURIComponent(slug)}`);
+    const res = await fetch(`${API_BASE_URL}/api/native/notifications?slug=${encodeURIComponent(slug)}`, { headers: await authHeaders() });
     const data = await res.json();
     return data.notifications ?? [];
   } catch {
@@ -372,36 +372,36 @@ export async function fetchServerNotifications(phone: string, slug: string): Pro
   }
 }
 
-export async function markServerNotificationsRead(phone: string, slug: string): Promise<void> {
+export async function markServerNotificationsRead(slug: string): Promise<void> {
   try {
     await fetch(`${API_BASE_URL}/api/native/notifications`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, event_slug: slug }),
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ event_slug: slug }),
     });
   } catch {
     // best-effort
   }
 }
 
-export async function deleteServerNotification(phone: string, id: string, slug: string): Promise<void> {
+export async function deleteServerNotification(id: string, slug: string): Promise<void> {
   try {
     await fetch(`${API_BASE_URL}/api/native/notifications`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, id, event_slug: slug }),
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ id, event_slug: slug }),
     });
   } catch {
     // best-effort
   }
 }
 
-export async function deleteAllServerNotifications(phone: string, slug: string): Promise<void> {
+export async function deleteAllServerNotifications(slug: string): Promise<void> {
   try {
     await fetch(`${API_BASE_URL}/api/native/notifications`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, event_slug: slug }),
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ event_slug: slug }),
     });
   } catch {
     // best-effort

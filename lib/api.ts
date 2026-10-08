@@ -110,6 +110,14 @@ export async function listEvents(organiserPhone: string, organiserPassword: stri
   });
 }
 
+// Every event this number belongs to, in any role — organiser, co-admin or
+// guest. Identity comes from the session token that `get` attaches, never from
+// a number in the request, so there is nothing to pass. Returns 401 when the
+// token is missing or expired; callers fall back to the cached list.
+export async function listMyEvents() {
+  return get('/api/my-events');
+}
+
 export async function createEvent(organiserPhone: string, organiserPassword: string, name: string, expiresAt: string, isClosed?: boolean) {
   return post('/api/native/events', { organiserPhone, organiserPassword, name, expiresAt, isClosed });
 }

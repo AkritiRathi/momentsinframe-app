@@ -7,7 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useState, useEffect } from 'react';
-import { joinEvent, joinEventUser, checkAdminStatus, listEvents, checkEventExists } from '../../lib/api';
+import { joinEvent, joinEventUser, checkAdminStatus, listEvents, listMyEvents, checkEventExists } from '../../lib/api';
 import {
   saveLastEventCode, getLastEventCode, getDeviceId, saveEventUserId, getUserProfile,
   saveJoinedEvent, getJoinedEvents, removeJoinedEvent, JoinedEventEntry,
@@ -47,7 +47,33 @@ export default function JoinEventScreen() {
       // Pre-fill last used event code
       const lastCode = await getLastEventCode();
       if (lastCode) setCode(lastCode);
-      // Refresh from server in background
+      // Refresh from server in background.
+      // The cache above only knows events opened ON THIS DEVICE, so a new
+      // phone, or an event someone made you co-admin of, would never show.
+      // This call asks the server for everything the number belongs to.
+      try {
+        const mine = await listMyEvents();
+        if (Array.isArray(mine?.events)) {
+          await Promise.all(mine.events.map((ev: any) => saveJoinedEvent({
+            slug: ev.slug,
+            name: ev.name,
+            expiresAt: ev.expires_at,
+            joinCode: ev.join_code ?? '',
+            createdAt: ev.created_at ?? new Date().toISOString(),
+            allowGuestDelete: ev.allow_guest_delete ?? false,
+            viewOnly: ev.view_only ?? false,
+            isOrganiser: ev.role === 'organiser',
+            role: ev.role,
+          })));
+          // Cached but not returned means it is no longer ours — co-admin
+          // removed, or the event deleted.
+          const live = new Set(mine.events.map((ev: any) => ev.slug));
+          const cached = await getJoinedEvents();
+          await Promise.all(cached.filter(e => !live.has(e.slug)).map(e => removeJoinedEvent(e.slug)));
+        }
+        // A 401 (no valid token) leaves the cached list alone.
+      } catch { /* offline — show whatever is cached */ }
+
       const profile = await getUserProfile();
       const pw = await getOrganiserPassword();
       if (profile?.mobile && pw) {

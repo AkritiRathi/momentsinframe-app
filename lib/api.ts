@@ -183,8 +183,12 @@ export async function getUploadUrl(eventSlug: string, filename: string, contentT
   return post('/api/upload-url', { eventSlug, filename, contentType, uploaderMobile });
 }
 
-export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, uploaderMobile?: string, uploaderName?: string, eventUserId?: string) {
-  return post('/api/upload', { eventSlug, stagingKey, originalFilename, uploaderMobile, uploaderName, eventUserId }, 60000);
+export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, eventUserId?: string) {
+  // uploaderMobile and uploaderName are deliberately NOT sent: since
+  // 2026-10-08 the server takes the uploader from the login token and looks
+  // the name up from app_users, so sending them implied identity came from
+  // the client. eventUserId IS still read by the route, so it stays.
+  return post('/api/upload', { eventSlug, stagingKey, originalFilename, eventUserId }, 60000);
 }
 
 export async function deletePhotos(slug: string, photoIds: string[], uploaderMobile?: string, eventUserId?: string, deviceId?: string, adminPhone?: string) {

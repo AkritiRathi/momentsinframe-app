@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  ActivityIndicator, Dimensions, Alert, TextInput,
+  ActivityIndicator, Dimensions, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -113,7 +113,7 @@ export default function HomeScreen() {
   }
 
   function showDeleteConfirmation() {
-    Alert.alert(
+    showAlert(
       'Delete Account',
       'You will be removed from all events, co-admin roles, and organiser access. Your photos will remain but show as Unknown User. This cannot be undone.',
       [

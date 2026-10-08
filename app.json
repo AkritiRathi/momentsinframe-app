@@ -3,7 +3,7 @@
     "name": "Moments",
     "slug": "MomentsInFrame",
     "scheme": "momentsinframe",
-    "version": "2.0.5",
+    "version": "2.0.6",
     "orientation": "portrait",
     "icon": "./assets/Logo.png",
     "userInterfaceStyle": "light",

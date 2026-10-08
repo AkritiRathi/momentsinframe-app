@@ -239,17 +239,39 @@ export async function sendOtp(phone: string): Promise<void> {
   if (data?.error) throw new Error(data.error);
 }
 
-// A plain label for the user's own device list, e.g. "Samsung SM-G991B".
+// A plain label for the user's own device list, e.g. "iPhone 13 Pro" or
+// "Samsung SM-G991B".
 //
-// DO NOT import or require expo-device here until a native build that includes
-// it is installed. expo-device calls requireNativeModule('ExpoDevice') as soon
-// as it loads, and on a build without that module the app CRASHES — a native
-// failure, which a try/catch around the require cannot stop. It crashed iOS
-// logins on 2026-09-29, right after OTP verification, for exactly that reason.
+// expo-device is read LAZILY, inside this function, on purpose. It calls
+// requireNativeModule('ExpoDevice') the moment it loads, and on a build that
+// does not contain the module that is a NATIVE crash which no try/catch can
+// stop — it killed iOS logins on 2026-09-29 when it arrived as an OTA. Keeping
+// the require in here rather than at the top of the file confines any such
+// failure to this one call at login instead of taking down app startup.
 //
-// The package stays in package.json for the next build. Once that build ships,
-// switch this over to expo-device for real names like "iPhone 13 Pro".
+// Safe from 2.0.6 onward: the module is compiled into that build, and a 2.0.5
+// app can never receive a 2.0.6 OTA (runtimeVersion policy is appVersion), so
+// the 2026-09-29 mismatch cannot recur.
+// NEVER ship this file as an OTA to a build older than 2.0.6.
+//
+// Platform.constants already gives Android a real brand + model, so the gain
+// here is iPhone: "iPhone (iOS 18.1)" becomes "iPhone 13 Pro". Anything
+// unexpected falls through to the old label rather than failing.
 function describeThisDevice(): string {
+  // iOS ONLY. On Android expo-device.modelName returns just the model code
+  // ("SM-G991B"), while the Platform.constants path below builds the better
+  // "Samsung SM-G991B" from brand + model. Using it on Android would LOSE the
+  // brand, so Android keeps its existing label untouched.
+  if (Platform.OS === 'ios') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const Device = require('expo-device') as { modelName?: string | null };
+      const name = Device?.modelName?.trim();
+      if (name) return name;
+    } catch {
+      // Module missing or unreadable — fall through to the Platform label.
+    }
+  }
   try {
     if (Platform.OS === 'android') {
       const c = Platform.constants as { Brand?: string; Model?: string };

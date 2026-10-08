@@ -2453,7 +2453,18 @@ export default function EventScreen() {
       <Modal visible={duplicateViewerVisible} animationType="slide" onRequestClose={() => setDuplicateViewerVisible(false)}>
         <View style={[styles.container, { paddingBottom: insets.bottom }]}>
           {(() => {
-            const cur = duplicateResults[duplicateViewerIndex];
+            // Duplicates first, then upgrades, each numbered within its own
+            // type — matched to the website (src/components/DuplicateViewer.tsx),
+            // the user's choice on 2026-10-08. Ordered here rather than where
+            // duplicateResults is set, so the four sources (two upload paths
+            // and two notification replays) all behave the same.
+            const ordered = [
+              ...duplicateResults.filter(r => r.status !== 'upgraded'),
+              ...duplicateResults.filter(r => r.status === 'upgraded'),
+            ];
+            const duplicateCount = ordered.filter(r => r.status !== 'upgraded').length;
+            const upgradedCount = ordered.length - duplicateCount;
+            const cur = ordered[duplicateViewerIndex];
             const isUpgrade = cur?.status === 'upgraded';
             const existingThumbUrl = cur?.existingPhotoId
               ? photoUrls[cur.existingPhotoId]?.thumbUrl ?? photoUrls[cur.existingPhotoId]?.displayUrl
@@ -2462,7 +2473,9 @@ export default function EventScreen() {
               <>
                 <View style={[styles.skippedHeader, { paddingTop: insets.top + 12 }]}>
                   <Text style={styles.skippedTitle}>
-                    {isUpgrade ? 'Upgraded' : 'Duplicate'} — {duplicateViewerIndex + 1} of {duplicateResults.length}
+                    {isUpgrade
+                      ? `Upgraded ${duplicateViewerIndex - duplicateCount + 1} of ${upgradedCount}`
+                      : `Duplicate ${duplicateViewerIndex + 1} of ${duplicateCount}`}
                   </Text>
                   <TouchableOpacity onPress={() => setDuplicateViewerVisible(false)}>
                     <Text style={styles.skippedClose}>×</Text>
@@ -2499,7 +2512,7 @@ export default function EventScreen() {
                   >
                     <Text style={styles.skippedNavBtnText}>‹ Previous</Text>
                   </TouchableOpacity>
-                  {duplicateViewerIndex < duplicateResults.length - 1 ? (
+                  {duplicateViewerIndex < ordered.length - 1 ? (
                     <TouchableOpacity style={styles.skippedNavBtn} onPress={() => setDuplicateViewerIndex(i => i + 1)}>
                       <Text style={styles.skippedNavBtnText}>Next ›</Text>
                     </TouchableOpacity>

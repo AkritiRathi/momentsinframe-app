@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
+import { router } from 'expo-router';
 import { API_BASE_URL } from '../constants/config';
-import { getSessionToken, saveSessionToken } from './storage';
+import { getSessionToken, saveSessionToken, clearSessionToken } from './storage';
 
 // Every request carries the login token issued at OTP verification, so the
 // server can read the caller's number from the token instead of trusting the
@@ -12,6 +13,23 @@ async function authHeaders(base: Record<string, string> = {}): Promise<Record<st
     if (token) return { ...base, Authorization: `Bearer ${token}` };
   } catch { /* no token — behaves exactly as before */ }
   return base;
+}
+
+// One bounce only: several parallel requests failing at once must not fire
+// several navigations.
+let handlingExpiry = false;
+
+/**
+ * The server refused our token. Since 2026-10-08 the photo and download routes
+ * require one, so this is what a 30-day expiry — or a login from before tokens
+ * existed — actually looks like. Send the user to log in again rather than
+ * letting the screen sit there empty with no explanation.
+ */
+async function handleUnauthorised(res: Response): Promise<void> {
+  if (res.status !== 401 || handlingExpiry) return;
+  handlingExpiry = true;
+  try { await clearSessionToken(); } catch { /* keep going — the bounce matters more */ }
+  try { router.replace('/(auth)/login'); } catch { /* no navigator yet */ }
 }
 
 function makeTimeout(ms: number) {
@@ -29,6 +47,7 @@ async function post(path: string, body: object, ms = 15000) {
       body: JSON.stringify(body),
       signal,
     });
+    await handleUnauthorised(res);
     return res.json();
   } finally {
     clear();
@@ -39,6 +58,7 @@ async function get(path: string, headers: Record<string, string> = {}) {
   const { signal, clear } = makeTimeout(15000);
   try {
     const res = await fetch(`${API_BASE_URL}${path}`, { headers: await authHeaders(headers), signal });
+    await handleUnauthorised(res);
     return res.json();
   } finally {
     clear();
@@ -51,6 +71,7 @@ async function del(path: string, body: object) {
     headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
+  await handleUnauthorised(res);
   return res.json();
 }
 
@@ -312,9 +333,12 @@ export async function updateEventSettings(slug: string, organiserPhone: string, 
 }
 
 export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string): Promise<{ photos?: { id: string; taken_at: string }[]; otherPhotos?: { id: string; taken_at: string }[]; error?: string }> {
+  // MUST go through authHeaders: this route requires the login token since
+  // 2026-10-08. It used a bare fetch and broke the moment the server started
+  // enforcing — the exact trap the token work warned about.
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/find-my-photos`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ selfieBase64, ...(adminPhone ? { adminPhone } : {}), ...(userMobile ? { userMobile } : {}) }),
   });
   const text = await res.text();

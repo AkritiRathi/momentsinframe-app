@@ -570,6 +570,24 @@ export default function EventScreen() {
   const [downloadingBulk, setDownloadingBulk] = useState(false);
   const [downloadMode, setDownloadMode] = useState<'jpg' | 'zip'>('jpg');
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
+  // ZIP only. null while the server is still building it — there is no
+  // progress to report then, so the dialog shows a spinner. Once bytes start
+  // arriving this holds them and the bar takes over (user's choice, 2026-10-08).
+  const [zipBytes, setZipBytes] = useState<{ received: number; total: number } | null>(null);
+
+  // Keep the screen awake for the WHOLE of any long job, released the moment
+  // it ends — including when it fails or is cancelled.
+  // This used to be seven activate/deactivate calls scattered through the
+  // upload and download functions. ZIP downloads were simply never given one,
+  // so the screen dimmed mid-download (user, 2026-10-08). Keying off the state
+  // instead means a new long-running flow is covered as soon as it sets one of
+  // these flags, and an exception can no longer strand the lock on.
+  useEffect(() => {
+    if (bgUploading || downloadingBulk) {
+      activateKeepAwakeAsync();
+      return () => { deactivateKeepAwake(); };
+    }
+  }, [bgUploading, downloadingBulk]);
   const [downloadingPhoto, setDownloadingPhoto] = useState(false);
   const [sharingPhoto, setSharingPhoto] = useState(false);
   const prevSelectedSize = useRef(0);
@@ -1127,7 +1145,6 @@ export default function EventScreen() {
     setBgUploadProgress({ current: 0, total: assets.length });
     setNewlyUploadedIds(new Set());
     setUploadSummary(null);
-    activateKeepAwakeAsync();
 
     // Pre-fetch all localURIs in parallel.
     const localUris = await Promise.all(assets.map(async (asset) => {
@@ -1276,7 +1293,6 @@ export default function EventScreen() {
 
     const finalResults = results.filter(Boolean) as UploadFileResult[];
 
-    deactivateKeepAwake();
     setBgUploading(false);
     setBgUploadProgress({ current: 0, total: 0 });
     setBgCancelRequested(false);
@@ -1349,7 +1365,6 @@ export default function EventScreen() {
     _bgCompleteCb = async (results: UploadFileResult[], preSkipped: number) => {
       _bgCompleteCb = null;
       try { await BackgroundUpload?.stopService(); } catch {}
-      deactivateKeepAwake();
       setBgUploading(false);
       setBgUploadProgress({ current: 0, total: 0 });
       setBgCancelRequested(false);
@@ -1398,7 +1413,6 @@ export default function EventScreen() {
 
     setBgUploading(true);
     setBgUploadProgress({ current: 0, total: 0 });
-    activateKeepAwakeAsync();
 
     const dateStr = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
     try {
@@ -1406,7 +1420,6 @@ export default function EventScreen() {
       backgroundUploadTask();
     } catch {
       setBgUploading(false);
-      deactivateKeepAwake();
       showAlert('Upload failed', 'Could not start background upload. Please try again.');
     }
   }
@@ -1599,6 +1612,23 @@ export default function EventScreen() {
     }
   }
 
+  // createDownloadResumable instead of downloadAsync purely for the progress
+  // callback — same result, but it reports bytes as they arrive so the dialog
+  // can show a real bar rather than an indeterminate spinner.
+  async function downloadZipWithProgress(url: string, cacheUri: string): Promise<void> {
+    setZipBytes({ received: 0, total: 0 });
+    const task = FileSystem.createDownloadResumable(url, cacheUri, {}, (p) => {
+      setZipBytes({
+        received: p.totalBytesWritten,
+        // Some servers do not send a length; 0 keeps the spinner up rather
+        // than drawing a bar against a denominator we do not have.
+        total: p.totalBytesExpectedToWrite > 0 ? p.totalBytesExpectedToWrite : 0,
+      });
+    });
+    const dlResult = await task.downloadAsync();
+    if (!dlResult || dlResult.status !== 200) throw new Error(`HTTP ${dlResult?.status ?? 'error'}`);
+  }
+
   async function saveZipToDownloads(filename: string, url: string): Promise<void> {
     if (Platform.OS === 'android') {
       let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`);
@@ -1607,15 +1637,13 @@ export default function EventScreen() {
         await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
       }
       const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-      const dlResult = await FileSystem.downloadAsync(url, cacheUri);
-      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-      const localPath = dlResult.uri.replace('file://', '');
+      await downloadZipWithProgress(url, cacheUri);
+      const localPath = cacheUri.replace('file://', '');
       await MediaStore.saveToDownloads(localPath, filename, folderName, 'application/zip');
       await FileSystem.deleteAsync(cacheUri, { idempotent: true });
     } else {
       const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-      const dlResult = await FileSystem.downloadAsync(url, cacheUri);
-      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+      await downloadZipWithProgress(url, cacheUri);
       await Sharing.shareAsync(cacheUri, { mimeType: 'application/zip', dialogTitle: 'Save ZIP' });
       await FileSystem.deleteAsync(cacheUri, { idempotent: true });
     }
@@ -1681,7 +1709,6 @@ export default function EventScreen() {
     setDownloadMode('jpg');
     setDownloadingBulk(true);
     setDownloadProgress({ current: 0, total: ids.length });
-    activateKeepAwakeAsync();
     let saved = 0;
     let completed = 0;
     const failedIds: string[] = [];
@@ -1710,7 +1737,6 @@ export default function EventScreen() {
       }
     }
 
-    deactivateKeepAwake();
     setDownloadingBulk(false);
     exitSelectMode();
     const parts: string[] = [];
@@ -1742,6 +1768,9 @@ export default function EventScreen() {
     setDownloadMode('zip');
     setDownloadingBulk(true);
     setDownloadProgress({ current: 0, total: totalBatches });
+    // Clear last run's bytes, or the dialog flashes the previous 100% bar
+    // before the loop below resets it.
+    setZipBytes(null);
     let savedBatches = 0;
     try {
       for (let i = 0; i < totalBatches; i++) {
@@ -1751,6 +1780,7 @@ export default function EventScreen() {
         const filename = totalBatches > 1
           ? `${slug}-photos-part${i + 1}of${totalBatches}.zip`
           : `${slug}-photos.zip`;
+        setZipBytes(null); // next part is being built again — spinner, not bar
         const zipRes = await prepareZip(slug, batchIds, idPhone || undefined);
         if (zipRes.error) throw new Error(zipRes.error);
         await saveZipToDownloads(filename, zipRes.zipUrl);
@@ -2361,15 +2391,35 @@ export default function EventScreen() {
               </TouchableOpacity>
             </View>
             {downloadMode === 'zip' ? (
-              <>
-                <Text style={styles.uploadOverlaySub}>
-                  {downloadProgress.total > 1
-                    ? `Preparing ZIP ${downloadProgress.current} of ${downloadProgress.total}…`
-                    : 'Preparing ZIP… this may take a minute'}
-                </Text>
-                <ActivityIndicator color={Colors.accent} style={{ marginVertical: 8 }} />
-                <Text style={styles.uploadOverlayPct}>Keep this screen open</Text>
-              </>
+              // Two phases: the server builds the ZIP (nothing to measure, so a
+              // spinner), then it downloads (real bytes, so a bar).
+              !zipBytes || zipBytes.total === 0 ? (
+                <>
+                  <Text style={styles.uploadOverlaySub}>
+                    {downloadProgress.total > 1
+                      ? `Preparing ZIP ${downloadProgress.current} of ${downloadProgress.total}…`
+                      : 'Preparing ZIP… this may take a minute'}
+                  </Text>
+                  <ActivityIndicator color={Colors.accent} style={{ marginVertical: 8 }} />
+                  <Text style={styles.uploadOverlayPct}>Keep this screen open</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.uploadOverlaySub}>
+                    {downloadProgress.total > 1
+                      ? `Downloading ZIP ${downloadProgress.current} of ${downloadProgress.total}…`
+                      : 'Downloading ZIP…'}
+                  </Text>
+                  <View style={styles.progressBg}>
+                    <View style={[styles.progressFill, {
+                      width: `${Math.round((zipBytes.received / zipBytes.total) * 100)}%` as any,
+                    }]} />
+                  </View>
+                  <Text style={styles.uploadOverlayPct}>
+                    {Math.round((zipBytes.received / zipBytes.total) * 100)}% complete — keep this screen open
+                  </Text>
+                </>
+              )
             ) : (
               <>
                 <Text style={styles.uploadOverlaySub}>

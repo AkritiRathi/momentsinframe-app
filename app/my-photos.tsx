@@ -113,6 +113,31 @@ export default function MyPhotosScreen() {
   const [downloadMode, setDownloadMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [actionLoading, setActionLoading] = useState(false);
+  // Download dialog, identical to the Event screen's: the pill spinner alone
+  // gave no idea how far along a download was (user, 2026-10-08).
+  const [downloadingBulk, setDownloadingBulk] = useState(false);
+  // Named downloadKind: this screen already has a boolean `downloadMode`
+  // for the selection mode, which is a different thing entirely.
+  const [downloadKind, setDownloadKind] = useState<'jpg' | 'zip'>('jpg');
+  const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
+  // ZIP only: null while the server builds it (spinner), bytes once it downloads (bar).
+  const [zipBytes, setZipBytes] = useState<{ received: number; total: number } | null>(null);
+  const downloadCancelledRef = useRef(false);
+  // Lightbox single-photo download/share. actionLoading only DISABLED the
+  // buttons, which do not grey out — so a tap looked ignored (user,
+  // 2026-10-08). This drives the same overlay the Event screen shows.
+  const [lightboxBusy, setLightboxBusy] = useState<null | 'download' | 'share'>(null);
+
+  // Same approach as the Event screen: one effect keyed on the busy flags, so
+  // every long job is covered and the lock is always released. The two
+  // download paths here never had keep-awake at all, which is why the screen
+  // dimmed mid-download (user, 2026-10-08). 'searching' is the face search.
+  useEffect(() => {
+    if (downloadingBulk || mode === 'searching') {
+      activateKeepAwakeAsync();
+      return () => { deactivateKeepAwake(); };
+    }
+  }, [downloadingBulk, mode]);
   const [lightboxVisible, setLightboxVisible] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
@@ -419,6 +444,7 @@ export default function MyPhotosScreen() {
       {
         text: 'Download', onPress: async () => {
           setActionLoading(true);
+          setLightboxBusy('download');
           try {
             const photo = [...photos, ...otherPhotos].find(p => p.id === id);
             const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
@@ -447,6 +473,7 @@ export default function MyPhotosScreen() {
           } catch (e: any) {
             showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
           } finally {
+            setLightboxBusy(null);
             setActionLoading(false);
           }
         },
@@ -459,6 +486,7 @@ export default function MyPhotosScreen() {
     const id = allIds[lightboxIndex];
     if (!id) return;
     setActionLoading(true);
+    setLightboxBusy('share');
     try {
       const photo = [...photos, ...otherPhotos].find(p => p.id === id);
       const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
@@ -472,6 +500,7 @@ export default function MyPhotosScreen() {
     } catch (e: any) {
       showAlert('Error', `Share failed: ${e?.message ?? 'unknown error'}`);
     } finally {
+      setLightboxBusy(null);
       setActionLoading(false);
     }
   }
@@ -525,7 +554,11 @@ export default function MyPhotosScreen() {
     if (capturing) return;
     setCapturing(true);
     try {
-      const photo = await cameraRef.current!.takePictureAsync({ quality: 0.9 });
+      // shutterSound is a real CameraPictureOptions flag in expo-camera 17
+      // (default true). The selfie is a silent step in a flow, not a photo
+      // the user is "taking", so the loud system click is wrong here.
+      // iOS may still force it in regions where the law requires it.
+      const photo = await cameraRef.current!.takePictureAsync({ quality: 0.9, shutterSound: false });
       const uri = photo!.uri;
       // Normalize EXIF rotation first — Image.getSize returns raw file dims on Android
       // which can be landscape even for a portrait selfie, making crop coords wrong.
@@ -550,10 +583,8 @@ export default function MyPhotosScreen() {
       try { if (cropped.uri !== norm.uri) await FileSystem.deleteAsync(cropped.uri, { idempotent: true }); } catch {}
       const base64 = cropped.base64;
       if (!base64) { setCapturing(false); return; }
-      await activateKeepAwakeAsync();
       setMode('searching');
       const result = await findMyPhotos(slug, base64, adminPhone, userMobile);
-      deactivateKeepAwake();
       if (result.error) {
         setCameraReady(false);
         showAlert('Error', result.error, [{ text: 'Try Again', onPress: () => setMode('camera') }]);
@@ -569,7 +600,6 @@ export default function MyPhotosScreen() {
       const ids = [...main.map(p => p.id), ...other.map(p => p.id)];
       if (ids.length > 0) loadUrls(ids);
     } catch (e: any) {
-      deactivateKeepAwake();
       setCameraReady(false);
       showAlert('Error', e?.message ?? 'Something went wrong. Please try again.', [{ text: 'OK', onPress: () => setMode('camera') }]);
       setMode('camera');
@@ -604,8 +634,28 @@ export default function MyPhotosScreen() {
     ]);
   }
 
+  // Same helper as the Event screen: createDownloadResumable reports bytes as
+  // they arrive, which is what lets the dialog show a real bar.
+  async function downloadZipWithProgress(url: string, cacheUri: string): Promise<void> {
+    setZipBytes({ received: 0, total: 0 });
+    const task = FileSystem.createDownloadResumable(url, cacheUri, {}, (pr) => {
+      setZipBytes({
+        received: pr.totalBytesWritten,
+        total: pr.totalBytesExpectedToWrite > 0 ? pr.totalBytesExpectedToWrite : 0,
+      });
+    });
+    const dlResult = await task.downloadAsync();
+    if (!dlResult || dlResult.status !== 200) throw new Error(`HTTP ${dlResult?.status ?? 'error'}`);
+  }
+
   async function doDownloadJpgs(ids: string[]) {
-    setActionLoading(true);
+    downloadCancelledRef.current = false;
+    setDownloadKind('jpg');
+    setDownloadProgress({ current: 0, total: ids.length });
+    setDownloadingBulk(true);
+    // Deliberately NOT setActionLoading: that spins the Download pill, which
+    // now sits behind the progress dialog and just looks like a second,
+    // contradictory indicator.
     try {
       let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`);
       if (!folderName) {
@@ -613,7 +663,10 @@ export default function MyPhotosScreen() {
         await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
       }
       let saved = 0;
+      let done = 0;
       for (const id of ids) {
+        if (downloadCancelledRef.current) break;
+        setDownloadProgress({ current: done, total: ids.length });
         try {
           const photo = [...photos, ...otherPhotos].find(p => p.id === id);
           const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
@@ -635,7 +688,10 @@ export default function MyPhotosScreen() {
           await FileSystem.deleteAsync(cacheUri, { idempotent: true });
           saved++;
         } catch {}
+        done++;
+        setDownloadProgress({ current: done, total: ids.length });
       }
+      setDownloadingBulk(false);
       exitDownloadMode();
       const msg = Platform.OS === 'ios'
         ? `${saved} photo${saved !== 1 ? 's' : ''} saved to your Photos.`
@@ -644,30 +700,37 @@ export default function MyPhotosScreen() {
     } catch (e: any) {
       showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
     } finally {
-      setActionLoading(false);
+      setDownloadingBulk(false);
     }
   }
 
   async function doDownloadZip(ids: string[]) {
-    setActionLoading(true);
+    const batchCount = Math.ceil(ids.length / 50);
+    downloadCancelledRef.current = false;
+    setDownloadKind('zip');
+    setDownloadProgress({ current: 0, total: batchCount });
+    setZipBytes(null);
+    setDownloadingBulk(true);
     try {
       const batches = chunk(ids, 50);
       for (let i = 0; i < batches.length; i++) {
+        if (downloadCancelledRef.current) break;
+        setDownloadProgress({ current: i + 1, total: batches.length });
+        setZipBytes(null); // this part is being built — spinner, not bar
         const filename = batches.length > 1
           ? `${slug}-photos-part${i + 1}of${batches.length}.zip`
           : `${slug}-photos.zip`;
         const zipRes = await prepareZip(slug, batches[i], idPhone);
         if (zipRes.error) throw new Error(zipRes.error);
         const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-        const dlResult = await FileSystem.downloadAsync(zipRes.zipUrl, cacheUri);
-        if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+        await downloadZipWithProgress(zipRes.zipUrl, cacheUri);
         if (Platform.OS === 'android') {
           let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`);
           if (!folderName) {
             folderName = eventName;
             await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
           }
-          const localPath = dlResult.uri.replace('file://', '');
+          const localPath = cacheUri.replace('file://', '');
           await MediaStore.saveToDownloads(localPath, filename, folderName, 'application/zip');
         } else {
           await Sharing.shareAsync(cacheUri, { mimeType: 'application/zip', dialogTitle: 'Save ZIP' });
@@ -682,7 +745,10 @@ export default function MyPhotosScreen() {
     } catch (e: any) {
       showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
     } finally {
-      setActionLoading(false);
+      // MUST clear both. Clearing only actionLoading left the progress dialog
+      // on screen for good once the ZIP finished.
+      setDownloadingBulk(false);
+      setZipBytes(null);
     }
   }
 
@@ -934,9 +1000,80 @@ export default function MyPhotosScreen() {
               </Text>
             )}
           </View>
+          {/* Same overlay the Event screen shows for a single photo
+              (lbDownloadOverlay). Without it a tap on Download or Share looked
+              like nothing had happened. */}
+          {lightboxBusy && (
+            <View style={styles.lbDownloadOverlay}>
+              <ActivityIndicator color={Colors.white} size="large" />
+              <Text style={styles.lbDownloadText}>
+                {lightboxBusy === 'share' ? 'Preparing…' : 'Downloading…'}
+              </Text>
+            </View>
+          )}
           {alertOverlay}
         </GestureHandlerRootView>
       </Modal>
+
+      {downloadingBulk && (
+        <View style={styles.uploadOverlay}>
+          <View style={styles.uploadOverlayCard}>
+            <View style={styles.uploadOverlayHeader}>
+              <Text style={styles.uploadOverlayTitle}>
+                {downloadKind === 'zip' ? 'Downloading ZIP' : 'Downloading'}
+              </Text>
+              <TouchableOpacity onPress={() => { downloadCancelledRef.current = true; }}>
+                <Text style={styles.uploadOverlayCancel}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+            {downloadKind === 'zip' ? (
+              // Two phases: the server builds the ZIP (nothing to measure, so a
+              // spinner), then it downloads (real bytes, so a bar).
+              !zipBytes || zipBytes.total === 0 ? (
+                <>
+                  <Text style={styles.uploadOverlaySub}>
+                    {downloadProgress.total > 1
+                      ? `Preparing ZIP ${downloadProgress.current} of ${downloadProgress.total}…`
+                      : 'Preparing ZIP… this may take a minute'}
+                  </Text>
+                  <ActivityIndicator color={Colors.accent} style={{ marginVertical: 8 }} />
+                  <Text style={styles.uploadOverlayPct}>Keep this screen open</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.uploadOverlaySub}>
+                    {downloadProgress.total > 1
+                      ? `Downloading ZIP ${downloadProgress.current} of ${downloadProgress.total}…`
+                      : 'Downloading ZIP…'}
+                  </Text>
+                  <View style={styles.progressBg}>
+                    <View style={[styles.progressFill, {
+                      width: `${Math.round((zipBytes.received / zipBytes.total) * 100)}%` as any,
+                    }]} />
+                  </View>
+                  <Text style={styles.uploadOverlayPct}>
+                    {Math.round((zipBytes.received / zipBytes.total) * 100)}% complete — keep this screen open
+                  </Text>
+                </>
+              )
+            ) : (
+              <>
+                <Text style={styles.uploadOverlaySub}>
+                  Downloading photo {Math.min(downloadProgress.current + 1, downloadProgress.total)} of {downloadProgress.total}…
+                </Text>
+                <View style={styles.progressBg}>
+                  <View style={[styles.progressFill, {
+                    width: `${downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}%` as any,
+                  }]} />
+                </View>
+                <Text style={styles.uploadOverlayPct}>
+                  {downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}% complete — keep this screen open
+                </Text>
+              </>
+            )}
+          </View>
+        </View>
+      )}
 
       {alertOverlay}
     </SafeAreaView>
@@ -944,6 +1081,19 @@ export default function MyPhotosScreen() {
 }
 
 const styles = StyleSheet.create({
+  // Lightbox busy overlay — copied from app/event.tsx so both match.
+  lbDownloadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 10, justifyContent: 'center', alignItems: 'center', gap: 12 },
+  lbDownloadText: { color: Colors.white, fontSize: 14, fontWeight: '500' },
+  // Download dialog — copied from app/event.tsx so both screens look identical.
+  uploadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 100, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
+  uploadOverlayCard: { width: '100%', backgroundColor: Colors.card, borderRadius: 16, padding: 20 },
+  uploadOverlayHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  uploadOverlayTitle: { fontSize: 16, fontWeight: '600', color: Colors.white },
+  uploadOverlayCancel: { fontSize: 13, color: Colors.danger },
+  uploadOverlaySub: { fontSize: 13, color: Colors.textMuted, marginBottom: 10 },
+  progressBg: { height: 8, backgroundColor: '#2a2a2a', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
+  progressFill: { height: '100%', backgroundColor: Colors.white, borderRadius: 4 },
+  uploadOverlayPct: { fontSize: 11, color: '#666' },
   // Camera
   cameraHeader: { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16 },
   camBackText: { fontSize: 24, color: '#fff' },

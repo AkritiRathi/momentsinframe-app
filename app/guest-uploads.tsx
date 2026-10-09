@@ -129,6 +129,9 @@ export default function GuestUploadsScreen() {
   const [imageLoading, setImageLoading] = useState(false);
   const imageLoadingRef = useRef(false);
   const [deletingPhoto, setDeletingPhoto] = useState(false);
+  // Bulk delete gets its own flag. actionLoading is SHARED with the two
+  // download paths, so reusing it would caption a download "Deleting...".
+  const [deletingBulk, setDeletingBulk] = useState(false);
   const [downloadingPhoto, setDownloadingPhoto] = useState(false);
   const [sharingPhoto, setSharingPhoto] = useState(false);
   const prevSelectedSize = useRef(0);
@@ -582,7 +585,7 @@ export default function GuestUploadsScreen() {
         {
           text: 'Delete', style: 'destructive',
           onPress: async () => {
-            setActionLoading(true);
+            setDeletingBulk(true);
             try {
               const result = await deletePhotos(eventSlug, ids);
               if (result.error) { showAlert('Error', result.error); return; }
@@ -590,7 +593,7 @@ export default function GuestUploadsScreen() {
               setSelected(new Set());
               await fetchPhotos();
             } finally {
-              setActionLoading(false);
+              setDeletingBulk(false);
             }
           },
         },
@@ -747,8 +750,11 @@ export default function GuestUploadsScreen() {
           <Pressable style={styles.selBtn} onPress={cancelMode}>
             <Text style={styles.selBtnText}>Cancel</Text>
           </Pressable>
+          {/* Downloads keep the small inline spinner. Deletes no longer use
+              it — they get the full-screen overlay instead, matching the
+              lightbox and the Event screen. */}
           {actionLoading ? (
-            <ActivityIndicator size="small" color={isDelete ? Colors.danger : Colors.accent} />
+            <ActivityIndicator size="small" color={Colors.accent} />
           ) : (
             <Pressable
               style={[styles.selBtn, { borderColor: isDelete ? Colors.danger : Colors.accent }, selected.size === 0 && { opacity: 0.4 }]}
@@ -846,6 +852,13 @@ export default function GuestUploadsScreen() {
   return (
     <>
       <Stack.Screen options={{ presentation: 'modal', headerShown: false }} />
+      {/* Bulk delete — the same overlay the lightbox uses, at screen level */}
+      {deletingBulk && (
+        <View style={[styles.lbDeletingOverlay, { zIndex: 200 }]}>
+          <ActivityIndicator size="large" color={Colors.accent} />
+          <Text style={styles.lbDeletingText}>Deleting...</Text>
+        </View>
+      )}
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: Colors.background }}>
         <View style={{ paddingTop: insets.top }}>
           <View style={styles.eventHeader}>

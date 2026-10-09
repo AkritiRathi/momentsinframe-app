@@ -475,6 +475,9 @@ export default function EventScreen() {
   const [uploadSummary, setUploadSummary] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [deletingPhoto, setDeletingPhoto] = useState(false);
+  // Bulk delete needs its own flag: deletingPhoto drives the overlay INSIDE
+  // the lightbox, which is not mounted during a select-mode delete.
+  const [deletingBulk, setDeletingBulk] = useState(false);
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [skippedViewerVisible, setSkippedViewerVisible] = useState(false);
   const [skippedViewerIndex, setSkippedViewerIndex] = useState(0);
@@ -1547,11 +1550,16 @@ export default function EventScreen() {
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
-          // Same here — one call, the server decides the role.
-          const result = await deletePhotos(slug, ids);
-          if (result.error) { showAlert('Error', result.error); return; }
-          exitSelectMode(true);
-          await loadPhotos();
+          setDeletingBulk(true);
+          try {
+            // Same here — one call, the server decides the role.
+            const result = await deletePhotos(slug, ids);
+            if (result.error) { showAlert('Error', result.error); return; }
+            exitSelectMode(true);
+            await loadPhotos();
+          } finally {
+            setDeletingBulk(false);
+          }
         },
       },
       { text: 'Cancel', style: 'cancel' },
@@ -2378,6 +2386,13 @@ export default function EventScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Bulk delete — the same overlay the lightbox uses, at screen level */}
+      {deletingBulk && (
+        <View style={[styles.lbDeletingOverlay, { zIndex: 200 }]}>
+          <ActivityIndicator size="large" color={Colors.accent} />
+          <Text style={styles.lbDeletingText}>Deleting...</Text>
+        </View>
+      )}
       {/* Download progress overlay */}
       {downloadingBulk && (
         <View style={styles.uploadOverlay}>

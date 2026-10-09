@@ -490,7 +490,7 @@ export default function GuestUploadsScreen() {
           onPress: async () => {
             setDeletingPhoto(true);
             try {
-              const result = await deletePhotos(eventSlug, [photoId], undefined, undefined, undefined, adminPhone);
+              const result = await deletePhotos(eventSlug, [photoId]);
               if (result.error) { showAlert('Error', result.error); return; }
               const newPhotos = photos.filter(p => p.id !== photoId);
               if (newPhotos.length === 0) {
@@ -584,7 +584,7 @@ export default function GuestUploadsScreen() {
           onPress: async () => {
             setActionLoading(true);
             try {
-              const result = await deletePhotos(eventSlug, ids, undefined, undefined, undefined, adminPhone);
+              const result = await deletePhotos(eventSlug, ids);
               if (result.error) { showAlert('Error', result.error); return; }
               setMode('normal');
               setSelected(new Set());

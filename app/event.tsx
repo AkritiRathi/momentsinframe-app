@@ -1513,9 +1513,10 @@ export default function EventScreen() {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
           setDeletingPhoto(true);
-          const result = isAdmin
-            ? await deletePhotos(slug, [id], undefined, undefined, undefined, userMobile ?? undefined)
-            : await deletePhotos(slug, [id], userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
+          // The admin / guest branch is gone: the server reads the caller
+          // from the login token and decides the role itself, so both
+          // branches had become the same call.
+          const result = await deletePhotos(slug, [id]);
           setDeletingPhoto(false);
           if (result.error) { showAlert('Error', result.error); return; }
           const currentIdx = lightboxIndex;
@@ -1546,9 +1547,8 @@ export default function EventScreen() {
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
-          const result = isAdmin
-            ? await deletePhotos(slug, ids, undefined, undefined, undefined, userMobile ?? undefined)
-            : await deletePhotos(slug, ids, userMobile ?? undefined, eventUserId ?? undefined, deviceId ?? undefined);
+          // Same here — one call, the server decides the role.
+          const result = await deletePhotos(slug, ids);
           if (result.error) { showAlert('Error', result.error); return; }
           exitSelectMode(true);
           await loadPhotos();

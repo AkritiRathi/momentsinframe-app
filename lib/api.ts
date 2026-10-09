@@ -191,11 +191,21 @@ export async function processUpload(eventSlug: string, stagingKey: string, origi
   return post('/api/upload', { eventSlug, stagingKey, originalFilename, eventUserId }, 60000);
 }
 
-export async function deletePhotos(slug: string, photoIds: string[], uploaderMobile?: string, eventUserId?: string, deviceId?: string, adminPhone?: string) {
-  const body = adminPhone
-    ? { photoIds, adminPhone }
-    : { photoIds, uploaderMobile, eventUserId, deviceId };
-  return del(`/api/native/events/${slug}/photos`, body);
+// Only the ids are sent. The route takes the caller from the login token and
+// decides EVERYTHING through getUserRole — expiry, view-only,
+// allow-guest-delete, per-photo ownership, and the rule that a co-admin cannot
+// delete the organiser's or another co-admin's photos. It reads nothing else
+// from the body (enforced 2026-10-08, e44f822).
+//
+// It used to take uploaderMobile, eventUserId, deviceId and adminPhone. All
+// four were dead, and they were worse than clutter: the route USED to decide
+// who you were from WHICH FIELD you sent, so a caller picked their own
+// privilege level by choosing a field name. Removing all four rather than some
+// of them is deliberate — they were all `string | undefined`, so a missed call
+// site would have slid its arguments silently into the wrong positions with no
+// type error. Dropping to two arguments makes every stale call a compile error.
+export async function deletePhotos(slug: string, photoIds: string[]) {
+  return del(`/api/native/events/${slug}/photos`, { photoIds });
 }
 
 export async function getPhotoDownloadUrl(photoId: string, adminPhone?: string): Promise<{ url: string; filename: string; error?: string }> {

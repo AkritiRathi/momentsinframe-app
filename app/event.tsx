@@ -484,6 +484,11 @@ export default function EventScreen() {
 
   // Lightbox
   const [lightboxVisible, setLightboxVisible] = useState(false);
+  // Mirrors lightboxVisible for code that reads it AFTER an await. The state a
+  // function captured when it started is always "open", so it can never notice
+  // the lightbox closing underneath it. See handleSharePhoto.
+  const lightboxVisibleRef = useRef(false);
+  useEffect(() => { lightboxVisibleRef.current = lightboxVisible; }, [lightboxVisible]);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxSection, setLightboxSection] = useState<'main' | 'other'>('main');
   const [imageLoading, setImageLoading] = useState(false);
@@ -1702,6 +1707,14 @@ export default function EventScreen() {
       const localUri = `${FileSystem.cacheDirectory}${localFilename}`;
       const dlResult = await FileSystem.downloadAsync(url, localUri);
       if (dlResult.status !== 200) throw new Error('Download failed');
+      // Closing the lightbox while the photo was being fetched means the share
+      // was abandoned. Throw the file away rather than pushing a share sheet in
+      // front of someone who has already left the screen — which is exactly
+      // what it used to do. The website does the same thing (Lightbox.tsx).
+      if (!lightboxVisibleRef.current) {
+        await FileSystem.deleteAsync(localUri, { idempotent: true });
+        return;
+      }
       await Sharing.shareAsync(localUri, { mimeType: 'image/jpeg', dialogTitle: 'Share photo' });
       await FileSystem.deleteAsync(localUri, { idempotent: true });
     } catch (e: any) {
@@ -2384,6 +2397,25 @@ export default function EventScreen() {
     );
   }
 
+  // The close button again, this time drawn ON the busy cover — the user's own
+  // idea, and better than the three attempts before it. A child of the topmost
+  // view receives taps BY DEFINITION, so there is no layer number to get wrong,
+  // which is exactly how the first attempt failed.
+  //
+  // It lands precisely on top of the header's close because the header starts
+  // at insets.top + 12 and every chip in that row is now exactly 31 tall, so
+  // the row's top IS the button's top. The header's copy is made invisible
+  // while busy rather than removed, so the row does not reshuffle underneath.
+  const lbCoverClose = (
+    <TouchableOpacity
+      style={[styles.lbBtn, styles.lbClose, styles.lbCloseOnCover, { top: insets.top + 12 }]}
+      onPress={() => setLightboxVisible(false)}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+    >
+      <Text style={styles.lbCloseText}>×</Text>
+    </TouchableOpacity>
+  );
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Bulk delete — the same overlay the lightbox uses, at screen level */}
@@ -2633,9 +2665,6 @@ export default function EventScreen() {
       <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
         <GestureHandlerRootView style={styles.lightboxInner}>
             <View style={[styles.lbHeader, { paddingTop: insets.top + 12 }]}>
-              <TouchableOpacity onPress={() => setLightboxVisible(false)}>
-                <Text style={styles.lbBack}>←</Text>
-              </TouchableOpacity>
               <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
               <View style={styles.lbActions}>
                 {canDelete && (
@@ -2653,6 +2682,19 @@ export default function EventScreen() {
                   <Text style={styles.lbBtnText}>Share</Text>
                 </TouchableOpacity>
               </View>
+              {/* Close. A normal item in the row, NOT positioned by hand: the
+                  same centring that lines up the buttons lines this up too, on
+                  every device. It floated at a fixed distance from the top
+                  until 2026-10-10 and sat a couple of pixels high on Android,
+                  because button height follows font metrics and those differ
+                  per platform. */}
+              <TouchableOpacity
+                style={[styles.lbBtn, styles.lbClose, (downloadingPhoto || sharingPhoto) && { opacity: 0 }]}
+                onPress={() => setLightboxVisible(false)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={styles.lbCloseText}>×</Text>
+              </TouchableOpacity>
             </View>
             <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
               <GestureDetector gesture={zoomGesture}>
@@ -2705,12 +2747,14 @@ export default function EventScreen() {
           <View style={styles.lbDownloadOverlay}>
             <ActivityIndicator color={Colors.white} size="large" />
             <Text style={styles.lbDownloadText}>Downloading…</Text>
+            {lbCoverClose}
           </View>
         )}
         {sharingPhoto && (
           <View style={styles.lbDownloadOverlay}>
             <ActivityIndicator color={Colors.white} size="large" />
             <Text style={styles.lbDownloadText}>Preparing…</Text>
+            {lbCoverClose}
           </View>
         )}
         {alertOverlay}
@@ -3338,14 +3382,32 @@ const styles = StyleSheet.create({
   // Lightbox
   lightboxInner: { flex: 1, backgroundColor: '#000' },
   lbHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
-  lbBack: { fontSize: 22, color: Colors.textMuted, marginRight: 12 },
+  // The close is BUILT FROM lbBtn, so it can never drift from the other three.
+  // It only narrows the sides (a single glyph needs less room than a word) and
+  // trims the vertical padding, because its line box is 26 where theirs is 18.
+  // Both end up 31 tall: 1 border + 12 + 18, and 1 border + 4 + 26.
+  lbClose: { marginLeft: 8, paddingHorizontal: 10, paddingVertical: 2 },
+  // The copy drawn on the busy cover. right:16 matches the header's own
+  // paddingHorizontal, and marginLeft is cleared because it is positioned now,
+  // not laid out in a row.
+  lbCloseOnCover: { position: 'absolute', right: 16, marginLeft: 0 },
+  // EVERY NUMBER HERE IS LATE AND DELIBERATE, after the x sat visibly off
+  // centre twice. A typed character does not sit in the middle of its own line
+  // of text: it rests on the baseline, and Android adds its own uneven padding
+  // on top of that. lineHeight = fontSize gives the glyph a box whose centre
+  // IS the glyph's optical centre, and includeFontPadding:false (Android only,
+  // ignored on iOS) removes the uneven padding. Do not drop either one.
+  lbCloseText: { fontSize: 26, lineHeight: 26, color: '#888', includeFontPadding: false, textAlign: 'center' },
   lbDeletingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', gap: 12 },
   lbDeletingText: { fontSize: 14, fontWeight: '700', color: Colors.white },
   lbCounter: { fontSize: 13, color: '#666', flex: 1 },
   lbActions: { flexDirection: 'row', gap: 8 },
   lbBtn: { borderWidth: 0.5, borderColor: '#2a2a2a', borderRadius: 7, paddingHorizontal: 12, paddingVertical: 6 },
   lbBtnDanger: { borderColor: 'rgba(229,57,53,0.3)' },
-  lbBtnText: { fontSize: 13, fontWeight: '500', color: '#888' },
+  // lineHeight pinned so the row's heights are arithmetic, not font metrics:
+  // every chip is 31 tall on both platforms. Added 2026-10-10 so the close
+  // button could match exactly; it may move the labels by a pixel.
+  lbBtnText: { fontSize: 13, fontWeight: '500', color: '#888', lineHeight: 18 },
   lbImgWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   lbImg: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },
   lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },

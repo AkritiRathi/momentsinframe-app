@@ -17,6 +17,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as SecureStore from 'expo-secure-store';
 import * as MediaLibrary from 'expo-media-library';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
@@ -125,6 +126,11 @@ export default function GuestUploadsScreen() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [actionLoading, setActionLoading] = useState(false);
   const [lightboxVisible, setLightboxVisible] = useState(false);
+  // Mirrors lightboxVisible for code that reads it AFTER an await — the state a
+  // function captured when it started is always "open". See
+  // handleLightboxShare, and the fuller note in event.tsx.
+  const lightboxVisibleRef = useRef(false);
+  useEffect(() => { lightboxVisibleRef.current = lightboxVisible; }, [lightboxVisible]);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [imageLoading, setImageLoading] = useState(false);
   const imageLoadingRef = useRef(false);
@@ -135,6 +141,22 @@ export default function GuestUploadsScreen() {
   const [downloadingPhoto, setDownloadingPhoto] = useState(false);
   const [sharingPhoto, setSharingPhoto] = useState(false);
   const prevSelectedSize = useRef(0);
+
+  // This screen had NO keep-awake at all until 2026-10-10, while event.tsx and
+  // my-photos.tsx both had it — so the phone could sleep part-way through a
+  // bulk download here, and a multi-ZIP download of 50 photos per file is
+  // exactly where that happens. actionLoading is the right flag: it is set by
+  // doDownloadZip and doDownloadJpgs and by nothing else, per the comment on
+  // deletingBulk above. STATE-driven, not called inside the download functions,
+  // matching the other two screens — see project-download-progress-ui.
+  // Single-photo download and share are deliberately NOT included, as on the
+  // other two screens: they finish in seconds.
+  useEffect(() => {
+    if (actionLoading) {
+      activateKeepAwakeAsync();
+      return () => { deactivateKeepAwake(); };
+    }
+  }, [actionLoading]);
 
   // Refs for drag-to-select
   const photoRefsMap = useRef<Map<string, any>>(new Map());
@@ -566,6 +588,12 @@ export default function GuestUploadsScreen() {
       const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
       const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
       if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+      // Lightbox closed while fetching = the share was abandoned. Discard the
+      // file instead of opening a sheet over a screen they have left.
+      if (!lightboxVisibleRef.current) {
+        await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+        return;
+      }
       await Sharing.shareAsync(cacheUri, { mimeType: 'image/jpeg', dialogTitle: 'Share Photo' });
       await FileSystem.deleteAsync(cacheUri, { idempotent: true });
     } catch (e: any) {
@@ -849,6 +877,19 @@ export default function GuestUploadsScreen() {
     return null;
   }
 
+  // The close button drawn ON the busy cover, so it stays tappable while the
+  // cover is up. A child of the topmost view receives taps by definition —
+  // see the longer note in event.tsx for why that matters.
+  const lbCoverClose = (
+    <TouchableOpacity
+      style={[styles.lbBtn, styles.lbClose, styles.lbCloseOnCover, { top: insets.top + 12 }]}
+      onPress={() => setLightboxVisible(false)}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+    >
+      <Text style={styles.lbCloseText}>×</Text>
+    </TouchableOpacity>
+  );
+
   return (
     <>
       <Stack.Screen options={{ presentation: 'modal', headerShown: false }} />
@@ -931,9 +972,6 @@ export default function GuestUploadsScreen() {
       >
         <GestureHandlerRootView style={styles.lightboxInner}>
           <View style={[styles.lbHeader, { paddingTop: insets.top + 12 }]}>
-            <TouchableOpacity onPress={() => setLightboxVisible(false)}>
-              <Text style={styles.lbBack}>←</Text>
-            </TouchableOpacity>
             <Text style={styles.lbCounter}>{lightboxIndex + 1} / {photos.length}</Text>
             <View style={styles.lbActions}>
               {showDeleteBtn && (
@@ -951,6 +989,15 @@ export default function GuestUploadsScreen() {
                 <Text style={styles.lbBtnText}>Share</Text>
               </TouchableOpacity>
             </View>
+            {/* Close — a normal item in the row, so the same centring that
+                lines up the buttons lines this up too. See event.tsx. */}
+            <TouchableOpacity
+              style={[styles.lbBtn, styles.lbClose, (downloadingPhoto || sharingPhoto) && { opacity: 0 }]}
+              onPress={() => setLightboxVisible(false)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.lbCloseText}>×</Text>
+            </TouchableOpacity>
           </View>
           <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
             <GestureDetector gesture={zoomGesture}>
@@ -1001,12 +1048,14 @@ export default function GuestUploadsScreen() {
             <View style={styles.lbDownloadOverlay}>
               <ActivityIndicator color={Colors.white} size="large" />
               <Text style={styles.lbDownloadText}>Downloading…</Text>
+              {lbCoverClose}
             </View>
           )}
           {sharingPhoto && (
             <View style={styles.lbDownloadOverlay}>
               <ActivityIndicator color={Colors.white} size="large" />
               <Text style={styles.lbDownloadText}>Preparing…</Text>
+              {lbCoverClose}
             </View>
           )}
           {alertOverlay}
@@ -1070,12 +1119,19 @@ const styles = StyleSheet.create({
   // Lightbox
   lightboxInner: { flex: 1, backgroundColor: '#000' },
   lbHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
-  lbBack: { fontSize: 22, color: Colors.textMuted, marginRight: 12 },
+  // Built from lbBtn so it can never drift from the other buttons. Every number
+  // here matches event.tsx — read the comment there before changing any of it.
+  lbClose: { marginLeft: 8, paddingHorizontal: 10, paddingVertical: 2 },
+  // The copy drawn on the busy cover. Matches event.tsx.
+  lbCloseOnCover: { position: 'absolute', right: 16, marginLeft: 0 },
+  lbCloseText: { fontSize: 26, lineHeight: 26, color: '#888', includeFontPadding: false, textAlign: 'center' },
   lbCounter: { fontSize: 13, color: '#666', flex: 1 },
   lbActions: { flexDirection: 'row', gap: 8 },
   lbBtn: { borderWidth: 0.5, borderColor: '#2a2a2a', borderRadius: 7, paddingHorizontal: 12, paddingVertical: 6 },
   lbBtnDanger: { borderColor: 'rgba(229,57,53,0.3)' },
-  lbBtnText: { fontSize: 13, fontWeight: '500', color: '#888' },
+  // lineHeight pinned so every chip in the row is 31 tall by arithmetic rather
+  // than font metrics. Matches event.tsx.
+  lbBtnText: { fontSize: 13, fontWeight: '500', color: '#888', lineHeight: 18 },
   lbImgWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   lbImg: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },
   lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },

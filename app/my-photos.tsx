@@ -139,6 +139,11 @@ export default function MyPhotosScreen() {
     }
   }, [downloadingBulk, mode]);
   const [lightboxVisible, setLightboxVisible] = useState(false);
+  // Mirrors lightboxVisible for code that reads it AFTER an await — the state a
+  // function captured when it started is always "open". See
+  // handleLightboxShare, and the fuller note in event.tsx.
+  const lightboxVisibleRef = useRef(false);
+  useEffect(() => { lightboxVisibleRef.current = lightboxVisible; }, [lightboxVisible]);
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
   // Drag select refs
@@ -495,6 +500,12 @@ export default function MyPhotosScreen() {
       const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
       const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
       if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+      // Lightbox closed while fetching = the share was abandoned. Discard the
+      // file instead of opening a sheet over a screen they have left.
+      if (!lightboxVisibleRef.current) {
+        await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+        return;
+      }
       await Sharing.shareAsync(cacheUri, { mimeType: 'image/jpeg', dialogTitle: 'Share Photo' });
       await FileSystem.deleteAsync(cacheUri, { idempotent: true });
     } catch (e: any) {
@@ -811,6 +822,19 @@ export default function MyPhotosScreen() {
   const lightboxImageUrl = currentLbUrls?.displayUrl ?? currentLbUrls?.url ?? null;
   const allSelected = selected.size === totalFound;
 
+  // The close button drawn ON the busy cover, so it stays tappable while the
+  // cover is up. A child of the topmost view receives taps by definition —
+  // see the longer note in event.tsx for why that matters.
+  const lbCoverClose = (
+    <TouchableOpacity
+      style={[styles.lbBtn, styles.lbClose, styles.lbCloseOnCover, { top: insets.top + 12 }]}
+      onPress={() => setLightboxVisible(false)}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+    >
+      <Text style={styles.lbCloseText}>×</Text>
+    </TouchableOpacity>
+  );
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }}>
       {/* Header */}
@@ -954,9 +978,6 @@ export default function MyPhotosScreen() {
       <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
         <GestureHandlerRootView style={styles.lightboxInner}>
           <View style={[styles.lbHeader, { paddingTop: insets.top + 12 }]}>
-            <TouchableOpacity onPress={() => setLightboxVisible(false)}>
-              <Text style={styles.lbBack}>←</Text>
-            </TouchableOpacity>
             <Text style={styles.lbCounter}>{lightboxIndex + 1} / {totalFound}</Text>
             <View style={styles.lbActions}>
               <TouchableOpacity style={styles.lbBtn} onPress={handleLightboxDownload} disabled={actionLoading}>
@@ -966,6 +987,15 @@ export default function MyPhotosScreen() {
                 <Text style={styles.lbBtnText}>Share</Text>
               </TouchableOpacity>
             </View>
+            {/* Close — a normal item in the row, so the same centring that
+                lines up the buttons lines this up too. See event.tsx. */}
+            <TouchableOpacity
+              style={[styles.lbBtn, styles.lbClose, !!lightboxBusy && { opacity: 0 }]}
+              onPress={() => setLightboxVisible(false)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.lbCloseText}>×</Text>
+            </TouchableOpacity>
           </View>
           <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
             <GestureDetector gesture={zoomGesture}>
@@ -1009,6 +1039,7 @@ export default function MyPhotosScreen() {
               <Text style={styles.lbDownloadText}>
                 {lightboxBusy === 'share' ? 'Preparing…' : 'Downloading…'}
               </Text>
+              {lbCoverClose}
             </View>
           )}
           {alertOverlay}
@@ -1157,11 +1188,18 @@ const styles = StyleSheet.create({
   // Lightbox
   lightboxInner: { flex: 1, backgroundColor: '#000' },
   lbHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
-  lbBack: { fontSize: 22, color: Colors.textMuted, marginRight: 12 },
+  // Built from lbBtn so it can never drift from the other buttons. Every number
+  // here matches event.tsx — read the comment there before changing any of it.
+  lbClose: { marginLeft: 8, paddingHorizontal: 10, paddingVertical: 2 },
+  // The copy drawn on the busy cover. Matches event.tsx.
+  lbCloseOnCover: { position: 'absolute', right: 16, marginLeft: 0 },
+  lbCloseText: { fontSize: 26, lineHeight: 26, color: '#888', includeFontPadding: false, textAlign: 'center' },
   lbCounter: { fontSize: 13, color: '#666', flex: 1 },
   lbActions: { flexDirection: 'row', gap: 8 },
   lbBtn: { borderWidth: 0.5, borderColor: '#2a2a2a', borderRadius: 7, paddingHorizontal: 12, paddingVertical: 6 },
-  lbBtnText: { fontSize: 13, fontWeight: '500', color: '#888' },
+  // lineHeight pinned so every chip in the row is 31 tall by arithmetic rather
+  // than font metrics. Matches event.tsx.
+  lbBtnText: { fontSize: 13, fontWeight: '500', color: '#888', lineHeight: 18 },
   lbImg: { width: SCREEN_WIDTH, height: SCREEN_WIDTH * 1.2 },
   lbImgWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   lbArrow: { position: 'absolute', top: 0, bottom: 0, width: 50, justifyContent: 'center', alignItems: 'center' },

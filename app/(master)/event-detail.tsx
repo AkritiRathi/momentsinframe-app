@@ -348,11 +348,43 @@ export default function EventDetailScreen() {
         setShowGuestsPanel(true);
       }
     } else {
-      // Reopening the event
-      setClosedUpdating(true);
-      await updateEventSettings(params.slug, params.organiserPhone, pw, { isClosed: false });
-      setIsClosed(false);
-      setClosedUpdating(false);
+      // Reopening the event.
+      // ⛔ This DELETES the event's ENTIRE allowed-guest list server-side: the
+      // settings route clears event_allowed_phones whenever isClosed is false.
+      // It is deliberate ("so stale entries don't persist") but irreversible,
+      // and until 2026-10-12 it happened with no warning at all while CLOSING
+      // had always had a confirmation. The organiser is now told first.
+      //
+      // The count is only quoted when allowedGuests has actually loaded.
+      // Reopening is reachable the moment the screen opens, before the effect
+      // that loads the list has finished, and a stale 0 would have told the
+      // organiser nothing would be lost. Never under-state the damage.
+      const listLoaded = !allowedGuestsLoading;
+      const allowedCount = allowedGuests.length;
+      const listWarning = listLoaded && allowedCount === 0
+        ? ''
+        : listLoaded
+          ? `\n\nYour allowed list of ${allowedCount} guest${allowedCount !== 1 ? 's' : ''} will be deleted. Their photos stay, and anyone already in the event keeps their access. This cannot be undone.`
+          : '\n\nYour allowed list will be deleted. Photos stay, and anyone already in the event keeps their access. This cannot be undone.';
+      showAlert(
+        'Reopen this event?',
+        `Anyone with the event code will be able to join.${listWarning}`,
+        [
+          {
+            text: 'Yes, reopen',
+            style: 'destructive',
+            onPress: async () => {
+              setClosedUpdating(true);
+              await updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: false });
+              setIsClosed(false);
+              setClosedUpdating(false);
+            },
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ],
+        undefined,
+        true,
+      );
     }
   }
 

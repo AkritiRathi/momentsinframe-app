@@ -609,6 +609,13 @@ export default function EventScreen() {
   const translateY = useSharedValue(0);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
+  // Swipe down to close. The axis is locked on the first ~10px and kept for the
+  // rest of the gesture: a gesture's rules must never change under a finger that
+  // is already down. 0 = undecided, 1 = horizontal, 2 = vertical.
+  const dragAxis = useSharedValue(0);
+  // A worklet cannot read React state, so the busy flag is mirrored here. Each
+  // of the three lightboxes spells "busy" differently -- see the effect below.
+  const lbBusySV = useSharedValue(0);
 
   async function refreshNotifications(mobile?: string | null) {
     await pruneUploadNotifications(slug, expiresAt || null);
@@ -813,7 +820,9 @@ export default function EventScreen() {
     });
   }
 
-  // Reset zoom whenever photo changes
+  // Reset zoom whenever the photo changes, and whenever the lightbox opens or
+  // closes -- a swipe-down close leaves translateY part-way down the screen, so
+  // without lightboxVisible here the next photo would open already offset.
   useEffect(() => {
     scale.value = 1;
     savedScale.value = 1;
@@ -821,7 +830,15 @@ export default function EventScreen() {
     translateY.value = 0;
     savedTranslateX.value = 0;
     savedTranslateY.value = 0;
-  }, [lightboxIndex]);
+    dragAxis.value = 0;
+  }, [lightboxIndex, lightboxVisible]);
+
+  // Mirror the busy flag into a shared value the gesture worklet can read.
+  // Swipe-down is blocked while a download, share or delete is in flight -- the
+  // opposite of the header's x, which is deliberately usable then.
+  useEffect(() => {
+    lbBusySV.value = (downloadingPhoto || sharingPhoto || deletingPhoto) ? 1 : 0;
+  }, [downloadingPhoto, sharingPhoto, deletingPhoto]);
 
   const pinchGesture = Gesture.Pinch()
     .onUpdate((e) => {
@@ -840,21 +857,46 @@ export default function EventScreen() {
     });
 
   const panGesture = Gesture.Pan()
+    .onBegin(() => {
+      dragAxis.value = 0;
+    })
     .onUpdate((e) => {
       if (savedScale.value > 1) {
         translateX.value = savedTranslateX.value + e.translationX;
         translateY.value = savedTranslateY.value + e.translationY;
+        return;
+      }
+      // Not zoomed. Decide the axis ONCE, on the first real movement, and keep
+      // it for the rest of the gesture. Deciding it per frame would let a drag
+      // change meaning under a finger already down -- the bug that broke
+      // hold-and-drag on both platforms before.
+      if (dragAxis.value === 0 && (Math.abs(e.translationX) > 10 || Math.abs(e.translationY) > 10)) {
+        dragAxis.value = Math.abs(e.translationY) > Math.abs(e.translationX) ? 2 : 1;
+      }
+      if (dragAxis.value === 2 && e.translationY > 0 && lbBusySV.value === 0) {
+        translateY.value = e.translationY;
       }
     })
     .onEnd((e) => {
       if (savedScale.value > 1) {
         savedTranslateX.value = translateX.value;
         savedTranslateY.value = translateY.value;
-      } else {
-        if (Math.abs(e.translationX) > 50 && Math.abs(e.translationX) > Math.abs(e.translationY)) {
-          if (e.translationX < 0) runOnJS(navigateLightbox)(1);
-          else runOnJS(navigateLightbox)(-1);
+        return;
+      }
+      if (dragAxis.value === 2) {
+        // 100px of travel, or a fast flick. The flick is what stops the longer
+        // distance punishing anyone in a hurry; 50px is kept for sideways,
+        // where a wrong swipe costs nothing and there is no flick option.
+        if (lbBusySV.value === 0 && (e.translationY > 100 || (e.translationY > 20 && e.velocityY > 800))) {
+          runOnJS(setLightboxVisible)(false);
+          return;
         }
+        translateY.value = withSpring(0);
+        return;
+      }
+      if (Math.abs(e.translationX) > 50 && Math.abs(e.translationX) > Math.abs(e.translationY)) {
+        if (e.translationX < 0) runOnJS(navigateLightbox)(1);
+        else runOnJS(navigateLightbox)(-1);
       }
     });
 
@@ -878,6 +920,9 @@ export default function EventScreen() {
   const zoomGesture = Gesture.Simultaneous(doubleTapGesture, panGesture, pinchGesture);
 
   const zoomStyle = useAnimatedStyle(() => ({
+    // Fade as the photo is dragged away, so the gesture shows its own progress
+    // and can be abandoned. Never while zoomed -- translateY is panning then.
+    opacity: savedScale.value > 1 ? 1 : Math.max(0.35, 1 - Math.max(0, translateY.value) / 400),
     transform: [
       { translateX: translateX.value },
       { translateY: translateY.value },
@@ -2035,6 +2080,41 @@ export default function EventScreen() {
   const lightboxPhotos = lightboxSection === 'main' ? (orderedMain ?? photos) : (orderedOther ?? otherPhotos);
 
   useEffect(() => { lightboxPhotosRef.current = lightboxPhotos; }, [lightboxPhotos]);
+
+  // Closing the lightbox used to leave the grid exactly where it was when the
+  // lightbox opened: the Modal sits OVER this screen, so the list never
+  // unmounts and keeps its old scroll position. Open photo 1, swipe to 50,
+  // close, and you were still at the top. Bring the grid to the photo the user
+  // actually finished on.
+  //
+  // ONE effect covers EVERY way of closing -- the header x, the swipe down, and
+  // Android's back button -- which patching each call site would not.
+  const lightboxWasVisible = useRef(false);
+  useEffect(() => {
+    if (lightboxWasVisible.current && !lightboxVisible) {
+      const list = lightboxPhotosRef.current;
+      if (list.length > 0) {
+        // The photo may have been deleted from inside the lightbox. By now the
+        // photos state has had that deletion applied and lightboxIndex is
+        // clamped, so whatever sits at this index IS the nearest surviving
+        // photo -- which is what "closest photo in view" asks for.
+        const target = list[Math.min(lightboxIndex, list.length - 1)];
+        if (target) {
+          const row = listDataRef.current.findIndex(
+            it => it.type === 'photo_row' && it.photos.some(p => p.id === target.id)
+          );
+          // viewPosition 0.5 centres it rather than parking it under the header.
+          // The promise rejects if the row is no longer reachable; there is
+          // nothing useful to do then, so the grid simply stays put.
+          if (row >= 0) {
+            flatListRef.current?.scrollToIndex({ index: row, animated: false, viewPosition: 0.5 })
+              .catch(() => {});
+          }
+        }
+      }
+    }
+    lightboxWasVisible.current = lightboxVisible;
+  }, [lightboxVisible, lightboxIndex]);
 
   const flatListExtraData = useMemo(
     () => ({ selected, deleteMode, selectMode }),

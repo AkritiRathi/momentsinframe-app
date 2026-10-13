@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Image as ExpoImage } from 'expo-image';
-import { FlashList } from '@shopify/flash-list';
+import { FlashList, FlashListRef } from '@shopify/flash-list';
 import {
   Gesture, GestureDetector, GestureHandlerRootView,
 } from 'react-native-gesture-handler';
@@ -165,6 +165,8 @@ export default function GuestUploadsScreen() {
   const scrollOffsetRef = useRef(0);
   const accumulatedHeights = useRef<Record<string, number>>({});
   const listDataRef = useRef<ListItem[]>([]);
+  // Needed to bring the grid to the photo the lightbox closed on.
+  const listRef = useRef<FlashListRef<ListItem>>(null);
   const dragAnchorIndexRef = useRef<number | null>(null);
   const dragModeRef = useRef<'select' | 'deselect' | null>(null);
   const committedSelectionRef = useRef<Set<string>>(new Set());
@@ -177,6 +179,12 @@ export default function GuestUploadsScreen() {
   const translateY = useSharedValue(0);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
+  // Swipe down to close. The axis is locked on the first ~10px and kept for the
+  // rest of the gesture: a gesture's rules must never change under a finger that
+  // is already down. 0 = undecided, 1 = horizontal, 2 = vertical.
+  const dragAxis = useSharedValue(0);
+  // A worklet cannot read React state, so the busy flag is mirrored here.
+  const lbBusySV = useSharedValue(0);
 
   // JPG limit warning
   useEffect(() => {
@@ -204,7 +212,9 @@ export default function GuestUploadsScreen() {
     }
   }, [lightboxIndex, lightboxVisible]);
 
-  // Reset zoom when lightbox photo changes
+  // Reset zoom when the lightbox photo changes, and when it opens or closes -- a
+  // swipe-down close leaves translateY part-way down the screen, so without
+  // lightboxVisible here the next photo would open already offset.
   useEffect(() => {
     scale.value = 1;
     savedScale.value = 1;
@@ -212,7 +222,15 @@ export default function GuestUploadsScreen() {
     translateY.value = 0;
     savedTranslateX.value = 0;
     savedTranslateY.value = 0;
-  }, [lightboxIndex]);
+    dragAxis.value = 0;
+  }, [lightboxIndex, lightboxVisible]);
+
+  // Mirror the busy flag into a shared value the gesture worklet can read.
+  // Swipe-down is blocked while a download, share or delete is in flight -- the
+  // opposite of the header's x, which is deliberately usable then.
+  useEffect(() => {
+    lbBusySV.value = (downloadingPhoto || sharingPhoto || deletingPhoto) ? 1 : 0;
+  }, [downloadingPhoto, sharingPhoto, deletingPhoto]);
 
   async function fetchPhotos(): Promise<number> {
     setLoading(true);
@@ -281,6 +299,32 @@ export default function GuestUploadsScreen() {
   const flatListExtraData = useMemo(() => ({ selected, mode }), [selected, mode]);
 
   const lightboxImageUrl = photos[lightboxIndex]?.displayUrl ?? photos[lightboxIndex]?.thumbUrl ?? null;
+
+  // Closing the lightbox used to leave the grid exactly where it was when the
+  // lightbox opened: the Modal sits OVER this screen, so the list never
+  // unmounts and keeps its old scroll position. Bring it to the photo the user
+  // actually finished on. ONE effect covers EVERY way of closing -- the header
+  // x, the swipe down, and Android's back button.
+  const lightboxWasVisible = useRef(false);
+  useEffect(() => {
+    if (lightboxWasVisible.current && !lightboxVisible && photos.length > 0) {
+      // A photo deleted from inside the lightbox is already out of this array
+      // and lightboxIndex is clamped, so whatever sits at this index IS the
+      // nearest surviving photo -- which is what "closest photo" asks for.
+      const target = photos[Math.min(lightboxIndex, photos.length - 1)];
+      if (target) {
+        const row = listDataRef.current.findIndex(
+          it => it.type === 'photo_row' && it.photos.some(p => p.id === target.id)
+        );
+        // viewPosition 0.5 centres it rather than parking it under the header.
+        if (row >= 0) {
+          listRef.current?.scrollToIndex({ index: row, animated: false, viewPosition: 0.5 })
+            .catch(() => {});
+        }
+      }
+    }
+    lightboxWasVisible.current = lightboxVisible;
+  }, [lightboxVisible, lightboxIndex, photos]);
   const showDeleteBtn = viewerRole === 'organiser' || guest.role === 'user' || guest.mobile === adminPhone;
 
   // Lightbox zoom gestures
@@ -301,21 +345,46 @@ export default function GuestUploadsScreen() {
     });
 
   const lbPanGesture = Gesture.Pan()
+    .onBegin(() => {
+      dragAxis.value = 0;
+    })
     .onUpdate((e) => {
       if (savedScale.value > 1) {
         translateX.value = savedTranslateX.value + e.translationX;
         translateY.value = savedTranslateY.value + e.translationY;
+        return;
+      }
+      // Not zoomed. Decide the axis ONCE, on the first real movement, and keep
+      // it for the rest of the gesture. Deciding it per frame would let a drag
+      // change meaning under a finger already down -- the bug that broke
+      // hold-and-drag on both platforms before.
+      if (dragAxis.value === 0 && (Math.abs(e.translationX) > 10 || Math.abs(e.translationY) > 10)) {
+        dragAxis.value = Math.abs(e.translationY) > Math.abs(e.translationX) ? 2 : 1;
+      }
+      if (dragAxis.value === 2 && e.translationY > 0 && lbBusySV.value === 0) {
+        translateY.value = e.translationY;
       }
     })
     .onEnd((e) => {
       if (savedScale.value > 1) {
         savedTranslateX.value = translateX.value;
         savedTranslateY.value = translateY.value;
-      } else {
-        if (Math.abs(e.translationX) > 50 && Math.abs(e.translationX) > Math.abs(e.translationY)) {
-          if (e.translationX < 0) runOnJS(navigateLightbox)(1);
-          else runOnJS(navigateLightbox)(-1);
+        return;
+      }
+      if (dragAxis.value === 2) {
+        // 100px of travel, or a fast flick. The flick is what stops the longer
+        // distance punishing anyone in a hurry; 50px is kept for sideways,
+        // where a wrong swipe costs nothing and there is no flick option.
+        if (lbBusySV.value === 0 && (e.translationY > 100 || (e.translationY > 20 && e.velocityY > 800))) {
+          runOnJS(setLightboxVisible)(false);
+          return;
         }
+        translateY.value = withSpring(0);
+        return;
+      }
+      if (Math.abs(e.translationX) > 50 && Math.abs(e.translationX) > Math.abs(e.translationY)) {
+        if (e.translationX < 0) runOnJS(navigateLightbox)(1);
+        else runOnJS(navigateLightbox)(-1);
       }
     });
 
@@ -339,6 +408,9 @@ export default function GuestUploadsScreen() {
   const zoomGesture = Gesture.Simultaneous(doubleTapGesture, lbPanGesture, pinchGesture);
 
   const zoomStyle = useAnimatedStyle(() => ({
+    // Fade as the photo is dragged away, so the gesture shows its own progress
+    // and can be abandoned. Never while zoomed -- translateY is panning then.
+    opacity: savedScale.value > 1 ? 1 : Math.max(0.35, 1 - Math.max(0, translateY.value) / 400),
     transform: [
       { translateX: translateX.value },
       { translateY: translateY.value },
@@ -949,6 +1021,7 @@ export default function GuestUploadsScreen() {
           >
             <GestureDetector gesture={dragGesture}>
               <FlashList
+                ref={listRef}
                 data={listItems}
                 keyExtractor={item => item.key}
                 renderItem={renderItem}

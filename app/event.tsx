@@ -52,6 +52,20 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 const GAP = 2;
 const THUMB_SIZE = (SCREEN_WIDTH - GAP * 2) / 3;
 
+// Two caps that are each SHOWN to the guest and ENFORCED in code. They live
+// here because both were previously written as a bare 40 in more than one
+// place, with nothing connecting the copies: changing one would leave the app
+// stating a limit it no longer applies - no type error, no failing test, just
+// a dialog that lies. guest-uploads.tsx and my-photos.tsx already declare
+// JPG_LIMIT once at module level; this brings event.tsx in line with them.
+//
+// Above this many photos a download is bundled as a ZIP instead of being saved
+// as individual JPGs. Keep it in step with the same constant on the other two
+// download screens.
+const JPG_LIMIT = 40;
+// The most photos the system picker lets a guest choose in one batch.
+const UPLOAD_BATCH_LIMIT = 40;
+
 type Photo = {
   id: string;
   thumbnail_path: string | null;
@@ -865,7 +879,6 @@ export default function EventScreen() {
   }, [selectMode, deleteMode, bgUploading, isAlertVisible]);
 
   useEffect(() => {
-    const JPG_LIMIT = 40;
     if (selectMode && !deleteMode && prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
       showAlert(
         'Downloading as ZIP',
@@ -1311,7 +1324,7 @@ export default function EventScreen() {
         : await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ImagePicker.MediaTypeOptions.Images,
             allowsMultipleSelection: true,
-            selectionLimit: 40,
+            selectionLimit: UPLOAD_BATCH_LIMIT,
             quality: 1,
           });
 
@@ -1893,8 +1906,6 @@ export default function EventScreen() {
       { text: 'Cancel', style: 'cancel' },
     ]);
   }
-
-  const JPG_LIMIT = 40;
 
   async function getDownloadFolder(): Promise<string | null> {
     if (Platform.OS !== 'android') return null;
@@ -2607,7 +2618,7 @@ export default function EventScreen() {
                 ? 'The organiser has disabled uploads for this event.'
                 : uploadsClosed
                   ? 'Uploads are closed for this event'
-                  : `Max 40 photos per batch.\nKeep the app open while uploading.`}
+                  : `Max ${UPLOAD_BATCH_LIMIT} photos per batch.\nKeep the app open while uploading.`}
             </Text>
             {deleteClosedHint && (
               <Text style={styles.uploadHint}>{deleteClosedHint}</Text>

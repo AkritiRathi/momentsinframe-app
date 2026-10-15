@@ -93,6 +93,23 @@ type UploadFileResult = {
   filename: string;
 };
 
+// Which alert title fits the outcome. "Upload complete" is a lie when nothing
+// was uploaded, so the cases where it would mislead get their own title.
+// Shared by BOTH upload paths on purpose: until 2026-10-15 the gallery picker
+// always showed an alert while Upload by Date only showed one when there were
+// duplicates to view, so the same outcome was reported two different ways.
+function uploadAlertTitle(
+  results: UploadFileResult[],
+  preSkipped: number,
+  foundNothing: boolean,
+): string {
+  if (foundNothing) return 'No photos found';
+  if (results.length === 0 && preSkipped > 0) return 'Already uploaded';
+  if (results.length > 0 && results.every(r => r.status === 'failed')) return 'Upload failed';
+  if (results.length > 0 && results.every(r => r.status === 'cancelled')) return 'Upload cancelled';
+  return 'Upload complete';
+}
+
 function summarizeUploadResults(results: UploadFileResult[]): string {
   const mainSuccess = results.filter(r => r.status === 'success' && r.section === 'main').length;
   const otherSuccess = results.filter(r => r.status === 'success' && r.section === 'other').length;
@@ -210,6 +227,154 @@ let _bgCompleteCb: ((results: UploadFileResult[], preSkipped: number) => void) |
 let _bgCancelled = false;
 let _bgDeselectedIds: Set<string> = new Set();
 
+// ⛔ THE SINGLE SOURCE OF "WHICH PHOTOS BELONG TO THIS DATE".
+// Both Upload by Date paths call this: the review screen (openPhotoSelectModal)
+// and the background upload that follows it. They USED to hold two copies of
+// this query, and when one was changed and the other was not, the screen
+// offered photos the upload then silently dropped. Do not inline it again.
+//
+// The two platforms differ ON PURPOSE (the user's call, 2026-10-16):
+//   • ANDROID — Camera folder only. Android files screenshots, WhatsApp and
+//     downloads in their own folders, so the folder IS the filter. The user
+//     does not want those offered.
+//   • iOS — everything from that date. There is no user album called "Camera"
+//     (Recents is a SMART album, which getAlbumsAsync does not return), so
+//     there is nothing to filter on, and iPhone users already expect their
+//     Camera gallery to hold everything.
+const EXIF_SCAN_BUDGET_MS = 10000;
+
+async function collectAssetsForDate(date: Date): Promise<MediaLibrary.Asset[]> {
+  const startOfDay = new Date(date);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(date);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  let cameraAlbum: MediaLibrary.Album | null = null;
+  if (Platform.OS === 'android') {
+    try {
+      const albums = await MediaLibrary.getAlbumsAsync();
+      cameraAlbum = albums.find(a => a.title === 'Camera') ?? null;
+    } catch {}
+  }
+  const albumFilter = cameraAlbum ? { album: cameraAlbum } : {};
+
+  const found: MediaLibrary.Asset[] = [];
+  const seen = new Set<string>();
+  try {
+    let cursor: string | undefined;
+    while (true) {
+      const page = await MediaLibrary.getAssetsAsync({
+        mediaType: MediaLibrary.MediaType.photo,
+        createdAfter: startOfDay.getTime(),
+        createdBefore: endOfDay.getTime(),
+        first: 100,
+        after: cursor,
+        sortBy: MediaLibrary.SortBy.creationTime,
+        ...albumFilter,
+      });
+      for (const a of page.assets) {
+        if (!seen.has(a.id)) { seen.add(a.id); found.push(a); }
+      }
+      if (!page.hasNextPage) break;
+      cursor = page.endCursor;
+    }
+  } catch {}
+
+  // ⛔ SECOND PASS, ANDROID ONLY — ANDROID'S DATE INDEX CANNOT BE TRUSTED.
+  // `creationTime` is MediaStore's DATE_TAKEN, and for a photo that arrived
+  // from somewhere else it is routinely WRONG or MISSING:
+  //   • MISSING — expo's own save path never writes it (CreateAsset.kt, in
+  //     both the old and new APIs) and neither does WhatsApp. It reads back 0
+  //     and fails every date range.
+  //   • WRONG — a photo transferred from another phone can be indexed under
+  //     the day it ARRIVED. Measured 2026-10-16: a photo taken on an iPhone on
+  //     14 Oct sat under "Today" in Samsung's album while the same app's
+  //     details pane read 14 Oct from the file's own EXIF.
+  // Same problem reported by other projects; Immich keeps DATE_TAKEN only when
+  // it is valid and falls back otherwise (immich PR #29193).
+  //
+  // So: ask Android for candidates, then believe the FILE, not the index.
+  // ⚠ The bound that makes this affordable: **a photo cannot reach the phone
+  // before it was taken**, so the index date is never EARLIER than the truth.
+  // Scanning from the chosen day FORWARDS therefore cannot miss one, and does
+  // not mean reading the whole library.
+  //
+  // ⚠ Scoped to the Camera album, so this only surfaces photos the user has
+  // deliberately put there. Without that it would start offering every
+  // WhatsApp photo, which is the opposite of what was asked for.
+  if (Platform.OS !== 'android') return found;
+
+  const deadline = Date.now() + EXIF_SCAN_BUDGET_MS;
+  const considerByExif = async (a: MediaLibrary.Asset): Promise<void> => {
+    if (seen.has(a.id)) return;          // already found by the index — cheap skip
+    try {
+      const info = await MediaLibrary.getAssetInfoAsync(a);
+      const taken = (info?.exif as Record<string, unknown> | undefined)?.DateTimeOriginal;
+      if (typeof taken === 'string' && exifFallsOn(taken, date)) {
+        seen.add(a.id);
+        found.push(a);
+      }
+    } catch {}
+  };
+
+  // (a) Photos Android has NO date for. They sort FIRST ascending, since 0 is
+  //     the smallest value, so this stops at the first real date.
+  try {
+    let cursor: string | undefined;
+    outer: while (Date.now() < deadline) {
+      const page = await MediaLibrary.getAssetsAsync({
+        mediaType: MediaLibrary.MediaType.photo,
+        first: 50, after: cursor,
+        sortBy: [['creationTime', true]],
+        ...albumFilter,
+      });
+      for (const a of page.assets) {
+        if (a.creationTime > 0) break outer;
+        if (Date.now() >= deadline) break outer;
+        await considerByExif(a);
+      }
+      if (!page.hasNextPage) break;
+      cursor = page.endCursor;
+    }
+  } catch {}
+
+  // (b) Photos Android dates ON OR AFTER the chosen day — the mis-indexed ones
+  //     are in here, dated later than they really are.
+  try {
+    let cursor: string | undefined;
+    while (Date.now() < deadline) {
+      const page = await MediaLibrary.getAssetsAsync({
+        mediaType: MediaLibrary.MediaType.photo,
+        createdAfter: startOfDay.getTime(),
+        first: 50, after: cursor,
+        sortBy: [['creationTime', true]],
+        ...albumFilter,
+      });
+      for (const a of page.assets) {
+        if (Date.now() >= deadline) break;
+        await considerByExif(a);
+      }
+      if (!page.hasNextPage) break;
+      cursor = page.endCursor;
+    }
+  } catch {}
+  return found;
+}
+
+// EXIF DateTimeOriginal looks like "2026:10:13 21:18:45". It is LOCAL time with
+// no timezone, and [[project-exif-timezone-logic]] is explicit that whatever is
+// in the photo is the truth, wherever it was taken.
+// ⛔ So the year/month/day are compared as PLAIN NUMBERS straight from the
+// string. Building a Date from it would let the device's timezone shift it, and
+// a photo taken near midnight would land on the wrong day.
+function exifFallsOn(dateTimeOriginal: string, target: Date): boolean {
+  const m = /^(\d{4}):(\d{2}):(\d{2})/.exec(dateTimeOriginal.trim());
+  if (!m) return false;
+  return Number(m[1]) === target.getFullYear()
+    && Number(m[2]) === target.getMonth() + 1
+    && Number(m[3]) === target.getDate();
+}
+
 async function backgroundUploadTask(): Promise<void> {
   const slug = _bgSlug;
   const userMobile = _bgUserMobile;
@@ -226,48 +391,31 @@ async function backgroundUploadTask(): Promise<void> {
       const allPhotos = [...(existingRes.photos ?? []), ...(existingRes.otherPhotos ?? [])];
       for (const p of allPhotos) {
         if (p.original_filename && userMobile && p.uploaded_by_mobile === userMobile) {
-          existingFilenames.add(p.original_filename);
+          // Normalised on this side too, so a row stored before the server
+          // started rewriting extensions still matches.
+          existingFilenames.add(p.original_filename.replace(/\.[^.]+$/, '.jpg'));
         }
       }
     }
   } catch {}
 
-  // Find the Camera album so only camera photos are uploaded
-  let cameraAlbum: MediaLibrary.Album | null = null;
-  try {
-    const albums = await MediaLibrary.getAlbumsAsync();
-    cameraAlbum = albums.find(a => a.title === 'Camera') ?? null;
-  } catch {}
+  // Same helper the review screen uses — see collectAssetsForDate. The two must
+  // never hold separate copies of this query.
+  const allAssets: MediaLibrary.Asset[] = await collectAssetsForDate(new Date(_bgDate));
 
-  // Scan Camera album for photos taken on the selected date
-  const selectedDate = new Date(_bgDate);
-  const startOfDay = new Date(selectedDate);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(selectedDate);
-  endOfDay.setHours(23, 59, 59, 999);
-
-  let allAssets: MediaLibrary.Asset[] = [];
-  try {
-    let cursor: string | undefined;
-    while (true) {
-      const page = await MediaLibrary.getAssetsAsync({
-        mediaType: MediaLibrary.MediaType.photo,
-        createdAfter: startOfDay.getTime(),
-        createdBefore: endOfDay.getTime(),
-        first: 100,
-        after: cursor,
-        sortBy: MediaLibrary.SortBy.creationTime,
-        ...(cameraAlbum ? { album: cameraAlbum } : {}),
-      });
-      allAssets = [...allAssets, ...page.assets];
-      if (!page.hasNextPage) break;
-      cursor = page.endCursor;
-    }
-  } catch {}
-
-  // Filter out exact filename matches (already uploaded — skip without touching duplicate detection)
-  const preSkipped = allAssets.filter(asset => existingFilenames.has(asset.filename)).length;
-  const toUpload = allAssets.filter(asset => !existingFilenames.has(asset.filename) && !_bgDeselectedIds.has(asset.id));
+  // Filter out exact filename matches (already uploaded — skip without touching duplicate detection).
+  //
+  // ⛔ COMPARE NORMALISED NAMES ON BOTH SIDES. The server rewrites every photo's
+  // extension to .jpg before storing it (everything is converted to JPEG), so
+  // original_filename always ends .jpg. The device name does not: an iPhone
+  // reports IMG_1234.HEIC. Comparing them raw meant NOTHING was ever skipped on
+  // iPhone — every photo re-uploaded and was caught by backend duplicate
+  // detection instead, which is the slow, wrong way round. Android happened to
+  // work only because its photos are already .jpg. Fixed 2026-10-15.
+  const asStoredName = (name: string) => name.replace(/\.[^.]+$/, '.jpg');
+  const alreadyUploaded = (asset: MediaLibrary.Asset) => existingFilenames.has(asStoredName(asset.filename));
+  const preSkipped = allAssets.filter(alreadyUploaded).length;
+  const toUpload = allAssets.filter(asset => !alreadyUploaded(asset) && !_bgDeselectedIds.has(asset.id));
 
   if (toUpload.length === 0) {
     _bgCompleteCb?.([], preSkipped);
@@ -1199,24 +1347,81 @@ export default function EventScreen() {
     setNewlyUploadedIds(new Set());
     setUploadSummary(null);
 
-    // Pre-fetch all localURIs in parallel.
-    const localUris = await Promise.all(assets.map(async (asset) => {
-      if (Platform.OS === 'android' && asset.assetId) {
-        // Android: use any localUri returned (file:// or content://)
+    // Pre-fetch the local URI AND the real filename in ONE call per photo.
+    //
+    // ⛔ THE FILENAME MUST COME FROM HERE, not from the picker's own fileName.
+    // Device-proved 2026-10-16: on Android the picker reported "108825.jpg" —
+    // a MediaStore ID, not a filename — while Upload by Date correctly saw
+    // "20261013_0056_9c09c0.jpg". Two different names for one photo, which is
+    // why each path only ever recognised its own uploads.
+    // This same getAssetInfoAsync call already works on that device (it is what
+    // makes uploads keep their EXIF), and its response carries `filename`.
+    // Taking both from one call removes the id-matching that kept failing.
+    const resolved = await Promise.all(assets.map(async (asset) => {
+      let uri = asset.uri;
+      let filename: string | undefined;
+      if (asset.assetId) {
         try {
           const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
-          if (info?.localUri) return info.localUri;
-        } catch {}
-      } else if (Platform.OS === 'ios' && asset.assetId) {
-        // iOS: only use file:// URIs — ph:// URIs cannot be read by FileSystem
-        // file:// localUri is the original camera file and preserves EXIF
-        try {
-          const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
-          if (info?.localUri?.startsWith('file://')) return info.localUri;
+          if (info?.filename) filename = info.filename;
+          // iOS: only file:// is usable — ph:// cannot be read by FileSystem,
+          // and the file:// localUri is the original and preserves EXIF.
+          // Android: any localUri it returns is fine.
+          if (info?.localUri && (Platform.OS === 'android' || info.localUri.startsWith('file://'))) {
+            uri = info.localUri;
+          }
         } catch {}
       }
-      return asset.uri;
+      // ===== ANDROID ONLY — second route to the real filename =====
+      // Device-proved 2026-10-16: on Android's modern photo picker `assetId` is
+      // not populated, so the block above never runs and the name falls through
+      // to the picker's own fileName — which is the MediaStore ID, e.g.
+      // "108825.jpg". TWO earlier fixes failed for exactly this reason; both
+      // silently assumed assetId was there.
+      //
+      // So instead of asking the picker for an identifier it will not give us,
+      // read the one already sitting in that filename: on Android a
+      // MediaLibrary asset id IS the MediaStore _ID, so "108825.jpg" can be
+      // looked up directly as "108825".
+      //
+      // ⛔ iOS NEVER ENTERS THIS BLOCK. iOS is confirmed working — its
+      // assetId is present, the block above resolves IMG_xxxx.JPG, and both
+      // upload paths already recognise each other. Do not ungate this.
+      // Runs when the name is MISSING **or** is itself numeric: if assetId is
+      // present but still resolves to "108825.jpg", a `!filename` test would
+      // see a name, skip this block, and the fix would silently do nothing.
+      if (Platform.OS === 'android' && (!filename || /^\d+\.[A-Za-z0-9]+$/.test(filename))) {
+        const numericId = /^(\d+)\.[A-Za-z0-9]+$/.exec(asset.fileName ?? '')?.[1];
+        if (numericId) {
+          try {
+            const info = await MediaLibrary.getAssetInfoAsync(numericId);
+            // A photo genuinely NAMED "12345.jpg" would collide with whatever
+            // MediaStore id 12345 happens to be, and labelling photo A with
+            // photo B's name could make the pre-check skip a photo the user
+            // actually wanted uploaded — worse than the bug being fixed.
+            // So the match is confirmed against the dimensions before it is
+            // trusted. Compared as min/max so a rotated asset, where
+            // MediaStore reports width and height the other way round, is not
+            // rejected for no reason.
+            const sameShape = !!info
+              && Math.min(info.width, info.height) === Math.min(asset.width, asset.height)
+              && Math.max(info.width, info.height) === Math.max(asset.width, asset.height);
+            // Fails CLOSED: anything unconvincing leaves `filename` unset and
+            // the old behaviour stands. A wrong skip is silent; a duplicate
+            // check is merely slow.
+            if (sameShape && info.filename && !/^\d+\.[A-Za-z0-9]+$/.test(info.filename)) {
+              filename = info.filename;
+            }
+          } catch {}
+        }
+      }
+      // ⚠ The URI is deliberately NOT taken from that lookup. The picker's
+      // cache copy is already known-good and keeps its EXIF on Android, so
+      // swapping it in would buy nothing and risk uploading the wrong photo.
+
+      return { uri, filename };
     }));
+    const localUris = resolved.map(r => r.uri);
 
     if (bgUploadCancelledRef.current) {
       setBgUploading(false);
@@ -1225,29 +1430,68 @@ export default function EventScreen() {
       return;
     }
 
-    // Resolve filenames via MediaLibrary so individual uploads use the same
-    // filename as Upload by Date — enabling accurate pre-check deduplication.
-    // getAssetInfoAsync does not work reliably on Samsung S25 Ultra, so instead
-    // fetch recent assets via getAssetsAsync (same API used by Upload by Date)
-    // and build a URI→filename map. Single call regardless of selection size.
-    let resolvedFilenames: string[];
+    // Filenames come from the SAME getAssetInfoAsync call as the URIs above —
+    // see the note there for why. The picker's own fileName is only a last
+    // resort, and on Android it is the thing that was wrong: it reports a
+    // MediaStore ID like "108825.jpg" rather than the real name.
+    //
+    // ⛔ This replaced a block that paged through getAssetsAsync trying to match
+    // assetId and uri tails against MediaLibrary. It never matched on Android,
+    // fell through to the picker's name every time, and was the whole cause of
+    // "a photo is only recognised by the path that uploaded it". Do not bring
+    // it back — one call that already works beats matching identifiers.
+    // `let`, not const: the already-uploaded filter below rebuilds this array
+    // in step with `assets` and `localUris`.
+    let resolvedFilenames: string[] = assets.map((a, i) =>
+      resolved[i]?.filename ?? a.fileName ?? `photo_${Date.now()}.jpg`
+    );
+
+    // Skip photos this user has already uploaded to this event, the same way
+    // Upload by Date does. Without this, re-picking a photo from the gallery
+    // uploaded it again and let backend duplicate detection catch it — slow,
+    // and it burns the user's data to reach the same answer. Added 2026-10-15.
+    //
+    // Names are normalised on both sides because the server rewrites every
+    // photo's extension to .jpg when storing it, so a device's IMG_1234.HEIC
+    // is held as IMG_1234.jpg and a raw comparison never matches.
+    // Only this user's own photos count: the same filename from someone else is
+    // a different photo and must still go through backend pHash detection.
+    let pickerPreSkipped = 0;
     try {
-      const recentAssets = await MediaLibrary.getAssetsAsync({
-        first: 200,
-        mediaType: MediaLibrary.MediaType.photo,
-        sortBy: MediaLibrary.SortBy.modificationTime,
-      });
-      const idToFilename = new Map(
-        recentAssets.assets
-          .map(a => [a.uri.split('/').pop(), a.filename] as [string, string])
-          .filter(([id]) => !!id)
+      const existingRes = await getEventPhotos(slug);
+      if (!existingRes.error) {
+        const mine = new Set<string>();
+        for (const p of [...(existingRes.photos ?? []), ...(existingRes.otherPhotos ?? [])]) {
+          if (p.original_filename && userMobile && p.uploaded_by_mobile === userMobile) {
+            mine.add(p.original_filename.replace(/\.[^.]+$/, '.jpg'));
+          }
+        }
+        if (mine.size > 0) {
+          const keep = resolvedFilenames.map(f => !mine.has(f.replace(/\.[^.]+$/, '.jpg')));
+          pickerPreSkipped = keep.filter(k => !k).length;
+          if (pickerPreSkipped > 0) {
+            // Rebuild all three index-aligned arrays together. localUris holds
+            // the iOS cache copies the upload depends on, so they must stay in
+            // step with assets and resolvedFilenames.
+            const keptUris = localUris.filter((_, i) => keep[i]);
+            assets = assets.filter((_, i) => keep[i]);
+            resolvedFilenames = resolvedFilenames.filter((_, i) => keep[i]);
+            localUris.length = 0;
+            localUris.push(...keptUris);
+          }
+        }
+      }
+    } catch {}
+
+    if (assets.length === 0) {
+      setBgUploading(false);
+      setBgUploadProgress({ current: 0, total: 0 });
+      setBgCancelRequested(false);
+      showAlert(
+        'Already uploaded',
+        `All ${pickerPreSkipped} photo${pickerPreSkipped > 1 ? 's' : ''} you selected ${pickerPreSkipped > 1 ? 'are' : 'is'} already in this event.`
       );
-      resolvedFilenames = assets.map(a => {
-        const numericId = a.uri?.split('/').pop();
-        return (numericId ? idToFilename.get(numericId) : undefined) ?? a.fileName ?? `photo_${Date.now()}.jpg`;
-      });
-    } catch {
-      resolvedFilenames = assets.map(a => a.fileName ?? `photo_${Date.now()}.jpg`);
+      return;
     }
 
     // Pre-fetch all presigned URLs in parallel
@@ -1355,9 +1599,14 @@ export default function EventScreen() {
       .map(r => r.newPhotoId)
       .filter(Boolean) as string[];
     setNewlyUploadedIds(new Set(newIds));
-    setUploadSummary(summarizeUploadResults(finalResults));
+    // Photos skipped before uploading are not in finalResults, so they have to
+    // be added to the summary by hand — otherwise picking 10 and uploading 6
+    // looks like 4 silently vanished. Same wording Upload by Date uses.
+    const withSkipped = (base: string) =>
+      pickerPreSkipped > 0 ? `${base} · ${pickerPreSkipped} already uploaded` : base;
+    setUploadSummary(withSkipped(summarizeUploadResults(finalResults)));
 
-    const summary = summarizeUploadResults(finalResults);
+    const summary = withSkipped(summarizeUploadResults(finalResults));
     const dupsAndUpgrades = finalResults.filter(r => r.status === 'duplicate' || r.status === 'upgraded');
     const failed = finalResults.filter(r => r.status === 'failed');
     const failedAssets = assets.filter((_, i) => results[i]?.status === 'failed');
@@ -1395,7 +1644,11 @@ export default function EventScreen() {
     if (AppState.currentState !== 'active') {
       await showUploadCompleteNotification(summary);
     } else {
-      showAlert('Upload complete', summary, alertButtons);
+      showAlert(
+        uploadAlertTitle(finalResults, pickerPreSkipped, false),
+        summary,
+        alertButtons,
+      );
     }
   }
 
@@ -1427,11 +1680,18 @@ export default function EventScreen() {
         .map(r => r.newPhotoId)
         .filter(Boolean) as string[];
       setNewlyUploadedIds(new Set(newIds));
+      // Named date rather than "this date": the alert can be read a minute
+      // later, by which point "this date" means nothing. The wording also
+      // differs from the gallery picker's on purpose — "from 13 Oct" and "you
+      // selected" describe genuinely different things.
+      const dateLabel = new Date(_bgDate).toLocaleDateString('en-IN', {
+        day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata',
+      });
       let summary: string;
       if (results.length === 0 && preSkipped > 0) {
-        summary = `All ${preSkipped} photo${preSkipped > 1 ? 's' : ''} from this date were already uploaded. No new photos found.`;
+        summary = `All ${preSkipped} photo${preSkipped > 1 ? 's' : ''} from ${dateLabel} are already in this event.`;
       } else if (results.length === 0 && preSkipped === 0) {
-        summary = 'No photos found for this date';
+        summary = `There are no photos from ${dateLabel} on this phone.`;
       } else {
         const base = summarizeUploadResults(results);
         summary = preSkipped > 0 ? `${base} · ${preSkipped} already uploaded` : base;
@@ -1454,13 +1714,46 @@ export default function EventScreen() {
         await saveUploadNotification(slug, { timestamp: new Date().toISOString(), source: 'by_date', uploadDate: _bgDate, preSkipped, ...byDateNotifPayload });
       }
       await refreshNotifications();
+
+      // ⛔ ALWAYS ALERT, whatever the outcome. This used to be
+      // `else if (dupsAndUpgrades.length > 0)`, so Upload by Date reported a
+      // plain success, an all-skipped run and an empty date through the green
+      // summary line ALONE, while the gallery picker alerted every time. The
+      // user saw the same outcome reported two different ways depending on how
+      // they had started the upload.
+      //
+      // The buttons now mirror the picker's too: it offered "View failed" and
+      // this path did not, despite having the same failure data.
+      const byDateButtons: { text: string; onPress?: () => void }[] = [];
+      if (dupsAndUpgrades.length > 0) {
+        byDateButtons.push({
+          text: 'View Photos',
+          onPress: () => { setDuplicateResults(dupsAndUpgrades); setDuplicateViewerIndex(0); setDuplicateViewerVisible(true); },
+        });
+      }
+      if (failedResults.length > 0) {
+        // The viewer's Retry reuses failedAssetsRef, so it has to be populated
+        // or Retry would act on whatever the last gallery upload left behind.
+        // Reconstructed the same way the notifications panel does it for a
+        // by-date failure — these came from MediaLibrary, not the picker.
+        failedAssetsRef.current = failedResults.map(
+          r => ({ uri: r.uri, fileName: r.filename, assetId: undefined } as unknown as ImagePicker.ImagePickerAsset)
+        );
+        byDateButtons.push({
+          text: 'View failed',
+          onPress: () => { setFailedResults(failedResults); setFailedViewerVisible(true); },
+        });
+      }
+      byDateButtons.push({ text: 'OK' });
+
       if (AppState.currentState !== 'active') {
         await showUploadCompleteNotification(summary);
-      } else if (dupsAndUpgrades.length > 0) {
-        showAlert('Upload complete', summary, [
-          { text: 'View photos', onPress: () => { setDuplicateResults(dupsAndUpgrades); setDuplicateViewerIndex(0); setDuplicateViewerVisible(true); } },
-          { text: 'OK' },
-        ]);
+      } else {
+        showAlert(
+          uploadAlertTitle(results, preSkipped, results.length === 0 && preSkipped === 0),
+          summary,
+          byDateButtons,
+        );
       }
     };
 
@@ -1491,7 +1784,12 @@ export default function EventScreen() {
     }
     showAlert(
       'Upload by date',
-      'This will upload all photos taken on the selected date from your Camera folder. Photos already uploaded by this feature will be skipped automatically.',
+      // ⛔ The two platforms genuinely behave differently here, so the wording
+      // must too — see collectAssetsForDate. Android is Camera-folder only;
+      // iOS shows everything because there is no album to filter on.
+      Platform.OS === 'android'
+        ? 'This selects photos from your Camera folder for the date you choose. Screenshots and photos saved by other apps aren\'t included — unless you\'ve moved them into Camera yourself. Check the list and deselect anything you don\'t want. Photos already in this event are skipped automatically.'
+        : 'This selects every photo on your phone from the date you choose — including screenshots and photos saved from other apps like WhatsApp, Instagram, etc. Check the list and deselect anything you don\'t want. Photos already in this event are skipped automatically.',
       [
         {
           text: 'Continue', onPress: () => {
@@ -1522,31 +1820,11 @@ export default function EventScreen() {
     setPhotoSelectLoading(true);
     setShowPhotoSelectModal(true);
 
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    let assets: Array<{ id: string; uri: string; filename: string }> = [];
-    try {
-      const albums = await MediaLibrary.getAlbumsAsync();
-      const cameraAlbum = albums.find(a => a.title === 'Camera') ?? null;
-      let cursor: string | undefined;
-      while (true) {
-        const page = await MediaLibrary.getAssetsAsync({
-          mediaType: MediaLibrary.MediaType.photo,
-          createdAfter: startOfDay.getTime(),
-          createdBefore: endOfDay.getTime(),
-          first: 100,
-          after: cursor,
-          sortBy: MediaLibrary.SortBy.creationTime,
-          ...(cameraAlbum ? { album: cameraAlbum } : {}),
-        });
-        assets = [...assets, ...page.assets.map(a => ({ id: a.id, uri: a.uri, filename: a.filename }))];
-        if (!page.hasNextPage) break;
-        cursor = page.endCursor;
-      }
-    } catch {}
+    // ⛔ The SAME helper the background upload uses. Holding a second copy of
+    // this query here is what once let the screen offer photos the upload then
+    // silently dropped.
+    const assets: Array<{ id: string; uri: string; filename: string }> =
+      (await collectAssetsForDate(date)).map(a => ({ id: a.id, uri: a.uri, filename: a.filename }));
 
     setPhotoSelectAssets(assets);
     setPhotoSelectLoading(false);

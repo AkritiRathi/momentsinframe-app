@@ -20,7 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
-import { findMyPhotos, getPhotoUrls, prepareZip } from '../lib/api';
+import { findMyPhotos, getPhotoUrls, prepareZip, describeZipSkips } from '../lib/api';
 import { buildDownloadFilename } from '../lib/downloadFilename';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
@@ -764,8 +764,9 @@ export default function MyPhotosScreen() {
   }
 
   async function doDownloadZip(ids: string[]) {
-    // Photos the server could not put in the zip, gathered across batches.
-    const allSkipped: string[] = [];
+    // Kept apart on purpose — only the unreadable ones can be retried.
+    const allMissing: string[] = [];
+    const allUnreadable: string[] = [];
     const batchCount = Math.ceil(ids.length / 50);
     downloadCancelledRef.current = false;
     setDownloadKind('zip');
@@ -783,7 +784,8 @@ export default function MyPhotosScreen() {
           : `${slug}-photos.zip`;
         const zipRes = await prepareZip(slug, batches[i], idPhone);
         if (zipRes.error) throw new Error(zipRes.error);
-        if (zipRes.skippedIds?.length) allSkipped.push(...zipRes.skippedIds);
+        if (zipRes.missingIds?.length) allMissing.push(...zipRes.missingIds);
+        if (zipRes.unreadableIds?.length) allUnreadable.push(...zipRes.unreadableIds);
         const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
         await downloadZipWithProgress(zipRes.zipUrl, cacheUri);
         if (Platform.OS === 'android') {
@@ -803,16 +805,16 @@ export default function MyPhotosScreen() {
       const base = Platform.OS === 'ios'
         ? (batches.length > 1 ? `${batches.length} ZIPs shared.` : 'ZIP shared.')
         : (batches.length > 1 ? `${batches.length} ZIPs saved to Downloads.` : 'ZIP saved to Downloads.');
-      // ⛔ Never report a short zip as a plain success.
-      if (allSkipped.length > 0) {
-        showAlert(
-          'Download complete',
-          `${base} ${allSkipped.length} photo${allSkipped.length > 1 ? 's' : ''} could not be included.`,
-          [
-            { text: `Retry ${allSkipped.length}`, onPress: async () => { await doDownloadZip(allSkipped); } },
-            { text: 'OK' },
-          ],
-        );
+      // ⛔ Never report a short zip as a plain success, and never offer a
+      // retry for a photo that no longer exists.
+      const { note, retryable } = describeZipSkips(allMissing, allUnreadable);
+      if (retryable.length > 0) {
+        showAlert('Download complete', `${base} ${note}`, [
+          { text: `Retry ${retryable.length}`, onPress: async () => { await doDownloadZip(retryable); } },
+          { text: 'OK' },
+        ]);
+      } else if (note) {
+        showAlert('Download complete', `${base} ${note}`);
       } else {
         showAlert('Download complete', base);
       }

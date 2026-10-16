@@ -26,7 +26,7 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback, memo, forwardRef } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
-  getPhotoDownloadUrl, prepareZip, fetchServerNotifications, markServerNotificationsRead,
+  getPhotoDownloadUrl, prepareZip, describeZipSkips, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
   checkAdminStatus, findMyPhotos,
 } from '../lib/api';
@@ -2254,7 +2254,9 @@ export default function EventScreen() {
   }
 
   async function downloadAsZip(ids: string[]) {
-    const allSkipped: string[] = [];
+    // Kept apart on purpose — only the unreadable ones can be retried.
+    const allMissing: string[] = [];
+    const allUnreadable: string[] = [];
     const BATCH_SIZE = 50;
     const totalBatches = Math.ceil(ids.length / BATCH_SIZE);
     downloadCancelledRef.current = false;
@@ -2278,7 +2280,8 @@ export default function EventScreen() {
         if (zipRes.error) throw new Error(zipRes.error);
         // Photos the server could not put in the zip. Accumulated across
         // batches so the user is told once, at the end, not per batch.
-        if (zipRes.skippedIds?.length) allSkipped.push(...zipRes.skippedIds);
+        if (zipRes.missingIds?.length) allMissing.push(...zipRes.missingIds);
+        if (zipRes.unreadableIds?.length) allUnreadable.push(...zipRes.unreadableIds);
         await saveZipToDownloads(filename, zipRes.zipUrl);
         savedBatches++;
       }
@@ -2290,9 +2293,8 @@ export default function EventScreen() {
         : (totalBatches > 1 ? `${savedBatches} of ${totalBatches} ZIPs saved to Downloads/${zipFolderName}.` : `ZIP saved to Downloads/${zipFolderName}.`);
       // ⛔ Never report a short zip as a plain success. Mirrors the JPG path,
       // which has always counted its failures and offered a retry.
-      const msg = allSkipped.length > 0
-        ? `${base} ${allSkipped.length} photo${allSkipped.length > 1 ? 's' : ''} could not be included.`
-        : base;
+      const { note, retryable } = describeZipSkips(allMissing, allUnreadable);
+      const msg = note ? `${base} ${note}` : base;
       if (AppState.currentState !== 'active') {
         await showDownloadCompleteNotification(msg);
       } else {
@@ -2301,9 +2303,9 @@ export default function EventScreen() {
         // ⚠ Built inline rather than as a typed array: `AlertButton` is not a
         // real import in this file (it is a pre-existing type error a few
         // lines above), and annotating with it would add a second one.
-        if (allSkipped.length > 0) {
+        if (retryable.length > 0) {
           showAlert('Download complete', msg, [
-            { text: `Retry ${allSkipped.length}`, onPress: async () => { await downloadAsZip(allSkipped); } },
+            { text: `Retry ${retryable.length}`, onPress: async () => { await downloadAsZip(retryable); } },
             { text: 'OK' },
           ]);
         } else {

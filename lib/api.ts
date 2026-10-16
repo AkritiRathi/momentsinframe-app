@@ -212,11 +212,15 @@ export async function getPhotoDownloadUrl(photoId: string, adminPhone?: string):
   return post(`/api/native/photos/${photoId}/download-url`, { ...(adminPhone ? { adminPhone } : {}) });
 }
 
-// `skippedIds` lists photos that did NOT make it into the zip — either gone
-// from the database (deleted while selected) or unreadable from storage. The
-// server used to drop them silently, so a download of 47 out of 50 reported
-// success. Optional because an older server build simply omits it.
-export async function prepareZip(slug: string, photoIds: string[], adminPhone?: string): Promise<{ zipUrl: string; filename: string; skippedIds?: string[]; error?: string }> {
+// Photos that did NOT make it into the zip. The server used to drop them
+// silently, so a download of 47 out of 50 reported success.
+// ⛔ THE TWO REASONS MUST NOT BE MERGED:
+//   missingIds    — deleted from the event. Gone for good; NEVER offer a retry,
+//                   it asks for a list the server cannot fill and fails.
+//   unreadableIds — bytes unavailable, usually transient. Retry is worth it.
+// `skippedIds` is the combined list, kept for anything already reading it.
+// All optional: an older server build simply omits them.
+export async function prepareZip(slug: string, photoIds: string[], adminPhone?: string): Promise<{ zipUrl: string; filename: string; skippedIds?: string[]; missingIds?: string[]; unreadableIds?: string[]; error?: string }> {
   return post(`/api/native/events/${slug}/prepare-zip`, { photoIds, ...(adminPhone ? { adminPhone } : {}) });
 }
 
@@ -446,4 +450,25 @@ export async function deleteAllServerNotifications(slug: string): Promise<void> 
   } catch {
     // best-effort
   }
+}
+
+// ⛔ WHY A PHOTO MISSED THE ZIP DECIDES WHAT THE USER IS TOLD AND OFFERED.
+// A deleted photo can never be fetched again, so a retry for it is a button
+// guaranteed to fail — device-proved 2026-10-16, when retrying one returned
+// "ZIP failed: Could not find selected photos." An unreadable one is usually
+// a transient storage blip and IS worth retrying.
+// Returns the sentence to append (empty if nothing was skipped) and the ids
+// that are actually worth retrying.
+export function describeZipSkips(
+  missing: string[],
+  unreadable: string[],
+): { note: string; retryable: string[] } {
+  const parts: string[] = [];
+  if (missing.length > 0) {
+    parts.push(`${missing.length} photo${missing.length > 1 ? 's are' : ' is'} no longer in the event.`);
+  }
+  if (unreadable.length > 0) {
+    parts.push(`${unreadable.length} photo${unreadable.length > 1 ? 's' : ''} could not be read.`);
+  }
+  return { note: parts.join(' '), retryable: unreadable };
 }

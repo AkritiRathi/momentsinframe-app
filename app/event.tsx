@@ -1,7 +1,7 @@
 import {
   View, Text, TouchableOpacity, Pressable, StyleSheet, Image, FlatList,
   Modal, ActivityIndicator, Dimensions,
-  Platform, BackHandler, AppState, RefreshControl, Alert, InteractionManager,
+  Platform, BackHandler, AppState, RefreshControl, Alert, Switch,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Image as ExpoImage } from 'expo-image';
@@ -32,7 +32,7 @@ import {
 } from '../lib/api';
 import { API_BASE_URL } from '../constants/config';
 import {
-  getUserProfile, getEventUserId, getDeviceId,
+  getUserProfile, getEventUserId,
   saveUploadNotification, getUploadNotifications, markNotificationsRead,
   deleteUploadNotification, mergeUploadNotification, clearAllUploadNotifications,
   pruneUploadNotifications, UploadNotification,
@@ -240,6 +240,13 @@ let _bgProgressCb: ((current: number, total: number) => void) | null = null;
 let _bgCompleteCb: ((results: UploadFileResult[], preSkipped: number) => void) | null = null;
 let _bgCancelled = false;
 let _bgDeselectedIds: Set<string> = new Set();
+// ⛔ THESE TWO MUST MATCH WHAT THE REVIEW SCREEN USED.
+// collectAssetsForDate is shared by the screen and the upload that follows, so
+// if the screen filters one way and the upload another, the screen offers
+// photos the upload silently drops — the exact bug the note below describes.
+// startDateUpload sets both from the screen's own state.
+let _bgIncludeWhatsapp = false;
+let _bgEventName = '';
 
 // ⛔ THE SINGLE SOURCE OF "WHICH PHOTOS BELONG TO THIS DATE".
 // Both Upload by Date paths call this: the review screen (openPhotoSelectModal)
@@ -247,17 +254,46 @@ let _bgDeselectedIds: Set<string> = new Set();
 // this query, and when one was changed and the other was not, the screen
 // offered photos the upload then silently dropped. Do not inline it again.
 //
-// The two platforms differ ON PURPOSE (the user's call, 2026-10-16):
-//   • ANDROID — Camera folder only. Android files screenshots, WhatsApp and
-//     downloads in their own folders, so the folder IS the filter. The user
-//     does not want those offered.
-//   • iOS — everything from that date. There is no user album called "Camera"
-//     (Recents is a SMART album, which getAlbumsAsync does not return), so
-//     there is nothing to filter on, and iPhone users already expect their
-//     Camera gallery to hold everything.
+// The two platforms differ ON PURPOSE (the user's call, 2026-10-16), because
+// each matches what its own users already expect:
+//   • ANDROID — the Camera folder only. Android files screenshots, WhatsApp and
+//     downloads in their own folders, so the folder IS the filter.
+//   • iOS — everything from that date MINUS what we can positively identify as
+//     unwanted: WhatsApp, screenshots, and this event's own downloads. There is
+//     no user album called "Camera" (Recents is a SMART album, which
+//     getAlbumsAsync does not return), so iOS can only SUBTRACT, never select.
+//     ⚠ AirDropped and Instagram-saved photos therefore still come through on
+//     iOS. Nothing marks them, and the warning text says what is left OUT
+//     rather than claiming "only your camera" — keep it that way.
+//
+// `includeWhatsapp` is the one switch on the review screen, off by default.
+// `eventName` is this event's display name, which is ALSO the name of the iOS
+// album our own PhotoSaver saves downloads into — that is how downloads are
+// excluded. See feedback-ios-download-critical in memory.
 const EXIF_SCAN_BUDGET_MS = 10000;
 
-async function collectAssetsForDate(date: Date): Promise<MediaLibrary.Asset[]> {
+// WhatsApp's folder is "WhatsApp" on iOS but "WhatsApp Images" on Android
+// (inside WhatsApp/Media/), and Samsung's Gallery merges it to a tidy
+// "WhatsApp" tile that hides this. ⛔ Matching the exact string would find
+// NOTHING on Android — the silent-empty-result failure that cost two sessions.
+// Prefix matching is right either way.
+const isWhatsappAlbum = (title: string | null | undefined) =>
+  (title ?? '').trim().toLowerCase().startsWith('whatsapp');
+
+// iOS tags screenshots on the ASSET itself, so this needs no album and works
+// on a phone set to any language. ⚠ FAILS OPEN on purpose: if mediaSubtypes is
+// missing we show the photo. Wrongly showing a screenshot is harmless; wrongly
+// HIDING a real photo is the failure that actually costs the user something.
+const isScreenshot = (a: MediaLibrary.Asset) => {
+  const subs = (a as { mediaSubtypes?: string[] }).mediaSubtypes;
+  return Array.isArray(subs) && subs.includes('screenshot');
+};
+
+type CollectOpts = { includeWhatsapp?: boolean; eventName?: string };
+
+async function collectAssetsForDate(date: Date, opts: CollectOpts = {}): Promise<MediaLibrary.Asset[]> {
+  const includeWhatsapp = opts.includeWhatsapp ?? false;
+  const eventName = (opts.eventName ?? '').trim();
   const startOfDay = new Date(date);
   startOfDay.setHours(0, 0, 0, 0);
   const endOfDay = new Date(date);
@@ -274,25 +310,79 @@ async function collectAssetsForDate(date: Date): Promise<MediaLibrary.Asset[]> {
 
   const found: MediaLibrary.Asset[] = [];
   const seen = new Set<string>();
-  try {
-    let cursor: string | undefined;
-    while (true) {
-      const page = await MediaLibrary.getAssetsAsync({
-        mediaType: MediaLibrary.MediaType.photo,
-        createdAfter: startOfDay.getTime(),
-        createdBefore: endOfDay.getTime(),
-        first: 100,
-        after: cursor,
-        sortBy: MediaLibrary.SortBy.creationTime,
-        ...albumFilter,
-      });
-      for (const a of page.assets) {
-        if (!seen.has(a.id)) { seen.add(a.id); found.push(a); }
+
+  // Every photo in the date range, optionally inside one album.
+  const pageThroughDate = async (
+    filter: Record<string, unknown>,
+  ): Promise<MediaLibrary.Asset[]> => {
+    const out: MediaLibrary.Asset[] = [];
+    try {
+      let cursor: string | undefined;
+      while (true) {
+        const page = await MediaLibrary.getAssetsAsync({
+          mediaType: MediaLibrary.MediaType.photo,
+          createdAfter: startOfDay.getTime(),
+          createdBefore: endOfDay.getTime(),
+          first: 100,
+          after: cursor,
+          sortBy: MediaLibrary.SortBy.creationTime,
+          ...filter,
+        });
+        out.push(...page.assets);
+        if (!page.hasNextPage) break;
+        cursor = page.endCursor;
       }
-      if (!page.hasNextPage) break;
-      cursor = page.endCursor;
-    }
-  } catch {}
+    } catch {}
+    return out;
+  };
+
+  for (const a of await pageThroughDate(albumFilter)) {
+    if (!seen.has(a.id)) { seen.add(a.id); found.push(a); }
+  }
+
+  // ===== iOS — SUBTRACT what we can identify, then stop =====
+  // iOS has no Camera album to select FROM, so the only honest move is to take
+  // everything and remove what is positively identifiable.
+  if (Platform.OS !== 'android') {
+    const excluded = new Set<string>();
+    try {
+      // Regular albums only: both the WhatsApp album and the album our own
+      // PhotoSaver creates per event are regular, so no smart-album flag is
+      // needed here. (Screenshots IS smart, but it is handled by the asset tag
+      // instead, which is cheaper and language-proof.)
+      const albums = await MediaLibrary.getAlbumsAsync();
+      const drop = albums.filter(al =>
+        (!includeWhatsapp && isWhatsappAlbum(al.title))
+        // ⛔ This event's own downloads. Re-offering a photo the app just gave
+        // the user is pure waste: it burns their data to reach duplicate
+        // detection and achieves nothing. Silent by the user's decision
+        // (2026-10-16) - no toggle, no mention in the UI.
+        // Safe as a key because an event can NEVER be renamed: verified across
+        // all three backend writers to the events table.
+        || (!!eventName && al.title === eventName)
+      );
+      for (const al of drop) {
+        for (const a of await pageThroughDate({ album: al })) excluded.add(a.id);
+      }
+    } catch {}
+    // Screenshots always go, whatever the switch says - the user does not want
+    // them offered and there is no toggle for them.
+    return found.filter(a => !excluded.has(a.id) && !isScreenshot(a));
+  }
+
+  // ===== ANDROID — the Camera folder is the filter, so ADD instead =====
+  // Nothing is subtracted: screenshots, WhatsApp and downloads already live in
+  // their own folders and were never in `found`. The switch widens the net.
+  if (includeWhatsapp) {
+    try {
+      const albums = await MediaLibrary.getAlbumsAsync();
+      for (const al of albums.filter(a => isWhatsappAlbum(a.title))) {
+        for (const a of await pageThroughDate({ album: al })) {
+          if (!seen.has(a.id)) { seen.add(a.id); found.push(a); }
+        }
+      }
+    } catch {}
+  }
 
   // ⛔ SECOND PASS, ANDROID ONLY — ANDROID'S DATE INDEX CANNOT BE TRUSTED.
   // `creationTime` is MediaStore's DATE_TAKEN, and for a photo that arrived
@@ -314,10 +404,13 @@ async function collectAssetsForDate(date: Date): Promise<MediaLibrary.Asset[]> {
   // not mean reading the whole library.
   //
   // ⚠ Scoped to the Camera album, so this only surfaces photos the user has
-  // deliberately put there. Without that it would start offering every
-  // WhatsApp photo, which is the opposite of what was asked for.
-  if (Platform.OS !== 'android') return found;
-
+  // deliberately put there — NOT everything on the phone.
+  // ⛔ AND THIS IS WHY THE ANDROID WHATSAPP SWITCH CANNOT WORK: the rescue
+  // above reads DateTimeOriginal from the file, but WhatsApp strips EXIF in
+  // ~99% of cases, so there is nothing to read. Between that and the missing
+  // DATE_TAKEN noted above, an Android WhatsApp photo has NO usable date at
+  // all. Widening this scope would not fix it.
+  // (iOS has already returned above.)
   const deadline = Date.now() + EXIF_SCAN_BUDGET_MS;
   const considerByExif = async (a: MediaLibrary.Asset): Promise<void> => {
     if (seen.has(a.id)) return;          // already found by the index — cheap skip
@@ -415,7 +508,12 @@ async function backgroundUploadTask(): Promise<void> {
 
   // Same helper the review screen uses — see collectAssetsForDate. The two must
   // never hold separate copies of this query.
-  const allAssets: MediaLibrary.Asset[] = await collectAssetsForDate(new Date(_bgDate));
+  // ⛔ The same two settings the review screen used, or the screen and the
+  // upload disagree about which photos belong to this date.
+  const allAssets: MediaLibrary.Asset[] = await collectAssetsForDate(
+    new Date(_bgDate),
+    { includeWhatsapp: _bgIncludeWhatsapp, eventName: _bgEventName },
+  );
 
   // Filter out exact filename matches (already uploaded — skip without touching duplicate detection).
   //
@@ -629,7 +727,6 @@ export default function EventScreen() {
   const hasInitiallyLoadedRef = useRef(false);
   const [userName, setUserName] = useState<string | null>(null);
   const [eventUserId, setEventUserId] = useState<string | null>(null);
-  const [deviceId, setDeviceId] = useState<string | null>(null);
   const [newlyUploadedIds, setNewlyUploadedIds] = useState<Set<string>>(new Set());
   const [newPhotoIds, setNewPhotoIds] = useState<Set<string>>(new Set());
   const [newMainCount, setNewMainCount] = useState(0);
@@ -703,7 +800,6 @@ export default function EventScreen() {
   const longPressAnchorRef = useRef<{ anchorFlatIndex: number; anchorContentY: number } | null>(null);
 
   // Upload
-  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0, duplicates: 0 });
   const uploadCancelledRef = useRef(false);
   const downloadCancelledRef = useRef(false);
   const bgUploadCancelledRef = useRef(false);
@@ -719,6 +815,12 @@ export default function EventScreen() {
   const [photoSelectDate, setPhotoSelectDate] = useState<Date>(new Date());
   const [photoSelectAssets, setPhotoSelectAssets] = useState<Array<{ id: string; uri: string; filename: string }>>([]);
   const [deselectedPhotoIds, setDeselectedPhotoIds] = useState<Set<string>>(new Set());
+  // The one switch on the review screen. Off by default: a guest's own photos
+  // are what they came to upload, and WhatsApp forwards are opt-in.
+  const [includeWhatsapp, setIncludeWhatsapp] = useState(false);
+  // Hidden entirely when the phone has no WhatsApp album - a switch that can
+  // only ever return nothing reads as broken.
+  const [hasWhatsappAlbum, setHasWhatsappAlbum] = useState(false);
   const [photoSelectLoading, setPhotoSelectLoading] = useState(false);
 
   const [duplicateResults, setDuplicateResults] = useState<UploadFileResult[]>([]);
@@ -795,7 +897,6 @@ export default function EventScreen() {
 
   useEffect(() => {
     getEventUserId().then(id => { if (id) setEventUserId(id); });
-    getDeviceId().then(id => { if (id) setDeviceId(id); });
     SecureStore.getItemAsync('gallery_sort_order').then(v => { if (v === 'asc' || v === 'desc') { setSortOrder(v); setDraftSortOrder(v); } });
     saveLastEvent({
       slug: params.slug,
@@ -1665,8 +1766,17 @@ export default function EventScreen() {
     }
   }
 
-  async function startDateUpload(date: Date, deselectedIds: Set<string> = new Set()) {
+  async function startDateUpload(
+    date: Date,
+    deselectedIds: Set<string> = new Set(),
+    includeWhatsapp = false,
+  ) {
     _bgDeselectedIds = deselectedIds;
+    // ⛔ Hand the screen's own setting to the upload. Without this the upload
+    // re-queries with the DEFAULT and silently drops every WhatsApp photo the
+    // user had just switched on and ticked.
+    _bgIncludeWhatsapp = includeWhatsapp;
+    _bgEventName = params.name ?? '';
     _bgCancelled = false;
     bgUploadCancelledRef.current = false;
     setBgCancelRequested(false);
@@ -1798,11 +1908,15 @@ export default function EventScreen() {
     showAlert(
       'Upload by date',
       // ⛔ The two platforms genuinely behave differently here, so the wording
-      // must too — see collectAssetsForDate. Android is Camera-folder only;
-      // iOS shows everything because there is no album to filter on.
+      // must too — see collectAssetsForDate. Android selects FROM the Camera
+      // folder; iOS can only SUBTRACT, so its text says what is left out
+      // rather than claiming "only your camera" — AirDrop and Instagram saves
+      // still come through there and the text must not promise otherwise.
+      // ⚠ Neither text mentions already-uploaded photos being skipped: that
+      // happens at UPLOAD time, not here, and this screen shows them.
       Platform.OS === 'android'
-        ? 'This selects photos from your Camera folder for the date you choose. Screenshots and photos saved by other apps aren\'t included — unless you\'ve moved them into Camera yourself. Check the list and deselect anything you don\'t want. Photos already in this event are skipped automatically.'
-        : 'This selects every photo on your phone from the date you choose — including screenshots and photos saved from other apps like WhatsApp, Instagram, etc. Check the list and deselect anything you don\'t want. Photos already in this event are skipped automatically.',
+        ? 'This selects photos from your Camera folder only for the date you choose. Screenshots and photos saved by other apps aren\'t included — unless you\'ve moved them into the Camera folder yourself. Check the list and deselect anything you don\'t want.'
+        : 'This selects photos from the date you choose, leaving out screenshots, WhatsApp photos, and anything you downloaded from this event. On the next screen you can also include WhatsApp photos. Check the list and deselect anything you don\'t want.',
       [
         {
           text: 'Continue', onPress: () => {
@@ -1826,21 +1940,44 @@ export default function EventScreen() {
     );
   }
 
+  // ⛔ The SAME helper the background upload uses. Holding a second copy of
+  // this query here is what once let the screen offer photos the upload then
+  // silently dropped.
+  async function loadPhotoSelectAssets(date: Date, withWhatsapp: boolean) {
+    setPhotoSelectLoading(true);
+    const assets: Array<{ id: string; uri: string; filename: string }> =
+      (await collectAssetsForDate(date, { includeWhatsapp: withWhatsapp, eventName: params.name ?? '' }))
+        .map(a => ({ id: a.id, uri: a.uri, filename: a.filename }));
+    setPhotoSelectAssets(assets);
+    setPhotoSelectLoading(false);
+  }
+
   async function openPhotoSelectModal(date: Date) {
     setPhotoSelectDate(date);
     setDeselectedPhotoIds(new Set());
     setPhotoSelectAssets([]);
+    setIncludeWhatsapp(false);           // off every time the screen opens
+    setHasWhatsappAlbum(false);
     setPhotoSelectLoading(true);
     setShowPhotoSelectModal(true);
 
-    // ⛔ The SAME helper the background upload uses. Holding a second copy of
-    // this query here is what once let the screen offer photos the upload then
-    // silently dropped.
-    const assets: Array<{ id: string; uri: string; filename: string }> =
-      (await collectAssetsForDate(date)).map(a => ({ id: a.id, uri: a.uri, filename: a.filename }));
+    // Decide whether the switch is worth showing at all, before the grid
+    // appears, so it does not pop in afterwards.
+    try {
+      const albums = await MediaLibrary.getAlbumsAsync();
+      setHasWhatsappAlbum(albums.some(a => isWhatsappAlbum(a.title)));
+    } catch {}
 
-    setPhotoSelectAssets(assets);
-    setPhotoSelectLoading(false);
+    await loadPhotoSelectAssets(date, false);
+  }
+
+  // Flipping the switch re-runs the query. ⚠ Deselections are DELIBERATELY
+  // kept (the user's call, 2026-10-16): a photo they unticked on purpose must
+  // not reappear ticked because a setting changed. Ids not in the new list are
+  // simply ignored.
+  async function toggleIncludeWhatsapp(next: boolean) {
+    setIncludeWhatsapp(next);
+    await loadPhotoSelectAssets(photoSelectDate, next);
   }
 
   function showUploadOptions() {
@@ -2117,6 +2254,7 @@ export default function EventScreen() {
   }
 
   async function downloadAsZip(ids: string[]) {
+    const allSkipped: string[] = [];
     const BATCH_SIZE = 50;
     const totalBatches = Math.ceil(ids.length / BATCH_SIZE);
     downloadCancelledRef.current = false;
@@ -2138,49 +2276,44 @@ export default function EventScreen() {
         setZipBytes(null); // next part is being built again — spinner, not bar
         const zipRes = await prepareZip(slug, batchIds, idPhone || undefined);
         if (zipRes.error) throw new Error(zipRes.error);
+        // Photos the server could not put in the zip. Accumulated across
+        // batches so the user is told once, at the end, not per batch.
+        if (zipRes.skippedIds?.length) allSkipped.push(...zipRes.skippedIds);
         await saveZipToDownloads(filename, zipRes.zipUrl);
         savedBatches++;
       }
       setDownloadingBulk(false);
       exitSelectMode();
       const zipFolderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
-      const msg = Platform.OS === 'ios'
+      const base = Platform.OS === 'ios'
         ? (totalBatches > 1 ? `${savedBatches} of ${totalBatches} ZIPs shared.` : 'ZIP shared.')
         : (totalBatches > 1 ? `${savedBatches} of ${totalBatches} ZIPs saved to Downloads/${zipFolderName}.` : `ZIP saved to Downloads/${zipFolderName}.`);
+      // ⛔ Never report a short zip as a plain success. Mirrors the JPG path,
+      // which has always counted its failures and offered a retry.
+      const msg = allSkipped.length > 0
+        ? `${base} ${allSkipped.length} photo${allSkipped.length > 1 ? 's' : ''} could not be included.`
+        : base;
       if (AppState.currentState !== 'active') {
         await showDownloadCompleteNotification(msg);
       } else {
-        showAlert('Download complete', msg);
+        // A notification cannot carry a button, so the retry is offered only
+        // when the alert is shown. The count appears either way.
+        // ⚠ Built inline rather than as a typed array: `AlertButton` is not a
+        // real import in this file (it is a pre-existing type error a few
+        // lines above), and annotating with it would add a second one.
+        if (allSkipped.length > 0) {
+          showAlert('Download complete', msg, [
+            { text: `Retry ${allSkipped.length}`, onPress: async () => { await downloadAsZip(allSkipped); } },
+            { text: 'OK' },
+          ]);
+        } else {
+          showAlert('Download complete', msg);
+        }
       }
     } catch (e: any) {
       setDownloadingBulk(false);
       showAlert('Error', `ZIP failed: ${e?.message ?? 'unknown error'}`);
     }
-  }
-
-  async function resolveUrlsForIds(ids: string[]): Promise<Record<string, { url: string | null; originalFilename: string | null; takenAt: string | null }>> {
-    const result: Record<string, { url: string | null; originalFilename: string | null; takenAt: string | null }> = {};
-    const allPhotos = [...photos, ...otherPhotos];
-    // Always fetch fresh signed URLs — cached ones may have expired
-    try {
-      const fetched = await getPhotoUrls(slug, ids);
-      if (fetched.urls) {
-        setPhotoUrls(prev => ({ ...prev, ...fetched.urls }));
-        for (const id of ids) {
-          const p = fetched.urls[id];
-          const photo = allPhotos.find(ph => ph.id === id);
-          result[id] = { url: p?.url ?? p?.displayUrl ?? null, originalFilename: p?.originalFilename ?? null, takenAt: photo?.taken_at ?? null };
-        }
-        return result;
-      }
-    } catch { /* fall through to cached */ }
-    // Fallback: use cached state
-    for (const id of ids) {
-      const p = photoUrls[id];
-      const photo = allPhotos.find(ph => ph.id === id);
-      result[id] = { url: p?.url ?? p?.displayUrl ?? null, originalFilename: p?.originalFilename ?? null, takenAt: photo?.taken_at ?? null };
-    }
-    return result;
   }
 
   async function handleBulkDownload() {
@@ -3283,7 +3416,14 @@ export default function EventScreen() {
       {showPhotoSelectModal && (() => {
         const SCREEN_WIDTH = Dimensions.get('window').width;
         const PHOTO_SIZE = Math.floor((SCREEN_WIDTH - 3) / 3);
-        const selectedCount = photoSelectAssets.length - deselectedPhotoIds.size;
+        // ⚠ Count only the deselections that are STILL in the list. Flipping
+        // the WhatsApp switch deliberately keeps deselections, so the set can
+        // hold ids for photos no longer shown — subtracting those outright
+        // under-reports the count (switch on, untick 5 WhatsApp photos, switch
+        // off, and "5 of 10" would show when all 10 are in fact selected).
+        const deselectedShowing = photoSelectAssets.reduce(
+          (n, a) => n + (deselectedPhotoIds.has(a.id) ? 1 : 0), 0);
+        const selectedCount = photoSelectAssets.length - deselectedShowing;
         const dateLabel = photoSelectDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
         return (
           <Modal animationType="slide" onRequestClose={() => setShowPhotoSelectModal(false)}>
@@ -3300,6 +3440,25 @@ export default function EventScreen() {
                 </View>
                 <View style={{ width: 70 }} />
               </View>
+
+              {/* ⛔ ANDROID: HIDDEN ON PURPOSE, 2026-10-16. Android WhatsApp photos
+                  have NO DATE_TAKEN (device-measured), and this screen's query
+                  filters on exactly that — so the switch would always return
+                  nothing. See project-upload-by-date-source-filter in memory
+                  for the two possible fixes. The Android query below is kept,
+                  correct and unreachable, ready for whichever is chosen. */}
+              {Platform.OS !== 'android' && hasWhatsappAlbum && (
+                <View style={styles.photoSelectFilterRow}>
+                  <Text style={styles.photoSelectFilterLabel}>Include WhatsApp photos</Text>
+                  <Switch
+                    value={includeWhatsapp}
+                    onValueChange={toggleIncludeWhatsapp}
+                    disabled={photoSelectLoading}
+                    trackColor={{ false: '#e0e0e0', true: Colors.accent }}
+                    thumbColor={Colors.white}
+                  />
+                </View>
+              )}
 
               {photoSelectLoading ? (
                 <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -3350,7 +3509,7 @@ export default function EventScreen() {
                   disabled={selectedCount === 0 || photoSelectLoading}
                   onPress={() => {
                     setShowPhotoSelectModal(false);
-                    startDateUpload(photoSelectDate, new Set(deselectedPhotoIds));
+                    startDateUpload(photoSelectDate, new Set(deselectedPhotoIds), includeWhatsapp);
                   }}
                 >
                   <Text style={styles.photoSelectUploadText}>
@@ -3857,6 +4016,8 @@ const styles = StyleSheet.create({
   photoSelectCancelText: { fontSize: 16, color: Colors.accent },
   photoSelectTitle: { fontSize: 15, fontWeight: '700', color: '#111' },
   photoSelectSubtitle: { fontSize: 12, color: '#888', marginTop: 2 },
+  photoSelectFilterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#e0e0e0' },
+  photoSelectFilterLabel: { fontSize: 14, color: '#333' },
   photoSelectEmpty: { fontSize: 15, color: '#888' },
   photoSelectOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' },
   photoSelectCheck: { position: 'absolute', top: 4, right: 4, width: 20, height: 20, borderRadius: 10, backgroundColor: Colors.accent, justifyContent: 'center', alignItems: 'center' },

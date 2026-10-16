@@ -212,7 +212,11 @@ export async function getPhotoDownloadUrl(photoId: string, adminPhone?: string):
   return post(`/api/native/photos/${photoId}/download-url`, { ...(adminPhone ? { adminPhone } : {}) });
 }
 
-export async function prepareZip(slug: string, photoIds: string[], adminPhone?: string): Promise<{ zipUrl: string; filename: string; error?: string }> {
+// `skippedIds` lists photos that did NOT make it into the zip — either gone
+// from the database (deleted while selected) or unreadable from storage. The
+// server used to drop them silently, so a download of 47 out of 50 reported
+// success. Optional because an older server build simply omits it.
+export async function prepareZip(slug: string, photoIds: string[], adminPhone?: string): Promise<{ zipUrl: string; filename: string; skippedIds?: string[]; error?: string }> {
   return post(`/api/native/events/${slug}/prepare-zip`, { photoIds, ...(adminPhone ? { adminPhone } : {}) });
 }
 

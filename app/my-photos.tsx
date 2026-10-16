@@ -764,6 +764,8 @@ export default function MyPhotosScreen() {
   }
 
   async function doDownloadZip(ids: string[]) {
+    // Photos the server could not put in the zip, gathered across batches.
+    const allSkipped: string[] = [];
     const batchCount = Math.ceil(ids.length / 50);
     downloadCancelledRef.current = false;
     setDownloadKind('zip');
@@ -781,6 +783,7 @@ export default function MyPhotosScreen() {
           : `${slug}-photos.zip`;
         const zipRes = await prepareZip(slug, batches[i], idPhone);
         if (zipRes.error) throw new Error(zipRes.error);
+        if (zipRes.skippedIds?.length) allSkipped.push(...zipRes.skippedIds);
         const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
         await downloadZipWithProgress(zipRes.zipUrl, cacheUri);
         if (Platform.OS === 'android') {
@@ -797,10 +800,22 @@ export default function MyPhotosScreen() {
         await FileSystem.deleteAsync(cacheUri, { idempotent: true });
       }
       exitDownloadMode();
-      const msg = Platform.OS === 'ios'
+      const base = Platform.OS === 'ios'
         ? (batches.length > 1 ? `${batches.length} ZIPs shared.` : 'ZIP shared.')
         : (batches.length > 1 ? `${batches.length} ZIPs saved to Downloads.` : 'ZIP saved to Downloads.');
-      showAlert('Download complete', msg);
+      // ⛔ Never report a short zip as a plain success.
+      if (allSkipped.length > 0) {
+        showAlert(
+          'Download complete',
+          `${base} ${allSkipped.length} photo${allSkipped.length > 1 ? 's' : ''} could not be included.`,
+          [
+            { text: `Retry ${allSkipped.length}`, onPress: async () => { await doDownloadZip(allSkipped); } },
+            { text: 'OK' },
+          ],
+        );
+      } else {
+        showAlert('Download complete', base);
+      }
     } catch (e: any) {
       showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
     } finally {

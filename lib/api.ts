@@ -452,14 +452,27 @@ export async function deleteAllServerNotifications(slug: string): Promise<void> 
   }
 }
 
-// ⛔ WHY A PHOTO MISSED THE ZIP DECIDES WHAT THE USER IS TOLD AND OFFERED.
+// ⛔ WHY A PHOTO WAS MISSED DECIDES WHAT THE USER IS TOLD AND OFFERED.
+// Used by BOTH the zip and the JPG download paths, on all three screens, so
+// the six of them cannot drift apart on the wording or on what is retryable.
 // A deleted photo can never be fetched again, so a retry for it is a button
 // guaranteed to fail — device-proved 2026-10-16, when retrying one returned
 // "ZIP failed: Could not find selected photos." An unreadable one is usually
 // a transient storage blip and IS worth retrying.
 // Returns the sentence to append (empty if nothing was skipped) and the ids
 // that are actually worth retrying.
-export function describeZipSkips(
+// ⛔ A PHOTO DELETED FROM THE EVENT ANSWERS 404, AND THAT IS NOT A FAILURE.
+// Every download path throws `HTTP <status>` from its own non-200 check, so
+// this one test classifies all of them. Without it a deleted photo lands in
+// "failed" and the app offers a Retry that can only fail again — the user hit
+// exactly that loop on 2026-10-16.
+// ⚠ Errors from saving to disk (MediaStore, PhotoSaver) carry no HTTP code and
+// correctly stay in "failed", which is what they are.
+export function isPhotoGoneError(e: unknown): boolean {
+  return String((e as { message?: string } | null)?.message ?? '').includes('HTTP 404');
+}
+
+export function describeSkippedPhotos(
   missing: string[],
   unreadable: string[],
 ): { note: string; retryable: string[] } {

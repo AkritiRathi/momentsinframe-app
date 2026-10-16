@@ -20,7 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
-import { findMyPhotos, getPhotoUrls, prepareZip, describeZipSkips } from '../lib/api';
+import { findMyPhotos, getPhotoUrls, prepareZip, describeSkippedPhotos, isPhotoGoneError } from '../lib/api';
 import { buildDownloadFilename } from '../lib/downloadFilename';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
@@ -722,6 +722,10 @@ export default function MyPhotosScreen() {
         await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
       }
       let saved = 0;
+      // ⛔ Kept apart: a photo deleted from the event answers 404 and can
+      // never be fetched again, so it must not land in the retry list.
+      const failedIds: string[] = [];
+      const goneIds: string[] = [];
       let done = 0;
       for (const id of ids) {
         if (downloadCancelledRef.current) break;
@@ -746,16 +750,27 @@ export default function MyPhotosScreen() {
           }
           await FileSystem.deleteAsync(cacheUri, { idempotent: true });
           saved++;
-        } catch {}
+        // ⛔ This used to be a bare `catch {}` — a photo could vanish from a
+        // download and the alert still read "N photos saved". Nothing was
+        // reported and nothing could be retried.
+        } catch (e) { (isPhotoGoneError(e) ? goneIds : failedIds).push(id); }
         done++;
         setDownloadProgress({ current: done, total: ids.length });
       }
       setDownloadingBulk(false);
       exitDownloadMode();
-      const msg = Platform.OS === 'ios'
+      const base = Platform.OS === 'ios'
         ? `${saved} photo${saved !== 1 ? 's' : ''} saved to your Photos.`
         : `${saved} photo${saved !== 1 ? 's' : ''} saved to Downloads.`;
-      showAlert('Download complete', msg);
+      const { note, retryable: jpgRetry } = describeSkippedPhotos(goneIds, failedIds);
+      if (jpgRetry.length > 0) {
+        showAlert('Download complete', `${base} ${note}`, [
+          { text: `Retry ${jpgRetry.length}`, onPress: async () => { await doDownloadJpgs(jpgRetry); } },
+          { text: 'OK' },
+        ]);
+      } else {
+        showAlert('Download complete', note ? `${base} ${note}` : base);
+      }
     } catch (e: any) {
       showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
     } finally {
@@ -807,7 +822,7 @@ export default function MyPhotosScreen() {
         : (batches.length > 1 ? `${batches.length} ZIPs saved to Downloads.` : 'ZIP saved to Downloads.');
       // ⛔ Never report a short zip as a plain success, and never offer a
       // retry for a photo that no longer exists.
-      const { note, retryable } = describeZipSkips(allMissing, allUnreadable);
+      const { note, retryable } = describeSkippedPhotos(allMissing, allUnreadable);
       if (retryable.length > 0) {
         showAlert('Download complete', `${base} ${note}`, [
           { text: `Retry ${retryable.length}`, onPress: async () => { await doDownloadZip(retryable); } },

@@ -21,7 +21,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
-import { getEventPhotos, getPhotoUrls, deletePhotos, prepareZip, describeZipSkips } from '../lib/api';
+import { getEventPhotos, getPhotoUrls, deletePhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError } from '../lib/api';
 import { buildDownloadFilename } from '../lib/downloadFilename';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
@@ -755,7 +755,7 @@ export default function GuestUploadsScreen() {
         : (batches.length > 1 ? `${batches.length} ZIPs saved to Downloads.` : 'ZIP saved to Downloads.');
       // ⛔ Never report a short zip as a plain success, and never offer a
       // retry for a photo that no longer exists.
-      const { note, retryable } = describeZipSkips(allMissing, allUnreadable);
+      const { note, retryable } = describeSkippedPhotos(allMissing, allUnreadable);
       if (retryable.length > 0) {
         showAlert('Download complete', `${base} ${note}`, [
           { text: `Retry ${retryable.length}`, onPress: async () => { await doDownloadZip(retryable); } },
@@ -782,7 +782,10 @@ export default function GuestUploadsScreen() {
         await SecureStore.setItemAsync(`downloads_folder_name_${eventSlug}`, folderName);
       }
       let saved = 0;
-      let failed = 0;
+      // ⛔ `failed` used to be counted and then NEVER SHOWN — a photo could
+      // vanish from a download and the alert still read "N JPGs saved".
+      const failedIds: string[] = [];
+      const goneIds: string[] = [];
 
       for (const id of ids) {
         try {
@@ -806,15 +809,23 @@ export default function GuestUploadsScreen() {
           }
           await FileSystem.deleteAsync(cacheUri, { idempotent: true });
           saved++;
-        } catch { failed++; }
+        } catch (e) { (isPhotoGoneError(e) ? goneIds : failedIds).push(id); }
       }
 
       setMode('normal');
       setSelected(new Set());
-      const msg = Platform.OS === 'ios'
+      const base = Platform.OS === 'ios'
         ? `${saved} JPG${saved !== 1 ? 's' : ''} saved to your Photos.`
         : `${saved} JPG${saved !== 1 ? 's' : ''} saved to Downloads.`;
-      showAlert('Download complete', msg);
+      const { note, retryable: jpgRetry } = describeSkippedPhotos(goneIds, failedIds);
+      if (jpgRetry.length > 0) {
+        showAlert('Download complete', `${base} ${note}`, [
+          { text: `Retry ${jpgRetry.length}`, onPress: async () => { await doDownloadJpgs(jpgRetry); } },
+          { text: 'OK' },
+        ]);
+      } else {
+        showAlert('Download complete', note ? `${base} ${note}` : base);
+      }
     } catch (e: any) {
       showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
     } finally {

@@ -26,7 +26,7 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback, memo, forwardRef } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
-  getPhotoDownloadUrl, prepareZip, describeZipSkips, fetchServerNotifications, markServerNotificationsRead,
+  getPhotoDownloadUrl, prepareZip, describeSkippedPhotos, isPhotoGoneError, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
   checkAdminStatus, findMyPhotos,
 } from '../lib/api';
@@ -737,7 +737,14 @@ export default function EventScreen() {
   // Bulk delete needs its own flag: deletingPhoto drives the overlay INSIDE
   // the lightbox, which is not mounted during a select-mode delete.
   const [deletingBulk, setDeletingBulk] = useState(false);
+  // ⛔ THIS VIEWER WAS ORPHANED FOR MONTHS — DO NOT DELETE IT AGAIN.
+  // `0ce45f4` moved zip building to the server and removed the two lines that
+  // fed this, leaving the whole modal unreachable. **The WEBSITE has the same
+  // viewer and it is LIVE** (`src/components/SkippedPhotosViewer.tsx`), so the
+  // app was the one out of step. Rewired 2026-10-16.
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
+  // ⚠ `skippedIds` holds ONLY photos that can still be fetched — never the
+  // deleted ones. See the comment where the viewer is opened.
   const [skippedViewerVisible, setSkippedViewerVisible] = useState(false);
   const [skippedViewerIndex, setSkippedViewerIndex] = useState(0);
 
@@ -2203,7 +2210,10 @@ export default function EventScreen() {
     setDownloadProgress({ current: 0, total: ids.length });
     let saved = 0;
     let completed = 0;
+    // ⛔ Kept apart: a photo deleted from the event answers 404 and can NEVER
+    // be fetched again, so it must not land in the retry list.
     const failedIds: string[] = [];
+    const goneIds: string[] = [];
 
     const CHUNK = 10;
     for (let chunkStart = 0; chunkStart < ids.length; chunkStart += CHUNK) {
@@ -2223,7 +2233,7 @@ export default function EventScreen() {
           const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
           await saveFileToDownloads(filename, downloadUrl, 'image/jpeg', folderPath, mode, false, dateTakenMs);
           saved++;
-        } catch { failedIds.push(id); }
+        } catch (e) { (isPhotoGoneError(e) ? goneIds : failedIds).push(id); }
         completed++;
         setDownloadProgress({ current: completed, total: ids.length });
       }
@@ -2234,7 +2244,9 @@ export default function EventScreen() {
     const parts: string[] = [];
     const folderName = folderPath?.split('/').pop() ?? params.name;
     if (saved > 0) parts.push(Platform.OS === 'ios' ? `${saved} JPG${saved !== 1 ? 's' : ''} saved to your Photos` : `${saved} JPG${saved !== 1 ? 's' : ''} saved to Downloads/${folderName}`);
-    if (failedIds.length > 0) parts.push(`${failedIds.length} failed`);
+    // Same sentence the zip path uses, from the same helper.
+    const { note } = describeSkippedPhotos(goneIds, failedIds);
+    if (note) parts.push(note);
     const alertButtons: AlertButton[] = [];
     if (failedIds.length > 0) {
       alertButtons.push({
@@ -2293,7 +2305,7 @@ export default function EventScreen() {
         : (totalBatches > 1 ? `${savedBatches} of ${totalBatches} ZIPs saved to Downloads/${zipFolderName}.` : `ZIP saved to Downloads/${zipFolderName}.`);
       // ⛔ Never report a short zip as a plain success. Mirrors the JPG path,
       // which has always counted its failures and offered a retry.
-      const { note, retryable } = describeZipSkips(allMissing, allUnreadable);
+      const { note, retryable } = describeSkippedPhotos(allMissing, allUnreadable);
       const msg = note ? `${base} ${note}` : base;
       if (AppState.currentState !== 'active') {
         await showDownloadCompleteNotification(msg);
@@ -2303,8 +2315,24 @@ export default function EventScreen() {
         // ⚠ Built inline rather than as a typed array: `AlertButton` is not a
         // real import in this file (it is a pre-existing type error a few
         // lines above), and annotating with it would add a second one.
+        // ⛔ VIEW IS OFFERED ONLY FOR PHOTOS THAT STILL EXIST.
+        // A photo DELETED from the event has nothing left to show: it is gone
+        // from the grid, so the viewer's lookup finds nothing and the screen
+        // renders "1 of 0", blank. Device-proved 2026-10-16.
+        // An UNREADABLE photo is still in the event, so it has a thumbnail and
+        // a filename and is worth looking at before retrying.
+        // → Same condition as Retry, deliberately. Deleted photos are reported
+        //   in the message and nowhere else.
         if (retryable.length > 0) {
           showAlert('Download complete', msg, [
+            {
+              text: 'View',
+              onPress: () => {
+                setSkippedIds(retryable);
+                setSkippedViewerIndex(0);
+                setSkippedViewerVisible(true);
+              },
+            },
             { text: `Retry ${retryable.length}`, onPress: async () => { await downloadAsZip(retryable); } },
             { text: 'OK' },
           ]);
@@ -3001,6 +3029,24 @@ export default function EventScreen() {
               <Text style={styles.skippedClose}>×</Text>
             </TouchableOpacity>
           </View>
+          {/* ⛔ THE EMPTY GUARD. With an empty list the actions below never
+              rendered — `index === length - 1` is `0 === -1` — so there was no
+              Close button and the only way out was the small × above.
+              Steps 1 and 2 should make this unreachable; it stays so that a
+              lookup miss can never strand anyone. */}
+          {skippedPhotoList.length === 0 && (
+            <View style={styles.skippedBody}>
+              <Text style={styles.skippedFilename}>
+                These photos are no longer available to show.
+              </Text>
+              <TouchableOpacity
+                style={[styles.skippedActionBtn, { marginTop: 16 }]}
+                onPress={() => setSkippedViewerVisible(false)}
+              >
+                <Text style={styles.skippedActionText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           {currentSkipped && (
             <View style={styles.skippedBody}>
               {photoUrls[currentSkipped.id]?.thumbUrl
@@ -3030,20 +3076,23 @@ export default function EventScreen() {
           </View>
           {skippedViewerIndex === skippedPhotoList.length - 1 && (
             <View style={styles.skippedActions}>
-              <TouchableOpacity style={styles.skippedActionBtn} onPress={() => {
-                setSkippedViewerVisible(false);
-                saveAsJpgs(skippedPhotoList.map(p => p.id));
-              }}>
-                <Text style={styles.skippedActionText}>Download as JPGs</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.skippedActionBtn} onPress={() => {
-                setSkippedViewerVisible(false);
-                downloadAsZip(skippedPhotoList.map(p => p.id));
-              }}>
-                <Text style={styles.skippedActionText}>Download as ZIP</Text>
-              </TouchableOpacity>
+              {/* ⛔ Offered ONLY for photos that can actually be fetched again.
+                  The old version re-downloaded every skipped photo, including
+                  deleted ones, which always failed. The JPG button went with
+                  it: its call had been stale since saveAsJpgs grew arguments,
+                  and nothing caught that because this screen was unreachable. */}
+              {skippedIds.length > 0 && (
+                <TouchableOpacity style={styles.skippedActionBtn} onPress={() => {
+                  setSkippedViewerVisible(false);
+                  downloadAsZip(skippedIds);
+                }}>
+                  <Text style={styles.skippedActionText}>
+                    Retry {skippedIds.length} as ZIP
+                  </Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={[styles.skippedActionBtn, { borderColor: 'transparent' }]} onPress={() => setSkippedViewerVisible(false)}>
-                <Text style={[styles.skippedActionText, { color: Colors.textMuted }]}>Cancel</Text>
+                <Text style={[styles.skippedActionText, { color: Colors.textMuted }]}>Close</Text>
               </TouchableOpacity>
             </View>
           )}

@@ -2962,8 +2962,17 @@ export default function EventScreen() {
         <View style={styles.uploadOverlay}>
           <View style={styles.uploadOverlayCard}>
             <View style={styles.uploadOverlayHeader}>
+              {/* ⛔ The title must match the PHASE, not the job. While the
+                  server builds the zip nothing is downloading yet, and the
+                  body already says "Preparing ZIP…" — a title saying
+                  "Downloading" contradicted it for the ~50s that takes.
+                  Reported by the user 2026-10-18. The same line exists on
+                  guest-uploads.tsx and my-photos.tsx and on the website:
+                  change all four together. [[feedback-event-screen-is-master]] */}
               <Text style={styles.uploadOverlayTitle}>
-                {downloadMode === 'zip' ? 'Downloading ZIP' : 'Downloading'}
+                {downloadMode === 'zip'
+                  ? (zipBytes ? 'Downloading ZIP' : 'Preparing ZIP')
+                  : 'Downloading'}
               </Text>
               <TouchableOpacity onPress={() => { downloadCancelledRef.current = true; }}>
                 <Text style={styles.uploadOverlayCancel}>Cancel</Text>

@@ -1194,7 +1194,11 @@ export default function MyPhotosScreen() {
           <View style={styles.uploadOverlayCard}>
             <View style={styles.uploadOverlayHeader}>
               <Text style={styles.uploadOverlayTitle}>
-                {downloadKind === 'zip' ? 'Downloading ZIP' : 'Downloading'}
+                {/* ⛔ Title follows the PHASE, not the job — see event.tsx,
+                    the master. All four copies change together. */}
+                {downloadKind === 'zip'
+                  ? (zipBytes ? 'Downloading ZIP' : 'Preparing ZIP')
+                  : 'Downloading'}
               </Text>
               <TouchableOpacity onPress={() => { downloadCancelledRef.current = true; }}>
                 <Text style={styles.uploadOverlayCancel}>Cancel</Text>

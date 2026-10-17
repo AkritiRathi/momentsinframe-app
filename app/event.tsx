@@ -63,7 +63,24 @@ const THUMB_SIZE = (SCREEN_WIDTH - GAP * 2) / 3;
 // as individual JPGs. Keep it in step with the same constant on the other two
 // download screens.
 const JPG_LIMIT = 40;
-// The most photos the system picker lets a guest choose in one batch.
+// How many photos a guest may choose in one upload batch.
+//
+// ⛔ THIS IS OUR OWN NUMBER, NOT A PLATFORM LIMIT. It is passed INTO the
+// picker as `selectionLimit` — the picker obeys it, it does not impose it.
+// The comment here used to claim the opposite ("the most photos the system
+// picker lets a guest choose"), which is wrong and was written by me in
+// `dcc49fc` while naming the constant. It misled a later session into
+// assuming the cap could not be changed.
+//
+// ⚠ WHY 40? Nothing records a reason. The bare `selectionLimit: 40`
+// predates the constant, and 40 is most likely borrowed from JPG_LIMIT
+// above — an unrelated DOWNLOAD threshold that happens to share the value.
+// ⛔ So it is liftable, but do NOT simply raise it: what 40 was protecting
+// is unknown. Plausible candidates are memory on older phones holding many
+// full-size images, the upload worker pool of 4, and function timeouts.
+// Measure on a real device before changing it.
+// ⚠ The WEBSITE tells guests "up to 100 photos at a time". If both numbers
+// are arbitrary they disagree for no reason — and the app is the master.
 const UPLOAD_BATCH_LIMIT = 40;
 
 type Photo = {

@@ -106,6 +106,7 @@ export default function MyPhotosScreen() {
   const [cameraReady, setCameraReady] = useState(false);
 
   const [mode, setMode] = useState<Mode>('camera');
+
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [otherPhotos, setOtherPhotos] = useState<Photo[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Record<string, PhotoUrls>>({});
@@ -144,6 +145,7 @@ export default function MyPhotosScreen() {
   // handleLightboxShare, and the fuller note in event.tsx.
   const lightboxVisibleRef = useRef(false);
   useEffect(() => { lightboxVisibleRef.current = lightboxVisible; }, [lightboxVisible]);
+
   const [lightboxIndex, setLightboxIndex] = useState(0);
 
   // Drag select refs
@@ -658,7 +660,15 @@ export default function MyPhotosScreen() {
       setMode('results');
       const ids = [...main.map(p => p.id), ...other.map(p => p.id)];
       if (ids.length > 0) loadUrls(ids);
+      // ⛔ DO NOT CLEAR THE BREADCRUMB HERE. It was cleared on this line until
+      // 2026-10-17, three lines after step 8 was written — so the delete and
+      // the crash RACED. One run the crash won and we saw "8"; the next the
+      // delete won and the evidence vanished, which read as the bug changing.
+      // The run is NOT complete here: the screen has not drawn yet. Step 9
+      // below is written once it has, and that is the only honest "finished".
     } catch (e: any) {
+      // A JS error is caught here and shown. If the app DIES instead, this
+      // never runs and the breadcrumb above is the only evidence.
       setCameraReady(false);
       showAlert('Error', e?.message ?? 'Something went wrong. Please try again.', [{ text: 'OK', onPress: () => setMode('camera') }]);
       setMode('camera');
@@ -843,6 +853,43 @@ export default function MyPhotosScreen() {
     }
   }
 
+  // ⛔ THESE TWO HOOKS MUST STAY ABOVE THE EARLY RETURNS BELOW.
+  // They sat BELOW `if (mode === 'camera')` and `if (mode === 'searching')`
+  // from 2026-10-14 until 2026-10-17. Those modes return early, so the hooks
+  // did not run; the moment the screen became 'results' it fell through and
+  // React saw TWO MORE HOOKS THAN THE PREVIOUS RENDER — a hard error, thrown
+  // before any JSX. The screen went blank on Android and killed the app on
+  // iOS, and Find My Photos was unusable for three days.
+  // ⚠ Any hook added to this file goes ABOVE line `if (mode === 'camera')`.
+  // The other two screens were unaffected: they have no hooks after an early
+  // return. Only this screen does.
+  // Closing the lightbox used to leave the grid exactly where it was when the
+  // lightbox opened: the Modal sits OVER this screen, so the list never
+  // unmounts and keeps its old scroll position. Bring it to the photo the user
+  // actually finished on. ONE effect covers EVERY way of closing -- the header
+  // x, the swipe down, and Android's back button.
+  //
+  // NOTE this screen differs from the other two: its rows carry `ids` (plain
+  // strings), not photo objects, and the lightbox indexes `allIds` rather than
+  // a photos array. Copying the Event screen's version here would not compile.
+  const lightboxWasVisible = useRef(false);
+  useEffect(() => {
+    if (lightboxWasVisible.current && !lightboxVisible && allIds.length > 0) {
+      const targetId = allIds[Math.min(lightboxIndex, allIds.length - 1)];
+      if (targetId) {
+        const row = listDataRef.current.findIndex(
+          it => it.type === 'photo_row' && it.ids.includes(targetId)
+        );
+        // viewPosition 0.5 centres it rather than parking it under the header.
+        if (row >= 0) {
+          listRef.current?.scrollToIndex({ index: row, animated: false, viewPosition: 0.5 })
+            .catch(() => {});
+        }
+      }
+    }
+    lightboxWasVisible.current = lightboxVisible;
+  }, [lightboxVisible, lightboxIndex, allIds]);
+
   // ── Camera screen ──────────────────────────────────────────────────────────
   if (mode === 'camera') {
     return (
@@ -901,32 +948,6 @@ export default function MyPhotosScreen() {
   const currentLbPhoto = lightboxIndex < photos.length ? photos[lightboxIndex] : otherPhotos[lightboxIndex - photos.length];
   const lightboxImageUrl = currentLbUrls?.displayUrl ?? currentLbUrls?.url ?? null;
 
-  // Closing the lightbox used to leave the grid exactly where it was when the
-  // lightbox opened: the Modal sits OVER this screen, so the list never
-  // unmounts and keeps its old scroll position. Bring it to the photo the user
-  // actually finished on. ONE effect covers EVERY way of closing -- the header
-  // x, the swipe down, and Android's back button.
-  //
-  // NOTE this screen differs from the other two: its rows carry `ids` (plain
-  // strings), not photo objects, and the lightbox indexes `allIds` rather than
-  // a photos array. Copying the Event screen's version here would not compile.
-  const lightboxWasVisible = useRef(false);
-  useEffect(() => {
-    if (lightboxWasVisible.current && !lightboxVisible && allIds.length > 0) {
-      const targetId = allIds[Math.min(lightboxIndex, allIds.length - 1)];
-      if (targetId) {
-        const row = listDataRef.current.findIndex(
-          it => it.type === 'photo_row' && it.ids.includes(targetId)
-        );
-        // viewPosition 0.5 centres it rather than parking it under the header.
-        if (row >= 0) {
-          listRef.current?.scrollToIndex({ index: row, animated: false, viewPosition: 0.5 })
-            .catch(() => {});
-        }
-      }
-    }
-    lightboxWasVisible.current = lightboxVisible;
-  }, [lightboxVisible, lightboxIndex, allIds]);
   const allSelected = selected.size === totalFound;
 
   // The close button drawn ON the busy cover, so it stays tappable while the

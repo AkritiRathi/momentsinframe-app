@@ -41,8 +41,12 @@ type GuestPhotoItem = {
   displayUrl: string | null;
   // Which gallery it belongs to. ⛔ The array itself stays FLAT and in display
   // order (main first, then other) because `photos[lightboxIndex]` is indexed
-  // positionally in six places. Splitting it into two arrays would break the
-  // lightbox, selection and downloads.
+  // POSITIONALLY throughout this file. Splitting it into two arrays would
+  // break the lightbox, selection and downloads — with no type error.
+  // ⚠ No count here on purpose: `grep -c` counts this comment too, and one
+  // line uses the expression twice, so any number written here reads as wrong
+  // the moment someone checks it — and a warning that fails its own check is
+  // a warning the next person dismisses.
   isOther: boolean;
 };
 

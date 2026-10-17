@@ -26,7 +26,7 @@ import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback, memo, forwardRef } from 'react';
 import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
-  getPhotoDownloadUrl, prepareZip, describeSkippedPhotos, isPhotoGoneError, fetchServerNotifications, markServerNotificationsRead,
+  getPhotoDownloadUrl, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
   checkAdminStatus, findMyPhotos,
 } from '../lib/api';
@@ -809,6 +809,13 @@ export default function EventScreen() {
   // Upload
   const uploadCancelledRef = useRef(false);
   const downloadCancelledRef = useRef(false);
+  // ⛔ CANCELLING A ZIP NEEDS BOTH OF THESE, not just the flag above.
+  // The flag is only read BETWEEN parts, so on its own it did nothing during
+  // a part and nothing at all on the last one (reported 2026-10-18).
+  // `zipAbortRef`  stops the server call that builds the zip.
+  // `zipTaskRef`   stops the file transfer that follows it.
+  const zipAbortRef = useRef<AbortController | null>(null);
+  const zipTaskRef = useRef<{ cancelAsync: () => Promise<void> } | null>(null);
   const bgUploadCancelledRef = useRef(false);
   const retryNotifIdRef = useRef<string | null>(null);
 
@@ -2116,8 +2123,20 @@ export default function EventScreen() {
         total: p.totalBytesExpectedToWrite > 0 ? p.totalBytesExpectedToWrite : 0,
       });
     });
-    const dlResult = await task.downloadAsync();
-    if (!dlResult || dlResult.status !== 200) throw new Error(`HTTP ${dlResult?.status ?? 'error'}`);
+    // ⛔ Hand the task to Cancel. Without this the button could only be read
+    // BETWEEN parts, so pressing it during the transfer did nothing and on
+    // the LAST part did nothing at all — the download just finished
+    // (reported 2026-10-18). `cancelAsync` stops it mid-transfer.
+    zipTaskRef.current = task;
+    try {
+      const dlResult = await task.downloadAsync();
+      // A cancelled task resolves undefined rather than throwing, so check
+      // the flag before treating that as a failure.
+      if (downloadCancelledRef.current) throw new DownloadCancelled();
+      if (!dlResult || dlResult.status !== 200) throw new Error(`HTTP ${dlResult?.status ?? 'error'}`);
+    } finally {
+      zipTaskRef.current = null;
+    }
   }
 
   async function saveZipToDownloads(filename: string, url: string): Promise<void> {
@@ -2241,6 +2260,19 @@ export default function EventScreen() {
 
     setDownloadingBulk(false);
     exitSelectMode();
+    // ⛔ A CANCELLED run must not be reported as "Download complete".
+    // The JPG loop does not throw on cancel — it breaks and falls through to
+    // here — so the check belongs at the message, not in the catch.
+    // Before this, cancelling on photo 11 of 40 said "11 JPGs saved" with no
+    // hint that 29 were skipped, and cancelling before the first one saved
+    // showed NOTHING at all, because `parts` was empty (2026-10-18).
+    if (downloadCancelledRef.current) {
+      showAlert('Download cancelled',
+        saved > 0
+          ? `${saved} of ${ids.length} photo${ids.length === 1 ? '' : 's'} saved before you cancelled.`
+          : 'Nothing was saved.');
+      return;
+    }
     const parts: string[] = [];
     const folderName = folderPath?.split('/').pop() ?? params.name;
     if (saved > 0) parts.push(Platform.OS === 'ios' ? `${saved} JPG${saved !== 1 ? 's' : ''} saved to your Photos` : `${saved} JPG${saved !== 1 ? 's' : ''} saved to Downloads/${folderName}`);
@@ -2288,7 +2320,14 @@ export default function EventScreen() {
           ? `${slug}-photos-part${i + 1}of${totalBatches}.zip`
           : `${slug}-photos.zip`;
         setZipBytes(null); // next part is being built again — spinner, not bar
-        const zipRes = await prepareZip(slug, batchIds, idPhone || undefined);
+        // A fresh controller per part: aborting one must not poison the next.
+        zipAbortRef.current = new AbortController();
+        const zipRes = await prepareZip(slug, batchIds, idPhone || undefined, zipAbortRef.current.signal);
+        // ⛔ Check AFTER every await, not only at the top of the loop. The
+        // awaits are where all the time goes, so a Cancel pressed during one
+        // must take effect the moment it returns — otherwise the next step
+        // runs anyway and the user sees their press ignored.
+        if (downloadCancelledRef.current) throw new DownloadCancelled();
         if (zipRes.error) throw new Error(zipRes.error);
         // Photos the server could not put in the zip. Accumulated across
         // batches so the user is told once, at the end, not per batch.
@@ -2342,6 +2381,17 @@ export default function EventScreen() {
       }
     } catch (e: any) {
       setDownloadingBulk(false);
+      // ⛔ A cancel is NOT a failure. Before this, pressing Cancel mid-part
+      // surfaced "ZIP failed: Aborted" — telling the user something broke
+      // when they had asked it to stop.
+      if (isDownloadCancelled(e) || downloadCancelledRef.current) {
+        exitSelectMode();
+        showAlert('Download cancelled',
+          savedBatches > 0
+            ? `${savedBatches} of ${totalBatches} ZIP${totalBatches === 1 ? '' : 's'} saved before you cancelled.`
+            : 'Nothing was saved.');
+        return;
+      }
       showAlert('Error', `ZIP failed: ${e?.message ?? 'unknown error'}`);
     }
   }
@@ -2974,7 +3024,14 @@ export default function EventScreen() {
                   ? (zipBytes ? 'Downloading ZIP' : 'Preparing ZIP')
                   : 'Downloading'}
               </Text>
-              <TouchableOpacity onPress={() => { downloadCancelledRef.current = true; }}>
+              {/* ⛔ All three, in this order. The flag alone was the bug:
+                  it is only read between parts, so during a part it did
+                  nothing and on the last part nothing at all. */}
+              <TouchableOpacity onPress={() => {
+                downloadCancelledRef.current = true;
+                zipAbortRef.current?.abort();          // stop the server build
+                zipTaskRef.current?.cancelAsync().catch(() => {});  // stop the transfer
+              }}>
                 <Text style={styles.uploadOverlayCancel}>Cancel</Text>
               </TouchableOpacity>
             </View>

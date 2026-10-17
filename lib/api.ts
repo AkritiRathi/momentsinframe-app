@@ -35,11 +35,24 @@ async function handleUnauthorised(res: Response): Promise<void> {
 function makeTimeout(ms: number) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), ms);
-  return { signal: controller.signal, clear: () => clearTimeout(id) };
+  // `controller` is returned so a caller's own abort signal can be relayed
+  // into this same request — see `post`'s `external` parameter.
+  return { signal: controller.signal, controller, clear: () => clearTimeout(id) };
 }
 
-async function post(path: string, body: object, ms = 15000) {
-  const { signal, clear } = makeTimeout(ms);
+// `external` lets a CALLER cancel a request that is already in flight — the
+// Cancel button on the ZIP dialog. It is separate from the timeout: either
+// one aborting is enough, so the caller's signal is wired to the timeout's
+// controller rather than replacing it.
+// ⚠ A request aborted this way rejects with an AbortError. Callers that pass
+// a signal must expect that and treat it as "cancelled", not as a failure.
+async function post(path: string, body: object, ms = 15000, external?: AbortSignal) {
+  const { signal, clear, controller } = makeTimeout(ms);
+  const relay = () => controller.abort();
+  if (external) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener('abort', relay);
+  }
   try {
     const res = await fetch(`${API_BASE_URL}${path}`, {
       method: 'POST',
@@ -51,6 +64,9 @@ async function post(path: string, body: object, ms = 15000) {
     return res.json();
   } finally {
     clear();
+    // Drop the relay, or every cancelled download leaves a listener on a
+    // signal that outlives the request.
+    if (external) external.removeEventListener('abort', relay);
   }
 }
 
@@ -220,8 +236,12 @@ export async function getPhotoDownloadUrl(photoId: string, adminPhone?: string):
 //   unreadableIds — bytes unavailable, usually transient. Retry is worth it.
 // `skippedIds` is the combined list, kept for anything already reading it.
 // All optional: an older server build simply omits them.
-export async function prepareZip(slug: string, photoIds: string[], adminPhone?: string): Promise<{ zipUrl: string; filename: string; skippedIds?: string[]; missingIds?: string[]; unreadableIds?: string[]; error?: string }> {
-  return post(`/api/native/events/${slug}/prepare-zip`, { photoIds, ...(adminPhone ? { adminPhone } : {}) });
+// ⚠ `signal` is how the ZIP dialog's Cancel button stops a build that is
+// already running on the server. Without it the button could only be read
+// BETWEEN parts, so on the last part it did nothing at all (2026-10-18).
+// Pass a signal and expect an AbortError when the user cancels.
+export async function prepareZip(slug: string, photoIds: string[], adminPhone?: string, signal?: AbortSignal): Promise<{ zipUrl: string; filename: string; skippedIds?: string[]; missingIds?: string[]; unreadableIds?: string[]; error?: string }> {
+  return post(`/api/native/events/${slug}/prepare-zip`, { photoIds, ...(adminPhone ? { adminPhone } : {}) }, undefined, signal);
 }
 
 // Co-admin API
@@ -468,6 +488,21 @@ export async function deleteAllServerNotifications(slug: string): Promise<void> 
 // exactly that loop on 2026-10-16.
 // ⚠ Errors from saving to disk (MediaStore, PhotoSaver) carry no HTTP code and
 // correctly stay in "failed", which is what they are.
+// Thrown when the USER cancelled a download, so the catch blocks can tell
+// "they pressed Cancel" apart from "it failed". Shared by all three screens
+// because all three have the same ZIP loop. ⚠ A cancelled request from
+// `post` arrives as an AbortError and a cancelled file transfer resolves
+// undefined — `isDownloadCancelled` folds all three into one question.
+export class DownloadCancelled extends Error {
+  constructor() { super('cancelled'); this.name = 'DownloadCancelled'; }
+}
+
+export function isDownloadCancelled(e: unknown): boolean {
+  if (e instanceof DownloadCancelled) return true;
+  const name = (e as { name?: string } | null)?.name;
+  return name === 'AbortError' || name === 'DownloadCancelled';
+}
+
 export function isPhotoGoneError(e: unknown): boolean {
   return String((e as { message?: string } | null)?.message ?? '').includes('HTTP 404');
 }

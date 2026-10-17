@@ -21,7 +21,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
-import { getEventPhotos, getPhotoUrls, deletePhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError } from '../lib/api';
+import { getEventPhotos, getPhotoUrls, deletePhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
 import { buildDownloadFilename } from '../lib/downloadFilename';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
@@ -159,6 +159,13 @@ export default function GuestUploadsScreen() {
   const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
   const [zipBytes, setZipBytes] = useState<{ received: number; total: number } | null>(null);
   const downloadCancelledRef = useRef(false);
+  // ⛔ CANCELLING A ZIP NEEDS BOTH OF THESE, not just the flag above.
+  // The flag is only read BETWEEN parts, so on its own it did nothing during
+  // a part and nothing at all on the last one (reported 2026-10-18).
+  // `zipAbortRef` stops the server call; `zipTaskRef` stops the transfer.
+  // Mirrors event.tsx, the master — change all three together.
+  const zipAbortRef = useRef<AbortController | null>(null);
+  const zipTaskRef = useRef<{ cancelAsync: () => Promise<void> } | null>(null);
   const [sharingPhoto, setSharingPhoto] = useState(false);
   const prevSelectedSize = useRef(0);
 
@@ -787,9 +794,14 @@ export default function GuestUploadsScreen() {
     setDownloadProgress({ current: 0, total: 0 });
     setZipBytes(null);
     setDownloadingBulk(true);
+    const BATCH_SIZE = 50;
+    const batches = chunk(ids, BATCH_SIZE);
+    // ⚠ Declared ABOVE the try so the catch can read them — the shape
+    // event.tsx already uses. Counts parts that ACTUALLY saved, so neither
+    // the success nor the cancel message can claim more than happened;
+    // these two screens were reporting batches.length regardless.
+    let savedBatches = 0;
     try {
-      const BATCH_SIZE = 50;
-      const batches = chunk(ids, BATCH_SIZE);
       setDownloadProgress({ current: 0, total: batches.length });
       for (let i = 0; i < batches.length; i++) {
         if (downloadCancelledRef.current) break;
@@ -802,17 +814,21 @@ export default function GuestUploadsScreen() {
         const filename = batches.length > 1
           ? `${eventSlug}-photos-part${i + 1}of${batches.length}.zip`
           : `${eventSlug}-photos.zip`;
-        const zipRes = await prepareZip(eventSlug, batchIds, adminPhone);
+        zipAbortRef.current = new AbortController();
+        const zipRes = await prepareZip(eventSlug, batchIds, adminPhone, zipAbortRef.current.signal);
+        // ⛔ Check AFTER the await — that is where the time goes.
+        if (downloadCancelledRef.current) throw new DownloadCancelled();
         if (zipRes.error) throw new Error(zipRes.error);
         if (zipRes.missingIds?.length) allMissing.push(...zipRes.missingIds);
         if (zipRes.unreadableIds?.length) allUnreadable.push(...zipRes.unreadableIds);
         await saveZip(filename, zipRes.zipUrl);
+        savedBatches++;
       }
       setMode('normal');
       setSelected(new Set());
       const base = Platform.OS === 'ios'
-        ? (batches.length > 1 ? `${batches.length} ZIPs shared.` : 'ZIP shared.')
-        : (batches.length > 1 ? `${batches.length} ZIPs saved to Downloads.` : 'ZIP saved to Downloads.');
+        ? (batches.length > 1 ? `${savedBatches} of ${batches.length} ZIPs shared.` : 'ZIP shared.')
+        : (batches.length > 1 ? `${savedBatches} of ${batches.length} ZIPs saved to Downloads.` : 'ZIP saved to Downloads.');
       // ⛔ Never report a short zip as a plain success, and never offer a
       // retry for a photo that no longer exists.
       const { note, retryable } = describeSkippedPhotos(allMissing, allUnreadable);
@@ -827,6 +843,16 @@ export default function GuestUploadsScreen() {
         showAlert('Download complete', base);
       }
     } catch (e: any) {
+      // ⛔ A cancel is NOT a failure. Before this, pressing Cancel surfaced
+      // "Download failed: Aborted" — telling the user something broke when
+      // they had asked it to stop. Mirrors event.tsx, the master.
+      if (isDownloadCancelled(e) || downloadCancelledRef.current) {
+        showAlert('Download cancelled',
+          savedBatches > 0
+            ? `${savedBatches} of ${batches.length} ZIP${batches.length === 1 ? '' : 's'} saved before you cancelled.`
+            : 'Nothing was saved.');
+        return;
+      }
       showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
     } finally {
       // ⛔ In `finally`, not after the loop: a throw part-way would otherwise
@@ -841,13 +867,14 @@ export default function GuestUploadsScreen() {
     setDownloadKind('jpg');
     setDownloadProgress({ current: 0, total: ids.length });
     setDownloadingBulk(true);
+    // ⚠ Above the try so the catch can read it — as event.tsx does.
+    let saved = 0;
     try {
       let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`);
       if (!folderName) {
         folderName = eventName;
         await SecureStore.setItemAsync(`downloads_folder_name_${eventSlug}`, folderName);
       }
-      let saved = 0;
       // ⛔ `failed` used to be counted and then NEVER SHOWN — a photo could
       // vanish from a download and the alert still read "N JPGs saved".
       const failedIds: string[] = [];
@@ -884,6 +911,17 @@ export default function GuestUploadsScreen() {
 
       setMode('normal');
       setSelected(new Set());
+      // ⛔ A CANCELLED run must not be reported as "Download complete".
+      // The JPG loop does not throw on cancel — it breaks and falls through
+      // to here — so the check belongs at the message, not in the catch.
+      // Mirrors event.tsx, the master. [[feedback-event-screen-is-master]]
+      if (downloadCancelledRef.current) {
+        showAlert('Download cancelled',
+          saved > 0
+            ? `${saved} of ${ids.length} photo${ids.length === 1 ? '' : 's'} saved before you cancelled.`
+            : 'Nothing was saved.');
+        return;
+      }
       const base = Platform.OS === 'ios'
         ? `${saved} JPG${saved !== 1 ? 's' : ''} saved to your Photos.`
         : `${saved} JPG${saved !== 1 ? 's' : ''} saved to Downloads.`;
@@ -897,6 +935,16 @@ export default function GuestUploadsScreen() {
         showAlert('Download complete', note ? `${base} ${note}` : base);
       }
     } catch (e: any) {
+      // ⛔ A cancel is NOT a failure. Before this, pressing Cancel surfaced
+      // "Download failed: Aborted" — telling the user something broke when
+      // they had asked it to stop. Mirrors event.tsx, the master.
+      if (isDownloadCancelled(e) || downloadCancelledRef.current) {
+        showAlert('Download cancelled',
+          saved > 0
+            ? `${saved} of ${ids.length} photo${ids.length === 1 ? '' : 's'} saved before you cancelled.`
+            : 'Nothing was saved.');
+        return;
+      }
       showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
     } finally {
       setDownloadingBulk(false);
@@ -917,7 +965,17 @@ export default function GuestUploadsScreen() {
         total: pr.totalBytesExpectedToWrite > 0 ? pr.totalBytesExpectedToWrite : 0,
       });
     });
-    const dlResult = await task.downloadAsync();
+    // ⛔ Hand the task to Cancel — see event.tsx for why the flag alone
+    // was not enough. `cancelAsync` stops the transfer mid-flight.
+    zipTaskRef.current = task;
+    let dlResult;
+    try {
+      dlResult = await task.downloadAsync();
+    } finally {
+      zipTaskRef.current = null;
+    }
+    // A cancelled task resolves undefined rather than throwing.
+    if (downloadCancelledRef.current) throw new DownloadCancelled();
     if (!dlResult || dlResult.status !== 200) throw new Error(`HTTP ${dlResult?.status ?? 'error'}`);
     if (Platform.OS === 'android') {
       let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`);
@@ -1107,7 +1165,11 @@ export default function GuestUploadsScreen() {
                   ? (zipBytes ? 'Downloading ZIP' : 'Preparing ZIP')
                   : 'Downloading'}
               </Text>
-              <TouchableOpacity onPress={() => { downloadCancelledRef.current = true; }}>
+              <TouchableOpacity onPress={() => {
+                downloadCancelledRef.current = true;
+                zipAbortRef.current?.abort();
+                zipTaskRef.current?.cancelAsync().catch(() => {});
+              }}>
                 <Text style={styles.uploadOverlayCancel}>Cancel</Text>
               </TouchableOpacity>
             </View>

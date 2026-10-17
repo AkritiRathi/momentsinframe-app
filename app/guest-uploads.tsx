@@ -39,10 +39,15 @@ type GuestPhotoItem = {
   date: string;
   thumbUrl: string | null;
   displayUrl: string | null;
+  // Which gallery it belongs to. ⛔ The array itself stays FLAT and in display
+  // order (main first, then other) because `photos[lightboxIndex]` is indexed
+  // positionally in six places. Splitting it into two arrays would break the
+  // lightbox, selection and downloads.
+  isOther: boolean;
 };
 
 type ListItem =
-  | { type: 'gallery_header'; key: string }
+  | { type: 'gallery_header'; label: string; count: number; sub: string; key: string }
   | { type: 'date_header'; date: string; key: string; ids: string[] }
   | { type: 'photo_row'; photos: GuestPhotoItem[]; startIndex: number; key: string };
 
@@ -250,9 +255,19 @@ export default function GuestUploadsScreen() {
     setError(null);
     try {
       const data = await getEventPhotos(eventSlug, adminPhone);
-      const all = [...(data.photos ?? []), ...(data.otherPhotos ?? [])] as { id: string; taken_at: string; uploaded_by_mobile: string | null }[];
-      const mine = all.filter(p => p.uploaded_by_mobile === guest.mobile);
-      mine.sort((a, b) => new Date(a.taken_at).getTime() - new Date(b.taken_at).getTime());
+      // ⚠ These two were MERGED into one list until 2026-10-17, so this screen
+      // showed every photo under "Photo Gallery" while the Event and My Photos
+      // screens separated them. Kept apart now, main first.
+      type Row = { id: string; taken_at: string; uploaded_by_mobile: string | null };
+      const byDate = (a: Row, b: Row) =>
+        new Date(a.taken_at).getTime() - new Date(b.taken_at).getTime();
+      const forGuest = (rows: Row[]) =>
+        rows.filter(p => p.uploaded_by_mobile === guest.mobile).sort(byDate);
+
+      const mainRows = forGuest((data.photos ?? []) as Row[]);
+      const otherRows = forGuest((data.otherPhotos ?? []) as Row[]);
+      const mine: Row[] = [...mainRows, ...otherRows];
+      const otherIds = new Set(otherRows.map(p => p.id));
 
       if (mine.length === 0) {
         setPhotos([]);
@@ -272,6 +287,7 @@ export default function GuestUploadsScreen() {
         date: formatDate(p.taken_at),
         thumbUrl: urls[p.id]?.thumbUrl ?? null,
         displayUrl: urls[p.id]?.displayUrl ?? null,
+        isOther: otherIds.has(p.id),
       }));
       setPhotos(items);
       return items.length;
@@ -285,25 +301,41 @@ export default function GuestUploadsScreen() {
 
   const listItems = useMemo((): ListItem[] => {
     const items: ListItem[] = [];
-    items.push({ type: 'gallery_header', key: 'gallery_header' });
-
-    const groups: { date: string; photos: GuestPhotoItem[] }[] = [];
-    for (const photo of photos) {
-      const existing = groups.find(g => g.date === photo.date);
-      if (existing) existing.photos.push(photo);
-      else groups.push({ date: photo.date, photos: [photo] });
-    }
-
     let flatIndex = 0;
-    for (const group of groups) {
-      items.push({ type: 'date_header', date: group.date, key: `date_${group.date}`, ids: group.photos.map(p => p.id) });
-      const rows = chunk(group.photos, 3);
-      for (let r = 0; r < rows.length; r++) {
-        const row = rows[r];
-        items.push({ type: 'photo_row', photos: row, startIndex: flatIndex, key: `row_${group.date}_${r}` });
-        flatIndex += row.length;
+
+    // Two sections, matching the Event and My Photos screens. `photos` is
+    // ordered main-then-other, so walking each half in turn keeps flatIndex
+    // aligned with the positional lookups elsewhere.
+    const section = (list: GuestPhotoItem[], label: string, sub: string, tag: string) => {
+      if (list.length === 0) return;   // no empty heading
+      items.push({ type: 'gallery_header', label, count: list.length, sub, key: `gallery_${tag}` });
+
+      const groups: { date: string; photos: GuestPhotoItem[] }[] = [];
+      for (const photo of list) {
+        const existing = groups.find(g => g.date === photo.date);
+        if (existing) existing.photos.push(photo);
+        else groups.push({ date: photo.date, photos: [photo] });
       }
-    }
+      for (const group of groups) {
+        // ⚠ Keys carry the section: two dates can repeat across sections and
+        // duplicate keys would make the list misbehave.
+        items.push({ type: 'date_header', date: group.date, key: `date_${tag}_${group.date}`, ids: group.photos.map(p => p.id) });
+        const rows = chunk(group.photos, 3);
+        for (let r = 0; r < rows.length; r++) {
+          const row = rows[r];
+          items.push({ type: 'photo_row', photos: row, startIndex: flatIndex, key: `row_${tag}_${group.date}_${r}` });
+          flatIndex += row.length;
+        }
+      }
+    };
+
+    section(photos.filter(p => !p.isOther), 'Photo Gallery',
+      '(grouped by date · oldest first)', 'main');
+    // ⚠ A DIFFERENT SUBTITLE ON PURPOSE: these photos are here BECAUSE their
+    // date cannot be trusted, so "grouped by date" would be untrue. Same
+    // wording the Event screen uses.
+    section(photos.filter(p => p.isOther), 'Other Photos Gallery',
+      '(no date info — sorted by upload time)', 'other');
 
     listDataRef.current = items;
     return items;
@@ -897,6 +929,13 @@ export default function GuestUploadsScreen() {
     await FileSystem.deleteAsync(cacheUri, { idempotent: true });
   }
 
+  // The two gallery counts for the header line, matching the Event screen.
+  // ⚠ Plain consts on purpose — NOT useMemo. The list is small, and a hook
+  // added here for no gain is a hook that can be moved into the wrong place
+  // later. See feedback_test_what_the_file_does.
+  const otherCount = photos.filter(p => p.isOther).length;
+  const mainCount = photos.length - otherCount;
+
   function renderActionRow() {
     if (mode === 'normal') {
       return (
@@ -959,11 +998,12 @@ export default function GuestUploadsScreen() {
   function renderItemContent(item: ListItem) {
     if (item.type === 'gallery_header') {
       return (
-        <View>
-          <View style={styles.galleryHeading}>
-            <Text style={styles.galleryTitle}>Photo Gallery <Text style={styles.galleryCount}>{photos.length}</Text></Text>
+        <View style={styles.galleryHeading}>
+          <View style={styles.galleryTitleRow}>
+            <Text style={styles.galleryTitle}>{item.label}</Text>
+            <Text style={styles.galleryCount}>{item.count}</Text>
           </View>
-          <Text style={styles.gallerySub}>(grouped by date · oldest first)</Text>
+          <Text style={styles.gallerySub}>{item.sub}</Text>
         </View>
       );
     }
@@ -1129,6 +1169,11 @@ export default function GuestUploadsScreen() {
               <Text style={styles.guestName} numberOfLines={1}>{guest.name || guest.mobile}</Text>
               <Text style={styles.guestContactLine}>{guest.contactName ?? 'Number not in contacts'}</Text>
               <Text style={styles.guestMetaLine}>{guest.mobile}{photos.length > 0 ? ` · ${photos.length} photo${photos.length !== 1 ? 's' : ''}` : ''}</Text>
+              {mainCount > 0 && otherCount > 0 && (
+                <Text style={styles.guestMetaSub}>
+                  {mainCount} in Photo Gallery · {otherCount} in Other Photos Gallery
+                </Text>
+              )}
             </View>
           </View>
         </View>
@@ -1287,6 +1332,7 @@ const styles = StyleSheet.create({
   guestName: { fontSize: 18, fontWeight: '600', color: Colors.white, textAlign: 'center' },
   guestContactLine: { fontSize: 14, color: '#888', textAlign: 'center', marginTop: 2 },
   guestMetaLine: { fontSize: 12, color: '#888', textAlign: 'center', marginTop: 2 },
+  guestMetaSub: { fontSize: 12, color: '#666', textAlign: 'center', marginTop: 2 },
 
   // Normal mode buttons
   btnRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8 },
@@ -1303,10 +1349,14 @@ const styles = StyleSheet.create({
   selBtnText: { fontSize: 13, color: Colors.textMuted },
 
   // Gallery
-  galleryHeading: { flexDirection: 'row', alignItems: 'baseline', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 2 },
-  galleryTitle: { fontSize: 18, fontWeight: '700', color: Colors.white },
-  galleryCount: { fontSize: 16, fontWeight: '400', color: '#777' },
-  gallerySub: { fontSize: 12, color: '#555', paddingHorizontal: 16, marginBottom: 8 },
+  // ⚠ These four are a copy of event.tsx's sectionHeader / sectionTitleRow /
+  // sectionTitle / sectionCount / sectionSub. The Event screen is the master —
+  // if it changes, change these and my-photos.tsx to match.
+  galleryHeading: { backgroundColor: Colors.background, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
+  galleryTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
+  galleryTitle: { ...Typography.sectionHeading, color: Colors.white },
+  galleryCount: { fontSize: 14, color: '#888' },
+  gallerySub: { fontSize: 13, color: '#666' },
   dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 6, gap: 8 },
   dateHeader: { fontSize: 14, fontWeight: '700', color: Colors.white },
   dateHeaderCircle: { padding: 2 },

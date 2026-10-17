@@ -41,7 +41,7 @@ type PhotoUrls = { url?: string; thumbUrl?: string; displayUrl?: string };
 type Mode = 'camera' | 'searching' | 'results';
 
 type ListItem =
-  | { type: 'section_header'; label: string; key: string }
+  | { type: 'section_header'; label: string; count: number; sub: string; key: string }
   | { type: 'date_header'; date: string; ids: string[]; key: string }
   | { type: 'photo_row'; ids: string[]; startIndex: number; key: string };
 
@@ -198,7 +198,8 @@ export default function MyPhotosScreen() {
     const items: ListItem[] = [];
 
     if (photos.length > 0) {
-      items.push({ type: 'section_header', label: 'Photo Gallery', key: 'header_main' });
+      items.push({ type: 'section_header', label: 'Photo Gallery', count: photos.length,
+        sub: '(grouped by date · oldest first)', key: 'header_main' });
       const groups: { date: string; ids: string[] }[] = [];
       for (const p of photos) {
         const d = formatDateLabel(p.taken_at);
@@ -217,7 +218,11 @@ export default function MyPhotosScreen() {
     }
 
     if (otherPhotos.length > 0) {
-      items.push({ type: 'section_header', label: 'Other Photos Gallery', key: 'header_other' });
+      // ⚠ A DIFFERENT SUBTITLE ON PURPOSE. These photos are in this section
+      // precisely because their date is not trustworthy, so claiming they are
+      // "grouped by date" would be untrue. Same wording the Event screen uses.
+      items.push({ type: 'section_header', label: 'Other Photos Gallery', count: otherPhotos.length,
+        sub: '(no date info — sorted by upload time)', key: 'header_other' });
       const groups: { date: string; ids: string[] }[] = [];
       const mainCount = photos.length;
       for (const p of otherPhotos) {
@@ -973,6 +978,11 @@ export default function MyPhotosScreen() {
         <View style={{ alignItems: 'center' }}>
           <Text style={styles.headerTitle}>My Photos</Text>
           {totalFound > 0 && <Text style={styles.headerSub}>{totalFound} photo{totalFound !== 1 ? 's' : ''} found</Text>}
+          {photos.length > 0 && otherPhotos.length > 0 && (
+            <Text style={styles.headerSubLine}>
+              {photos.length} in Photo Gallery · {otherPhotos.length} in Other Photos Gallery
+            </Text>
+          )}
         </View>
         <View style={{ width: 32 }} />
       </View>
@@ -1043,7 +1053,11 @@ export default function MyPhotosScreen() {
                       style={styles.sectionHeader}
                       onLayout={e => { accumulatedHeights.current[item.key] = e.nativeEvent.layout.height; }}
                     >
-                      <Text style={styles.sectionHeaderText}>{item.label}</Text>
+                      <View style={styles.galleryTitleRow}>
+                        <Text style={styles.galleryTitle}>{item.label}</Text>
+                        <Text style={styles.galleryCount}>{item.count}</Text>
+                      </View>
+                      <Text style={styles.gallerySub}>{item.sub}</Text>
                     </View>
                   );
                 }
@@ -1276,6 +1290,7 @@ const styles = StyleSheet.create({
   backText: { fontSize: 24, color: Colors.textMuted },
   headerTitle: { fontSize: 18, fontWeight: '800', color: Colors.white, letterSpacing: 0.3 },
   headerSub: { fontSize: 12, color: '#888', textAlign: 'center', marginTop: 2 },
+  headerSubLine: { fontSize: 12, color: '#666', textAlign: 'center' },
 
   // Action row — matches event screen button style
   actionRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, paddingVertical: 8 },
@@ -1291,7 +1306,14 @@ const styles = StyleSheet.create({
 
   // Section + date headers
   sectionHeader: { backgroundColor: Colors.background, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, borderBottomWidth: 0.5, borderBottomColor: '#1a1a1a' },
-  sectionHeaderText: { fontSize: 13, fontWeight: '700', color: Colors.white, letterSpacing: 0.5, textTransform: 'uppercase' },
+  // ⚠ Copied from event.tsx's sectionTitleRow / sectionTitle / sectionCount /
+  // sectionSub. The Event screen is the master — if it changes, change these
+  // and guest-uploads.tsx to match.
+  galleryTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
+  // at the user's request, 2026-10-17. Change one, change the other.
+  galleryTitle: { ...Typography.sectionHeading, color: Colors.white },
+  galleryCount: { fontSize: 14, color: '#888' },
+  gallerySub: { fontSize: 13, color: '#666' },
   dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 18, paddingBottom: 8, backgroundColor: Colors.background, gap: 10 },
   dateHeaderText: { fontSize: 15, fontWeight: '700', color: Colors.white },
   dateHeaderCircle: { padding: 2 },

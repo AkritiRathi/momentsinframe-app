@@ -3002,7 +3002,12 @@ export default function EventScreen() {
             ) : (
               <>
                 <Text style={styles.uploadOverlaySub}>
-                  Downloading photo {downloadProgress.current} of {downloadProgress.total}…
+                  {/* ⚠ +1 and capped: `current` counts photos FINISHED, so
+                      without this the dialog opens on "photo 0 of 5" and never
+                      shows "5 of 5" while the last one is actually running.
+                      my-photos.tsx had this right and event.tsx did not —
+                      found by diffing the two overlays, 2026-10-17. */}
+                  Downloading photo {Math.min(downloadProgress.current + 1, downloadProgress.total)} of {downloadProgress.total}…
                 </Text>
                 <View style={styles.progressBg}>
                   <View style={[styles.progressFill, {

@@ -124,7 +124,6 @@ export default function GuestUploadsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<'normal' | 'delete' | 'download'>('normal');
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [actionLoading, setActionLoading] = useState(false);
   const [lightboxVisible, setLightboxVisible] = useState(false);
   // Mirrors lightboxVisible for code that reads it AFTER an await — the state a
   // function captured when it started is always "open". See
@@ -135,28 +134,42 @@ export default function GuestUploadsScreen() {
   const [imageLoading, setImageLoading] = useState(false);
   const imageLoadingRef = useRef(false);
   const [deletingPhoto, setDeletingPhoto] = useState(false);
-  // Bulk delete gets its own flag. actionLoading is SHARED with the two
-  // download paths, so reusing it would caption a download "Deleting...".
+  // Bulk delete keeps its own flag, separate from the download ones below, so
+  // a download can never be captioned "Deleting...".
   const [deletingBulk, setDeletingBulk] = useState(false);
   const [downloadingPhoto, setDownloadingPhoto] = useState(false);
+  // ⛔ THE PROGRESS DIALOG — added 2026-10-17, this screen had NONE.
+  // It showed only a small spinner where the Download button had been, so a
+  // 50-photo ZIP looked identical to a stalled app: no count, no bar, no way
+  // to stop. event.tsx and my-photos.tsx both had the full dialog.
+  // ⚠ The markup, wording and styles below are a COPY of my-photos.tsx.
+  // Nothing enforces that they stay alike — if you change one, change all
+  // three. See project-download-progress-ui.
+  const [downloadingBulk, setDownloadingBulk] = useState(false);
+  const [downloadKind, setDownloadKind] = useState<'jpg' | 'zip'>('jpg');
+  const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
+  const [zipBytes, setZipBytes] = useState<{ received: number; total: number } | null>(null);
+  const downloadCancelledRef = useRef(false);
   const [sharingPhoto, setSharingPhoto] = useState(false);
   const prevSelectedSize = useRef(0);
 
   // This screen had NO keep-awake at all until 2026-10-10, while event.tsx and
   // my-photos.tsx both had it — so the phone could sleep part-way through a
   // bulk download here, and a multi-ZIP download of 50 photos per file is
-  // exactly where that happens. actionLoading is the right flag: it is set by
-  // doDownloadZip and doDownloadJpgs and by nothing else, per the comment on
-  // deletingBulk above. STATE-driven, not called inside the download functions,
-  // matching the other two screens — see project-download-progress-ui.
+  // exactly where that happens. STATE-driven, not called inside the download
+  // functions, matching the other two screens.
+  // ⚠ Was keyed on `actionLoading` until 2026-10-17. That flag is gone — it
+  // only existed to spin the Download button, which the progress dialog now
+  // covers. `downloadingBulk` is set by the same two functions and nothing
+  // else, so the keep-awake behaviour is unchanged.
   // Single-photo download and share are deliberately NOT included, as on the
   // other two screens: they finish in seconds.
   useEffect(() => {
-    if (actionLoading) {
+    if (downloadingBulk) {
       activateKeepAwakeAsync();
       return () => { deactivateKeepAwake(); };
     }
-  }, [actionLoading]);
+  }, [downloadingBulk]);
 
   // Refs for drag-to-select
   const photoRefsMap = useRef<Map<string, any>>(new Map());
@@ -733,11 +746,22 @@ export default function GuestUploadsScreen() {
     // Kept apart on purpose — only the unreadable ones can be retried.
     const allMissing: string[] = [];
     const allUnreadable: string[] = [];
-    setActionLoading(true);
+    downloadCancelledRef.current = false;
+    setDownloadKind('zip');
+    setDownloadProgress({ current: 0, total: 0 });
+    setZipBytes(null);
+    setDownloadingBulk(true);
     try {
       const BATCH_SIZE = 50;
       const batches = chunk(ids, BATCH_SIZE);
+      setDownloadProgress({ current: 0, total: batches.length });
       for (let i = 0; i < batches.length; i++) {
+        if (downloadCancelledRef.current) break;
+        // Counts the part being PREPARED, so the "Preparing ZIP 2 of 3"
+        // caption is 1-based from the start — the same convention the other
+        // two screens use.
+        setDownloadProgress({ current: i + 1, total: batches.length });
+        setZipBytes(null);   // next part is being built again: spinner, not bar
         const batchIds = batches[i];
         const filename = batches.length > 1
           ? `${eventSlug}-photos-part${i + 1}of${batches.length}.zip`
@@ -769,12 +793,18 @@ export default function GuestUploadsScreen() {
     } catch (e: any) {
       showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
     } finally {
-      setActionLoading(false);
+      // ⛔ In `finally`, not after the loop: a throw part-way would otherwise
+      // leave the dialog on screen for ever with no way to dismiss it.
+      setDownloadingBulk(false);
+      setZipBytes(null);
     }
   }
 
   async function doDownloadJpgs(ids: string[]) {
-    setActionLoading(true);
+    downloadCancelledRef.current = false;
+    setDownloadKind('jpg');
+    setDownloadProgress({ current: 0, total: ids.length });
+    setDownloadingBulk(true);
     try {
       let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`);
       if (!folderName) {
@@ -787,7 +817,9 @@ export default function GuestUploadsScreen() {
       const failedIds: string[] = [];
       const goneIds: string[] = [];
 
+      let done = 0;
       for (const id of ids) {
+        if (downloadCancelledRef.current) break;
         try {
           const photo = photos.find(p => p.id === id);
           const filename = buildDownloadFilename(id, photo?.takenAt ?? null, 'jpg');
@@ -810,6 +842,8 @@ export default function GuestUploadsScreen() {
           await FileSystem.deleteAsync(cacheUri, { idempotent: true });
           saved++;
         } catch (e) { (isPhotoGoneError(e) ? goneIds : failedIds).push(id); }
+        done++;
+        setDownloadProgress({ current: done, total: ids.length });
       }
 
       setMode('normal');
@@ -829,14 +863,26 @@ export default function GuestUploadsScreen() {
     } catch (e: any) {
       showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
     } finally {
-      setActionLoading(false);
+      setDownloadingBulk(false);
     }
   }
 
   async function saveZip(filename: string, url: string): Promise<void> {
     const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-    const dlResult = await FileSystem.downloadAsync(url, cacheUri);
-    if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
+    // ⛔ createDownloadResumable, NOT downloadAsync: only the resumable form
+    // reports bytes, and without bytes the dialog can never show a bar. The
+    // other two screens already use it for exactly this reason.
+    // ⚠ Only the FETCH changed. The save that follows — the iOS/Android
+    // branch below — is the 17-builds code and is untouched.
+    setZipBytes({ received: 0, total: 0 });
+    const task = FileSystem.createDownloadResumable(url, cacheUri, {}, (pr) => {
+      setZipBytes({
+        received: pr.totalBytesWritten,
+        total: pr.totalBytesExpectedToWrite > 0 ? pr.totalBytesExpectedToWrite : 0,
+      });
+    });
+    const dlResult = await task.downloadAsync();
+    if (!dlResult || dlResult.status !== 200) throw new Error(`HTTP ${dlResult?.status ?? 'error'}`);
     if (Platform.OS === 'android') {
       let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`);
       if (!folderName) {
@@ -878,12 +924,13 @@ export default function GuestUploadsScreen() {
           <Pressable style={styles.selBtn} onPress={cancelMode}>
             <Text style={styles.selBtnText}>Cancel</Text>
           </Pressable>
-          {/* Downloads keep the small inline spinner. Deletes no longer use
-              it — they get the full-screen overlay instead, matching the
-              lightbox and the Event screen. */}
-          {actionLoading ? (
-            <ActivityIndicator size="small" color={Colors.accent} />
-          ) : (
+          {/* ⛔ NO INLINE SPINNER HERE. Downloads used to swap this button for a
+              small spinner, which then showed THROUGH the progress dialog as a
+              second, contradictory indicator — visible in the user's
+              screenshot, 2026-10-17. Deletes already use the full-screen
+              overlay; downloads now have one too, so neither needs this.
+              my-photos.tsx carries the same note for the same reason. */}
+          {(
             <Pressable
               style={[styles.selBtn, { borderColor: isDelete ? Colors.danger : Colors.accent }, selected.size === 0 && { opacity: 0.4 }]}
               onPress={isDelete ? handleDelete : handleDownload}
@@ -998,6 +1045,70 @@ export default function GuestUploadsScreen() {
         <View style={[styles.lbDeletingOverlay, { zIndex: 200 }]}>
           <ActivityIndicator size="large" color={Colors.accent} />
           <Text style={styles.lbDeletingText}>Deleting...</Text>
+        </View>
+      )}
+
+      {/* ⚠ A VERBATIM COPY of the overlay in my-photos.tsx, which is itself a
+          copy of event.tsx's. They were copied so all three would look
+          identical and NOTHING enforces that — change one, change all three.
+          See project-download-progress-ui. */}
+      {downloadingBulk && (
+        <View style={styles.uploadOverlay}>
+          <View style={styles.uploadOverlayCard}>
+            <View style={styles.uploadOverlayHeader}>
+              <Text style={styles.uploadOverlayTitle}>
+                {downloadKind === 'zip' ? 'Downloading ZIP' : 'Downloading'}
+              </Text>
+              <TouchableOpacity onPress={() => { downloadCancelledRef.current = true; }}>
+                <Text style={styles.uploadOverlayCancel}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+            {downloadKind === 'zip' ? (
+              // Two phases: the server builds the ZIP (nothing to measure, so a
+              // spinner), then it downloads (real bytes, so a bar).
+              !zipBytes || zipBytes.total === 0 ? (
+                <>
+                  <Text style={styles.uploadOverlaySub}>
+                    {downloadProgress.total > 1
+                      ? `Preparing ZIP ${downloadProgress.current} of ${downloadProgress.total}…`
+                      : 'Preparing ZIP… this may take a minute'}
+                  </Text>
+                  <ActivityIndicator color={Colors.accent} style={{ marginVertical: 8 }} />
+                  <Text style={styles.uploadOverlayPct}>Keep this screen open</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.uploadOverlaySub}>
+                    {downloadProgress.total > 1
+                      ? `Downloading ZIP ${downloadProgress.current} of ${downloadProgress.total}…`
+                      : 'Downloading ZIP…'}
+                  </Text>
+                  <View style={styles.progressBg}>
+                    <View style={[styles.progressFill, {
+                      width: `${Math.round((zipBytes.received / zipBytes.total) * 100)}%` as any,
+                    }]} />
+                  </View>
+                  <Text style={styles.uploadOverlayPct}>
+                    {Math.round((zipBytes.received / zipBytes.total) * 100)}% complete — keep this screen open
+                  </Text>
+                </>
+              )
+            ) : (
+              <>
+                <Text style={styles.uploadOverlaySub}>
+                  Downloading photo {Math.min(downloadProgress.current + 1, downloadProgress.total)} of {downloadProgress.total}…
+                </Text>
+                <View style={styles.progressBg}>
+                  <View style={[styles.progressFill, {
+                    width: `${downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}%` as any,
+                  }]} />
+                </View>
+                <Text style={styles.uploadOverlayPct}>
+                  {downloadProgress.total > 0 ? Math.round((downloadProgress.current / downloadProgress.total) * 100) : 0}% complete — keep this screen open
+                </Text>
+              </>
+            )}
+          </View>
         </View>
       )}
       <GestureHandlerRootView style={{ flex: 1, backgroundColor: Colors.background }}>
@@ -1241,6 +1352,15 @@ const styles = StyleSheet.create({
   lbFooterLine1: { fontSize: 13, color: '#ccc', marginBottom: 2 },
   lbFooterLine2: { fontSize: 12, color: '#888' },
   lbDeletingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', alignItems: 'center', gap: 12 },
+  uploadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 100, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 24 },
+  uploadOverlayCard: { width: '100%', backgroundColor: Colors.card, borderRadius: 16, padding: 20 },
+  uploadOverlayHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  uploadOverlayTitle: { fontSize: 16, fontWeight: '600', color: Colors.white },
+  uploadOverlayCancel: { fontSize: 13, color: Colors.danger },
+  uploadOverlaySub: { fontSize: 13, color: Colors.textMuted, marginBottom: 10 },
+  progressBg: { height: 8, backgroundColor: '#2a2a2a', borderRadius: 4, overflow: 'hidden', marginBottom: 6 },
+  progressFill: { height: '100%', backgroundColor: Colors.white, borderRadius: 4 },
+  uploadOverlayPct: { fontSize: 11, color: '#666' },
   lbDeletingText: { fontSize: 14, fontWeight: '700', color: Colors.white },
   lbDownloadOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 10, justifyContent: 'center', alignItems: 'center', gap: 12 },
   lbDownloadText: { color: Colors.white, fontSize: 14, fontWeight: '500' },

@@ -155,8 +155,11 @@ export async function listMyEvents() {
   return get('/api/my-events');
 }
 
-export async function createEvent(organiserPhone: string, organiserPassword: string, name: string, expiresAt: string, isClosed?: boolean) {
-  return post('/api/native/events', { organiserPhone, organiserPassword, name, expiresAt, isClosed });
+// ⛔ isClosed and viewOnly can ONLY be set here, at creation. The settings
+// route REFUSES both: an event is invite-only or view-only from the moment
+// it is created and never changes (the user's decision, 2026-10-20).
+export async function createEvent(organiserPhone: string, organiserPassword: string, name: string, expiresAt: string, isClosed?: boolean, viewOnly?: boolean) {
+  return post('/api/native/events', { organiserPhone, organiserPassword, name, expiresAt, isClosed, viewOnly });
 }
 
 export async function extendEvent(slug: string, organiserPhone: string, organiserPassword: string, newExpiresAt: string) {

@@ -1,11 +1,29 @@
 import { useState, useEffect } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, TextInput,
 } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Contacts from 'expo-contacts';
 import { listJoinedGuestsForUser, setGuestBlockedByUser } from '../lib/api';
+
+// ⛔ THIS SCREEN IS THE TWIN OF THE "Manage Guests" PANEL IN
+// app/(master)/event-detail.tsx — same API, same contact map, same rows,
+// reached from the Event screen instead of Manage Event. ⚠ The user pointed
+// this out on 2026-10-20: *"Manage Guest are in 2 places - Event screen and
+// Manage Event."* **Anything changed here must be changed there, and this
+// match rule is deliberately IDENTICAL to the one over there.**
+// ⭐ It matches anything a row can DISPLAY: the organiser's contact name, the
+// name the guest registered with, and the number. If you can see it, you can
+// search it.
+// ⏸ Unifying the two copies into one shared component was raised the same
+// day and NOT done — it is a refactor of its own and needs the user's say.
+function matchesPersonSearch(query: string, phone: string, ...names: (string | null | undefined)[]) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if ((phone ?? '').includes(q)) return true;
+  return names.some(n => (n ?? '').toLowerCase().includes(q));
+}
 import { getUserProfile } from '../lib/storage';
 import { Colors } from '../constants/colors';
 import { useAlert } from '../lib/useAlert';
@@ -44,6 +62,7 @@ export default function ManageGuestsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [togglingGuest, setTogglingGuest] = useState<string | null>(null);
   const [contactMap, setContactMap] = useState<Record<string, string>>({});
+  const [search, setSearch] = useState('');
 
   useEffect(() => { loadGuests(); }, []);
 
@@ -109,6 +128,12 @@ export default function ManageGuestsScreen() {
     }
   }
 
+  // ⚠ A filtered COPY. `guests` keeps its real length, because the layout
+  // below switches on how many guests there ARE — filtering to one result
+  // must not flip a 300-guest event into the "single guest" layout.
+  const shown = guests.filter(g =>
+    matchesPersonSearch(search, g.mobile, contactMap[g.mobile], g.name));
+
   const guestCount = guests.filter(g => g.role !== 'organiser').length;
 
   return (
@@ -123,6 +148,16 @@ export default function ManageGuestsScreen() {
         </TouchableOpacity>
       </View>
       <Text style={styles.desc}>Block a guest to remove their access to this event. They will not be able to rejoin. You can unblock them at any time.</Text>
+      <View style={styles.searchWrap}>
+        <TextInput
+          style={styles.search}
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search by name or number"
+          placeholderTextColor="#555"
+          autoCorrect={false}
+        />
+      </View>
       <ScrollView contentContainerStyle={styles.scroll}>
         {loading ? (
           <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
@@ -155,8 +190,10 @@ export default function ManageGuestsScreen() {
             })}
             <Text style={[styles.emptyText, { marginTop: 12 }]}>No guests have joined this event yet.</Text>
           </>
+        ) : shown.length === 0 ? (
+          <Text style={styles.noMatch}>No one matches that search.</Text>
         ) : (
-          guests.map(guest => {
+          shown.map(guest => {
             const contactName = contactMap[guest.mobile] ?? null;
             const appName = guest.name || guest.mobile;
             return (
@@ -205,6 +242,9 @@ const styles = StyleSheet.create({
   close: { fontSize: 28, color: Colors.textMuted, paddingHorizontal: 4 },
   desc: { fontSize: 13, color: Colors.textMuted, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, lineHeight: 19 },
   scroll: { padding: 16, gap: 8 },
+  searchWrap: { paddingHorizontal: 16, paddingTop: 8 },
+  search: { backgroundColor: Colors.card, borderWidth: 0.5, borderColor: Colors.cardBorder, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, fontSize: 14, color: Colors.white },
+  noMatch: { fontSize: 13, color: '#555', paddingHorizontal: 4 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1A1A1A', borderRadius: 8, padding: 12, marginBottom: 8, borderWidth: 0.5, borderColor: '#2A2A2A' },
   guestInfo: { flex: 1 },
   guestName: { fontSize: 14, fontWeight: '700', color: Colors.white },

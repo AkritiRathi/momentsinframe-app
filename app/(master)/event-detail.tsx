@@ -11,11 +11,40 @@ import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
 import { showPermissionDeniedAlert, shouldShowDeniedAlert } from '../../lib/priming';
 import { useAppPermission } from '../../lib/permissions';
-import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, clearAllowedGuests, clearJoinedGuests, listJoinedGuestsForUser, setGuestBlocked } from '../../lib/api';
+import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, listJoinedGuestsForUser, setGuestBlocked } from '../../lib/api';
 import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
+
+// ⛔ ONE MATCH RULE FOR EVERY PEOPLE-SEARCH ON THIS SCREEN. Four lists use
+// it, so they cannot drift apart. It matches anything a row can DISPLAY: the
+// name from the organiser's contacts, the name the person registered with,
+// any name stored when they were invited, and the number.
+// ⭐ The principle: IF YOU CAN SEE IT, YOU CAN SEARCH IT. A row that shows a
+// name you cannot find by typing it reads as a broken search.
+function matchesPersonSearch(query: string, phone: string, ...names: (string | null | undefined)[]) {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if ((phone ?? '').includes(q)) return true;
+  return names.some(n => (n ?? '').toLowerCase().includes(q));
+}
+
+// One definition so all four boxes look and behave identically.
+function SearchBox({ value, onChange }: { value: string; onChange: (t: string) => void }) {
+  return (
+    <View style={styles.pickerSearchWrap}>
+      <TextInput
+        style={styles.pickerSearch}
+        value={value}
+        onChangeText={onChange}
+        placeholder="Search by name or number"
+        placeholderTextColor="#555"
+        autoCorrect={false}
+      />
+    </View>
+  );
+}
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -53,7 +82,6 @@ export default function EventDetailScreen() {
   const [isClosed, setIsClosed] = useState(params.is_closed === 'true');
   const [findMyPhotos, setFindMyPhotos] = useState(params.find_my_photos === 'true');
   const [settingsUpdating, setSettingsUpdating] = useState(false);
-  const [closedUpdating, setClosedUpdating] = useState(false);
   const [coadmins, setCoadmins] = useState<Coadmin[]>([]);
   const [coadminsLoading, setCoadminsLoading] = useState(true);
   const [addingCoadmin, setAddingCoadmin] = useState(false);
@@ -86,12 +114,24 @@ export default function EventDetailScreen() {
 
   type PickerContact = { name: string; phones: string[] };
   const [showContactPicker, setShowContactPicker] = useState(false);
-  const [contactPickerMode, setContactPickerMode] = useState<'coadmin' | 'guest'>('coadmin');
+  const [showCoadminPicker, setShowCoadminPicker] = useState(false);
+  // ⭐ Its OWN search state, deliberately not `contactSearch`: sharing it
+  // would mean typing in one picker silently filtered the other.
+  const [coadminSearch, setCoadminSearch] = useState('');
+  const [coadminListSearch, setCoadminListSearch] = useState('');
+  const [allowedSearch, setAllowedSearch] = useState('');
+  const [joinedSearch, setJoinedSearch] = useState('');
+  // ⛔ DEFAULTS TO 'guest' SINCE 2026-10-20. 'coadmin' is no longer
+  // displayable — its modals are gone — so starting there would mean a
+  // future mistake produced a button that SILENTLY DID NOTHING. In a public
+  // app that is the worst failure there is: unreportable and
+  // unreproducible. The only reachable value is now the only default.
+  const [contactPickerMode, setContactPickerMode] = useState<'coadmin' | 'guest'>('guest');
   const [contactsList, setContactsList] = useState<PickerContact[]>([]);
   const [contactSearch, setContactSearch] = useState('');
   const [expandedContact, setExpandedContact] = useState<number | null>(null);
   const [showManualInput, setShowManualInput] = useState(false);
-  const [manualInputMode, setManualInputMode] = useState<'coadmin' | 'guest'>('coadmin');
+  const [manualInputMode, setManualInputMode] = useState<'coadmin' | 'guest'>('guest');
   const [manualPhone, setManualPhone] = useState('');
 
   const { requestAppPermission, primingOverlay } = useAppPermission();
@@ -244,18 +284,9 @@ export default function EventDetailScreen() {
     }
   }
 
-  async function handleToggleViewOnly(value: boolean) {
-    const pw = await getOrganiserPassword();
-    if (!pw || !params.organiserPhone) return;
-    setSettingsUpdating(true);
-    const result = await updateEventSettings(params.slug, params.organiserPhone, pw, { viewOnly: value });
-    setSettingsUpdating(false);
-    if (result.error) {
-      showAlert('Error', result.error);
-    } else {
-      setViewOnly(value);
-    }
-  }
+  // ⛔ handleToggleViewOnly WAS REMOVED HERE on 2026-10-20. View-only is
+  // chosen when the event is created and can never change, so there is
+  // nothing to toggle. The settings route refuses the field outright.
 
   async function handleToggleFindMyPhotos(value: boolean) {
     const pw = await getOrganiserPassword();
@@ -270,123 +301,21 @@ export default function EventDetailScreen() {
     }
   }
 
-  async function handleToggleIsClosed(value: boolean) {
-    const pw = await getOrganiserPassword();
-    if (!pw || !params.organiserPhone) return;
-
-    if (value) {
-      // Closing the event — fetch existing joined guests and warn organiser
-      setClosedUpdating(true);
-      let joinedGuests: { name: string; mobile: string }[] = [];
-      try {
-        const res = await listJoinedGuestsForUser(params.slug, params.organiserPhone);
-        joinedGuests = res.guests ?? [];
-      } finally {
-        setClosedUpdating(false);
-      }
-
-      const nonOrgGuests = joinedGuests.filter(g => g.mobile !== params.organiserPhone);
-      if (nonOrgGuests.length > 0) {
-        showAlert(
-          'Close this event?',
-          `${nonOrgGuests.length} guest${nonOrgGuests.length !== 1 ? 's' : ''} have already joined. They will lose access unless added to the allowed list.\n\nAdd them all now?`,
-          [
-            {
-              text: 'No',
-              style: 'destructive',
-              onPress: () => {
-                showAlert(
-                  'Remove all guests?',
-                  `All ${nonOrgGuests.length} guest${nonOrgGuests.length !== 1 ? 's' : ''} will be removed from this event. Their photos will stay. They can rejoin if you reopen the event later. This cannot be undone.`,
-                  [
-                    {
-                      text: 'Yes, remove all',
-                      style: 'destructive',
-                      onPress: async () => {
-                        setClosedUpdating(true);
-                        await Promise.all([
-                          updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: true }),
-                          clearJoinedGuests(params.slug, params.organiserPhone!, pw),
-                          clearAllowedGuests(params.slug, params.organiserPhone!, pw),
-                        ]);
-                        setJoinedGuests(prev => prev.filter(g => g.mobile === params.organiserPhone));
-                        setAllowedGuests([]);
-                        setIsClosed(true);
-                        setClosedUpdating(false);
-                        setShowGuestsPanel(true);
-                      },
-                    },
-                    { text: 'Cancel', style: 'cancel' },
-                  ]
-                );
-              },
-            },
-            {
-              text: 'Yes',
-              onPress: async () => {
-                setClosedUpdating(true);
-                await updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: true });
-                await addAllowedGuests(params.slug, params.organiserPhone!, pw,
-                  joinedGuests.filter(g => g.mobile !== params.organiserPhone).map(g => ({ phone: g.mobile, name: g.name }))
-                );
-                setIsClosed(true);
-                await loadAllowedGuests();
-                setClosedUpdating(false);
-                setShowGuestsPanel(true);
-              },
-            },
-            { text: 'Cancel', style: 'cancel' },
-          ],
-          undefined,
-          true,
-        );
-      } else {
-        setClosedUpdating(true);
-        await updateEventSettings(params.slug, params.organiserPhone, pw, { isClosed: true });
-        setIsClosed(true);
-        setClosedUpdating(false);
-        setShowGuestsPanel(true);
-      }
-    } else {
-      // Reopening the event.
-      // ⛔ This DELETES the event's ENTIRE allowed-guest list server-side: the
-      // settings route clears event_allowed_phones whenever isClosed is false.
-      // It is deliberate ("so stale entries don't persist") but irreversible,
-      // and until 2026-10-12 it happened with no warning at all while CLOSING
-      // had always had a confirmation. The organiser is now told first.
-      //
-      // The count is only quoted when allowedGuests has actually loaded.
-      // Reopening is reachable the moment the screen opens, before the effect
-      // that loads the list has finished, and a stale 0 would have told the
-      // organiser nothing would be lost. Never under-state the damage.
-      const listLoaded = !allowedGuestsLoading;
-      const allowedCount = allowedGuests.length;
-      const listWarning = listLoaded && allowedCount === 0
-        ? ''
-        : listLoaded
-          ? `\n\nYour allowed list of ${allowedCount} guest${allowedCount !== 1 ? 's' : ''} will be deleted. Their photos stay, and anyone already in the event keeps their access. This cannot be undone.`
-          : '\n\nYour allowed list will be deleted. Photos stay, and anyone already in the event keeps their access. This cannot be undone.';
-      showAlert(
-        'Reopen this event?',
-        `Anyone with the event code will be able to join.${listWarning}`,
-        [
-          {
-            text: 'Yes, reopen',
-            style: 'destructive',
-            onPress: async () => {
-              setClosedUpdating(true);
-              await updateEventSettings(params.slug, params.organiserPhone!, pw, { isClosed: false });
-              setIsClosed(false);
-              setClosedUpdating(false);
-            },
-          },
-          { text: 'Cancel', style: 'cancel' },
-        ],
-        undefined,
-        true,
-      );
-    }
-  }
+  // ⛔⛔ handleToggleIsClosed WAS REMOVED HERE on 2026-10-20, and with it the
+  // "Close this event? → Remove all guests?" chain and the reopen branch.
+  //
+  // THE USER'S REASON, in their words: *"a Organiser makes an open event -
+  // then after 2 days makes it private and removes everyone - its not fair to
+  // the users."* The purge deleted every joined record with no undo, which
+  // ALSO deleted a co-admin's record and so made them invisible in Manage
+  // Guests and impossible to block. Freezing the setting removes the whole
+  // class rather than patching it.
+  //
+  // The reopen branch is gone for the same reason: it deleted the entire
+  // allowed-guest list, and `is_closed` can no longer change.
+  // ⚠ `clearJoinedGuests` still EXISTS in the backend and in lib/api, unused.
+  // Deleting a backend route needs a front-end sweep first — deliberately
+  // not done here.
 
   function copyCode() {
     const text = `You're invited to ${params.name}!\n\nEvent Code: ${params.join_code}\nJoin here: https://momentsinframe.com/join/${params.join_code}`;
@@ -524,25 +453,27 @@ export default function EventDetailScreen() {
     setShowContactPicker(true);
   }
 
+  // ⛔ THE CONTACT PICKER IS GUESTS-ONLY NOW. Co-admins are chosen from the
+  // people who have joined, so the 'coadmin' branch here could never run and
+  // was removed on 2026-10-20 with the two modals it fed.
   function handlePickerSelect(phone: string, name: string) {
     setShowContactPicker(false);
-    if (contactPickerMode === 'coadmin') {
-      confirmAddCoadmin(phone, name);
-    } else {
-      confirmAddGuest(phone, name);
-    }
+    confirmAddGuest(phone, name);
   }
 
+  // ⛔ A CO-ADMIN IS CHOSEN FROM THE PEOPLE WHO HAVE ALREADY JOINED —
+  // 2026-10-20, the user's decision. It used to offer contacts or a typed
+  // number, which could give full co-admin powers to someone with no
+  // `event_users` row: they never appeared in Manage Guests, so they could
+  // never be blocked. Picking from joined guests makes "everyone with access
+  // is visible and blockable" true by construction. The backend refuses a
+  // non-member too, so a stale build cannot get round it.
   async function handleAddCoadmin() {
-    showAlert(
-      'Add Co-Admin',
-      'How would you like to add a co-admin?',
-      [
-        { text: 'From contacts', onPress: () => loadContactsForPicker('coadmin') },
-        { text: 'Enter number manually', onPress: () => { setManualInputMode('coadmin'); setManualPhone(''); setShowManualInput(true); } },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
+    // ⚠ Clear the search EVERY time. A leftover term from last time would
+    // show an empty list and read as "this is broken".
+    setCoadminSearch('');
+    setShowCoadminPicker(true);
+    await loadJoinedGuests();
   }
 
   async function confirmAddCoadmin(phone: string, name: string | null) {
@@ -674,6 +605,21 @@ export default function EventDetailScreen() {
     );
   }
 
+  // ⚠ Filtered COPIES only. The real lists keep their own lengths, because
+  // the layout switches on how many guests there ARE, not how many match a
+  // search — filtering to one result must not flip a 300-guest event into the
+  // "single guest" layout.
+  const shownCoadmins = coadmins.filter(ca =>
+    matchesPersonSearch(coadminListSearch, ca.phone, guestContactMap[ca.phone], ca.appName, ca.name));
+  const shownAllowed = allowedGuests.filter(g =>
+    matchesPersonSearch(allowedSearch, g.phone, guestContactMap[g.phone], g.appName, (g as { name?: string }).name));
+  const blockedNotAllowed = joinedGuests.filter(jg =>
+    jg.is_blocked && jg.mobile !== params.organiserPhone && !allowedGuests.some(ag => ag.phone === jg.mobile));
+  const shownBlockedNotAllowed = blockedNotAllowed.filter(jg =>
+    matchesPersonSearch(allowedSearch, jg.mobile, guestContactMap[jg.mobile], jg.name));
+  const shownJoined = joinedGuests.filter(g =>
+    matchesPersonSearch(joinedSearch, g.mobile, guestContactMap[g.mobile], g.name));
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
@@ -751,6 +697,7 @@ export default function EventDetailScreen() {
             <Text style={styles.settingDesc}>
               {isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
             </Text>
+            <Text style={styles.settingLocked}>Chosen when the event was created</Text>
             {isClosed && (
               <TouchableOpacity onPress={() => requestAppPermission('contacts', () => { loadAllowedGuests(); setShowGuestsPanel(true); }, params.organiserPhone)}>
                 <Text style={styles.manageGuestsInline}>
@@ -759,30 +706,33 @@ export default function EventDetailScreen() {
               </TouchableOpacity>
             )}
           </View>
-          {closedUpdating
-            ? <ActivityIndicator color={Colors.accent} />
-            : <Switch
-                value={isClosed}
-                onValueChange={handleToggleIsClosed}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-          }
+          {/* ⛔ Frozen. Shown, not hidden: the organiser must still be able to
+              see what kind of event this is, and a hidden control reads as a
+              missing feature to the next person who opens this file. */}
+          <Switch
+            value={isClosed}
+            disabled
+            trackColor={{ false: '#333', true: Colors.accent }}
+            thumbColor={Colors.white}
+          />
         </View>
         <View style={styles.settingRow}>
           <View style={styles.settingInfo}>
             <Text style={styles.settingLabel}>View only event</Text>
-            <Text style={styles.settingDesc}>Guests can only view and download photos</Text>
+            {/* ⚠ This line used to be STATIC — it read "Guests can only view and
+                download photos" even when the setting was OFF, describing a
+                state that was not active. Fixed 2026-10-20. */}
+            <Text style={styles.settingDesc}>
+              {viewOnly ? 'Guests can only view and download photos' : 'Guests can upload, view and download photos'}
+            </Text>
+            <Text style={styles.settingLocked}>Chosen when the event was created</Text>
           </View>
-          {settingsUpdating
-            ? <ActivityIndicator color={Colors.accent} />
-            : <Switch
-                value={viewOnly}
-                onValueChange={handleToggleViewOnly}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-          }
+          <Switch
+            value={viewOnly}
+            disabled
+            trackColor={{ false: '#333', true: Colors.accent }}
+            thumbColor={Colors.white}
+          />
         </View>
         <View style={styles.settingRow}>
           <View style={styles.settingInfo}>
@@ -903,13 +853,16 @@ export default function EventDetailScreen() {
             </TouchableOpacity>
           </View>
           <Text style={styles.panelDesc}>Co-Admins can delete any photo uploaded by any guest or other Co-Admins but not photos by the Organiser. They join using the event code, just like other guests.</Text>
+          <SearchBox value={coadminListSearch} onChange={setCoadminListSearch} />
           <ScrollView contentContainerStyle={styles.panelScroll}>
             {coadminsLoading ? (
               <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
             ) : coadmins.length === 0 ? (
               <Text style={styles.emptyText}>No co-admins added yet.</Text>
+            ) : shownCoadmins.length === 0 ? (
+              <Text style={styles.emptyText}>No one matches that search.</Text>
             ) : (
-              coadmins.map(ca => {
+              shownCoadmins.map(ca => {
                 const contactName = guestContactMap[ca.phone];
                 const appName = ca.appName ?? null;
                 const displayName = contactName || appName || ca.name || ca.phone;
@@ -940,93 +893,94 @@ export default function EventDetailScreen() {
             </TouchableOpacity>
           </ScrollView>
           {/* Manual Input — inside co-admin panel so it renders on top */}
-          <Modal visible={showManualInput && manualInputMode === 'coadmin'} animationType="fade" transparent onRequestClose={() => setShowManualInput(false)}>
-            <View style={styles.manualOverlay}>
-              <View style={styles.manualCard}>
-                <Text style={styles.manualTitle}>Enter phone number</Text>
-                <TextInput
-                  style={styles.manualInput}
-                  value={manualPhone}
-                  onChangeText={setManualPhone}
-                  keyboardType="phone-pad"
-                  placeholder="e.g. 9876543210"
-                  placeholderTextColor="#555"
-                  autoFocus
-                />
-                <View style={styles.manualBtns}>
-                  <TouchableOpacity style={styles.manualCancel} onPress={() => setShowManualInput(false)}>
-                    <Text style={styles.manualCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.manualAdd, !manualPhone.trim() && { opacity: 0.4 }]}
-                    disabled={!manualPhone.trim()}
-                    onPress={async () => {
-                      const clean = normalizeIndianPhone(manualPhone);
-                      if (!isIndianMobile(clean)) {
-                        showAlert('Invalid number', 'Please enter a valid 10-digit Indian mobile number (starting with 6, 7, 8, or 9).');
-                        return;
-                      }
-                      setShowManualInput(false);
-                      let name: string | null = contactsList.find(c => c.phones.includes(clean))?.name ?? null;
-                      if (!name) {
-                        try {
-                          const { data } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
-                          const match = data.find(c => (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === clean));
-                          if (match?.name) name = match.name;
-                        } catch {}
-                      }
-                      confirmAddCoadmin(clean, name);
-                    }}
-                  >
-                    <Text style={styles.manualAddText}>Add</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-              {alertOverlay}
-            </View>
-          </Modal>
-          {/* Contact Picker — nested inside co-admin modal so iOS can stack it */}
-          <Modal visible={showContactPicker && contactPickerMode === 'coadmin'} animationType="slide" onRequestClose={() => setShowContactPicker(false)}>
+          {/* ⛔ TWO MODALS WERE REMOVED HERE on 2026-10-20: the co-admin
+              "Enter number manually" dialog and the co-admin contact picker.
+              Both became unreachable when Add Co-Admin started choosing from
+              the people who have JOINED — nothing set their mode to 'coadmin'
+              any more, so neither could ever render. Verified by grep: zero
+              call sites. The GUEST versions of both are alive and well in the
+              Allowed Guests panel; only the co-admin twins went. */}
+
+          {/* Co-Admin picker — only people who have actually joined.
+              ⛔ IT MUST LIVE INSIDE THIS PANEL'S OWN MODAL, NOT BESIDE IT.
+              React Native will not present a Modal over an already-open
+              SIBLING Modal: it mounts underneath and appears only once the
+              first is dismissed. Shipped that way on 2026-10-20 and the
+              user found it immediately — "nothing happens until I close the
+              Co-admins panel". The two modals above are nested for the same
+              reason; the convention was already here. ⚠ No typecheck, hook
+              check or string audit can see this. */}
+          <Modal visible={showCoadminPicker} animationType="slide" onRequestClose={() => setShowCoadminPicker(false)}>
             <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
               <View style={styles.panelHeader}>
-                <Text style={styles.panelTitle}>Select Contact</Text>
-                <TouchableOpacity onPress={() => setShowContactPicker(false)}>
+                <Text style={styles.panelTitle}>Add Co-Admin</Text>
+                <TouchableOpacity onPress={() => setShowCoadminPicker(false)}>
                   <Text style={styles.panelClose}>×</Text>
                 </TouchableOpacity>
               </View>
+              <Text style={styles.panelDesc}>Choose someone who has already joined this event. A co-admin can manage photos, so they must be in the event first.</Text>
+          {/* ⭐ SEARCH IS NOT OPTIONAL AT SCALE. With one test guest a plain
+                  list looks fine; at a 300-guest wedding an organiser would scroll
+                  300 names to find one person — and the contact picker this
+                  replaced already had search. It searches ONLY the people who have
+                  joined this event. */}
               <View style={styles.pickerSearchWrap}>
                 <TextInput
                   style={styles.pickerSearch}
-                  value={contactSearch}
-                  onChangeText={t => { setContactSearch(t); setExpandedContact(null); }}
-                  placeholder="Search by name…"
+                  value={coadminSearch}
+                  onChangeText={setCoadminSearch}
+                  placeholder="Search by name or number"
                   placeholderTextColor="#555"
                   autoCorrect={false}
                 />
               </View>
               <ScrollView contentContainerStyle={styles.panelScroll}>
-                {contactsList
-                  .filter(c => c.name.toLowerCase().includes(contactSearch.toLowerCase()))
-                  .map((contact, i) => (
-                    <View key={i} style={styles.pickerContact}>
-                      <TouchableOpacity
-                        style={styles.pickerNameRow}
-                        onPress={() => setExpandedContact(expandedContact === i ? null : i)}
-                      >
-                        <Text style={styles.pickerName}>{contact.name || contact.phones[0]}</Text>
-                        <Text style={styles.pickerChevron}>{expandedContact === i ? '▲' : '▼'}</Text>
-                      </TouchableOpacity>
-                      {expandedContact === i && contact.phones.map((phone, j) => (
-                        <TouchableOpacity key={j} style={styles.pickerPhoneRow} onPress={() => handlePickerSelect(phone, contact.name)}>
-                          <Text style={styles.pickerPhone}>{phone}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  ))}
+                {joinedGuestsLoading ? (
+                  <ActivityIndicator color={Colors.accent} style={{ marginTop: 24 }} />
+                ) : (() => {
+                  const eligible = joinedGuests.filter(g =>
+                    g.role === 'user' && !g.is_blocked && g.mobile !== params.organiserPhone);
+                  const q = coadminSearch.trim().toLowerCase();
+                  // Matches anything shown in the row: the name they registered
+                  // with, the name in YOUR contacts, and the number. Typing what
+                  // you can see on screen must find it.
+                  const shown = q
+                    ? eligible.filter(g =>
+                        (g.name ?? '').toLowerCase().includes(q)
+                        || (guestContactMap[g.mobile] ?? '').toLowerCase().includes(q)
+                        || g.mobile.includes(q))
+                    : eligible;
+                  if (eligible.length === 0) {
+                    return <Text style={styles.panelEmpty}>Nobody is available. Guests need to join the event before they can be made a co-admin.</Text>;
+                  }
+              // ⛔ A SECOND, DIFFERENT EMPTY STATE. Without it, searching a name
+                  // that is not there would say "guests need to join" — which is
+                  // FALSE, since they have joined, and sends the organiser to fix
+                  // the wrong thing.
+                  if (shown.length === 0) {
+                    return <Text style={styles.panelEmpty}>No one matches that search.</Text>;
+                  }
+                  return shown.map(g => (
+                    <TouchableOpacity
+                      key={g.mobile}
+                      style={styles.pickerContact}
+                      onPress={() => { setShowCoadminPicker(false); confirmAddCoadmin(g.mobile, g.name); }}
+                    >
+                      {/* ⭐ The same three lines, in the same order, as the Manage
+                          Guests list: app name, then the contact-book name, then
+                          the number. The two screens sit next to each other and
+                          must not describe the same person differently. */}
+                      <Text style={styles.pickerName}>{g.name || g.mobile}</Text>
+                      <Text style={styles.pickerPhone}>{guestContactMap[g.mobile] || 'Number not in contacts'}</Text>
+                      <Text style={styles.pickerPhone}>{g.mobile}</Text>
+                    </TouchableOpacity>
+                  ));
+                })()}
               </ScrollView>
               {alertOverlay}
             </View>
           </Modal>
+
           {alertOverlay}
         </View>
       </Modal>
@@ -1042,6 +996,7 @@ export default function EventDetailScreen() {
               </TouchableOpacity>
             </View>
             <Text style={styles.panelDesc}>Only guests on this list can join the event. Add guests by their phone number and they'll be able to enter the event code and join.</Text>
+            <SearchBox value={allowedSearch} onChange={setAllowedSearch} />
             <ScrollView contentContainerStyle={styles.panelScroll}>
               {allowedGuestsLoading ? (
                 <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
@@ -1056,7 +1011,9 @@ export default function EventDetailScreen() {
                   </View>
                   {allowedGuests.length === 0
                     ? <Text style={[styles.emptyText, { marginTop: 12 }]}>No guests added yet. Add guests to let them in.</Text>
-                    : allowedGuests.map(g => {
+                    : shownAllowed.length === 0 && shownBlockedNotAllowed.length === 0
+                    ? <Text style={[styles.emptyText, { marginTop: 12 }]}>No one matches that search.</Text>
+                    : shownAllowed.map(g => {
                         const appName = g.appName ?? null;
                         const contactName = guestContactMap[g.phone] ?? null;
                         return (
@@ -1077,8 +1034,7 @@ export default function EventDetailScreen() {
                       })
                   }
                   {/* Blocked guests not in allowed list */}
-                  {joinedGuests
-                    .filter(jg => jg.is_blocked && jg.mobile !== params.organiserPhone && !allowedGuests.some(ag => ag.phone === jg.mobile))
+                  {shownBlockedNotAllowed
                     .map(jg => {
                       const contactName = guestContactMap[jg.mobile] ?? null;
                       return (
@@ -1258,6 +1214,7 @@ export default function EventDetailScreen() {
             </TouchableOpacity>
           </View>
           <Text style={styles.panelDesc}>Block a guest to remove their access to this event. They will not be able to rejoin. You can unblock them at any time.</Text>
+          <SearchBox value={joinedSearch} onChange={setJoinedSearch} />
           <ScrollView contentContainerStyle={styles.panelScroll}>
             {joinedGuestsLoading ? (
               <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
@@ -1289,8 +1246,10 @@ export default function EventDetailScreen() {
                 })}
                 <Text style={[styles.emptyText, { marginTop: 12 }]}>No guests have joined this event yet.</Text>
               </>
+            ) : shownJoined.length === 0 ? (
+              <Text style={[styles.emptyText, { marginTop: 12 }]}>No one matches that search.</Text>
             ) : (
-              joinedGuests.map(guest => {
+              shownJoined.map(guest => {
                 const contactName = guestContactMap[guest.mobile] ?? null;
                 const appName = guest.name || guest.mobile;
                 return (
@@ -1379,6 +1338,7 @@ const styles = StyleSheet.create({
   btn: { flex: 1, backgroundColor: '#252525', borderWidth: 0.5, borderColor: '#333', borderRadius: 8, padding: 11, alignItems: 'center' },
   btnText: { fontSize: 13, fontWeight: '700', color: '#CCC' },
   emptyText: { fontSize: 13, color: '#555', marginBottom: 10 },
+  panelEmpty: { fontSize: 13, color: '#555', lineHeight: 20, paddingHorizontal: 4 },
   manageGuestsInline: { fontSize: 13, fontWeight: '600', color: Colors.accent, marginTop: 6 },
   settingRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -1388,6 +1348,7 @@ const styles = StyleSheet.create({
   settingInfo: { flex: 1, marginRight: 12 },
   settingLabel: { fontSize: 14, fontWeight: '700', color: Colors.white },
   settingDesc: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  settingLocked: { fontSize: 11, color: '#555', marginTop: 4, fontStyle: 'italic' },
   coadminRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     backgroundColor: '#1A1A1A', borderRadius: 8, padding: 12, marginBottom: 8,

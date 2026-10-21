@@ -671,7 +671,11 @@ export default function EventDetailScreen() {
           <TouchableOpacity style={styles.btn} onPress={handleExtend}>
             <Text style={styles.btnText}>Extend expiry</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, { borderColor: Colors.accent }]} onPress={() => requestAppPermission('contacts', () => { loadCoadmins(); setShowCoadminPanel(true); }, params.organiserPhone)}>
+          <TouchableOpacity style={[styles.btn, { borderColor: Colors.accent }]} // ⚠ `loadJoinedGuests` is needed for the BLOCKED badge on each row:
+            // blocking lives in `event_users`, which the co-admin list does
+            // not carry. Without it the panel renders before the status is
+            // known and no badge appears.
+            onPress={() => requestAppPermission('contacts', () => { loadCoadmins(); loadJoinedGuests(); setShowCoadminPanel(true); }, params.organiserPhone)}>
             <Text style={[styles.btnText, { color: Colors.accent }]}>+ Co-Admins</Text>
           </TouchableOpacity>
         </View>
@@ -869,12 +873,32 @@ export default function EventDetailScreen() {
                 const appName = ca.appName ?? null;
                 const displayName = contactName || appName || ca.name || ca.phone;
                 const subName = contactName && appName && appName !== contactName ? appName : null;
+                // ⛔ BLOCKED STATUS COMES FROM `joinedGuests`, NOT FROM THE
+                // CO-ADMIN LIST. `event_coadmins` has no `is_blocked` column —
+                // blocking lives in `event_users` — so this panel could not tell
+                // an active co-admin from a blocked one, and showed a plain row
+                // with a Remove button either way. The user spotted it on device
+                // (2026-10-21) while a blocked co-admin was on screen.
+                // ⚠ Cross-referencing here keeps it an APP-ONLY fix: no backend
+                // change, so no deploy had to be coordinated with this OTA.
+                // ⚠ It needs `loadJoinedGuests()` to have run — it is now called
+                // when this panel opens, beside `loadCoadmins()`.
+                // ⚠ Absent from `joinedGuests` means UNKNOWN, so no badge: an old
+                // co-admin promoted before joining was required has no
+                // `event_users` row at all. Failing to "not blocked" is right —
+                // a false BLOCKED would be worse than a missing one.
+                const blocked = joinedGuests.some(g => g.mobile === ca.phone && g.is_blocked);
                 return (
                   <View key={ca.phone} style={styles.coadminRow}>
                     <View style={styles.coadminInfo}>
-                      <Text style={styles.coadminName}>{displayName}</Text>
-                      {subName ? <Text style={styles.coadminPhone}>{subName}</Text> : null}
-                      <Text style={styles.coadminPhone}>{ca.phone}</Text>
+                      <Text style={[styles.coadminName, blocked && styles.blockedText]}>{displayName}</Text>
+                      {subName ? <Text style={[styles.coadminPhone, blocked && styles.blockedText]}>{subName}</Text> : null}
+                      {/* Same shape as Manage Guests and the picker: the badge
+                          follows the NUMBER. */}
+                      <View style={styles.pickerPhoneLine}>
+                        <Text style={[styles.coadminPhone, blocked && styles.blockedText]}>{ca.phone}</Text>
+                        {blocked && <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
+                      </View>
                     </View>
                     <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveCoadmin(ca.phone, ca.name)}>
                       <Text style={styles.removeBtnText}>Remove</Text>
@@ -940,8 +964,26 @@ export default function EventDetailScreen() {
                 {joinedGuestsLoading ? (
                   <ActivityIndicator color={Colors.accent} style={{ marginTop: 24 }} />
                 ) : (() => {
-                  const eligible = joinedGuests.filter(g =>
-                    g.role === 'user' && !g.is_blocked && g.mobile !== params.organiserPhone);
+                  // ⛔ EVERYONE WHO JOINED IS LISTED, MINUS THE ORGANISER.
+                  // Status is SHOWN with a badge, never filtered out — see the
+                  // rows below. Until 2026-10-21 this also dropped co-admins
+                  // (`role === 'user'`) and blocked guests, and that was wrong
+                  // in two ways the user found on device:
+                  //   1. Searching an existing co-admin by name said "No one
+                  //      matches that search" — which reads as "they are not in
+                  //      this event" about someone who is, and is already a
+                  //      co-admin. At 300 guests the organiser SEARCHES rather
+                  //      than scrolls, so that lie is all they ever see.
+                  //   2. Add the only joined guest as a co-admin and the list
+                  //      emptied, firing "Guests need to join the event" at an
+                  //      organiser whose guest HAD joined. Blocked guests did
+                  //      the same.
+                  // ⭐ Listing everyone does not just fix the message, it makes
+                  // the whole class impossible: if nobody is hidden, the ONLY
+                  // way this list can be empty is that nobody joined — so the
+                  // empty state below is true again, always, and no third
+                  // message is ever needed.
+                  const eligible = joinedGuests.filter(g => g.mobile !== params.organiserPhone);
                   const q = coadminSearch.trim().toLowerCase();
                   // Matches anything shown in the row: the name they registered
                   // with, the name in YOUR contacts, and the number. Typing what
@@ -952,6 +994,9 @@ export default function EventDetailScreen() {
                         || (guestContactMap[g.mobile] ?? '').toLowerCase().includes(q)
                         || g.mobile.includes(q))
                     : eligible;
+                  // ⭐ Now unambiguous: nothing is filtered, so an empty list
+                  // can ONLY mean nobody has joined. This sentence was false
+                  // twice before (see above).
                   if (eligible.length === 0) {
                     return <Text style={styles.panelEmpty}>Nobody is available. Guests need to join the event before they can be made a co-admin.</Text>;
                   }
@@ -962,21 +1007,52 @@ export default function EventDetailScreen() {
                   if (shown.length === 0) {
                     return <Text style={styles.panelEmpty}>No one matches that search.</Text>;
                   }
-                  return shown.map(g => (
+                  return shown.map(g => {
+                    // Only a plain, unblocked guest can be promoted. Everyone
+                    // else stays visible and carries the badge that says why.
+                    const pickable = g.role === 'user' && !g.is_blocked;
+                    return (
                     <TouchableOpacity
                       key={g.mobile}
                       style={styles.pickerContact}
+                      disabled={!pickable}
+                      // ⚠ No press highlight on a row that does nothing, and no
+                      // alert on tap either: the badge already says why, and a
+                      // popup repeating it is noise.
+                      activeOpacity={pickable ? 0.2 : 1}
                       onPress={() => { setShowCoadminPicker(false); confirmAddCoadmin(g.mobile, g.name); }}
                     >
-                      {/* ⭐ The same three lines, in the same order, as the Manage
-                          Guests list: app name, then the contact-book name, then
-                          the number. The two screens sit next to each other and
-                          must not describe the same person differently. */}
-                      <Text style={styles.pickerName}>{g.name || g.mobile}</Text>
-                      <Text style={styles.pickerPhone}>{guestContactMap[g.mobile] || 'Number not in contacts'}</Text>
-                      <Text style={styles.pickerPhone}>{g.mobile}</Text>
+                      <View style={styles.pickerBadgeRow}>
+                        {/* ⭐ THE SAME THREE LINES AS MANAGE GUESTS, IN THE SAME
+                            ORDER, DIMMED THE SAME WAY, WITH "· BLOCKED" IN THE
+                            SAME PLACE — after the NUMBER on the third line, not
+                            off to the right. The two screens sit next to each
+                            other and must not describe the same person
+                            differently. The user compared them side by side on
+                            device (2026-10-21) and the badge was in the wrong
+                            place here.
+                            ⚠ DIMMING MEANS EXACTLY ONE THING: BLOCKED. It briefly
+                            meant "cannot be picked" here, so a co-admin looked
+                            dimmed too — which reads as "blocked" on the screen
+                            next door. A co-admin now renders at full strength and
+                            the badge alone says why the row does nothing. */}
+                        <View style={styles.pickerBadgeText}>
+                          <Text style={[styles.pickerName, g.is_blocked && styles.blockedText]}>{g.name || g.mobile}</Text>
+                          <Text style={[styles.pickerPhone, g.is_blocked && styles.blockedText]}>{guestContactMap[g.mobile] || 'Number not in contacts'}</Text>
+                          <View style={styles.pickerPhoneLine}>
+                            <Text style={[styles.pickerPhone, g.is_blocked && styles.blockedText]}>{g.mobile}</Text>
+                            {g.is_blocked && <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
+                          </View>
+                        </View>
+                        {/* ⭐ A blocked co-admin shows BOTH markers — the badge here
+                            and "· BLOCKED" on the number line — because either one
+                            alone hides half the reason they cannot be picked.
+                            Blocking a co-admin became possible in 5823500. */}
+                        {g.role === 'coadmin' && <Text style={styles.coadminBadge}>Co-Admin</Text>}
+                      </View>
                     </TouchableOpacity>
-                  ));
+                    );
+                  });
                 })()}
               </ScrollView>
               {alertOverlay}
@@ -1389,6 +1465,9 @@ const styles = StyleSheet.create({
   pickerSearchWrap: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#222' },
   pickerSearch: { backgroundColor: '#1E1E1E', borderRadius: 8, padding: 10, fontSize: 14, color: Colors.white, borderWidth: 0.5, borderColor: '#333' },
   pickerContact: { borderBottomWidth: 0.5, borderBottomColor: '#1E1E1E' },
+  pickerBadgeRow: { flexDirection: 'row', alignItems: 'center', paddingRight: 4 },
+  pickerBadgeText: { flex: 1 },
+  pickerPhoneLine: { flexDirection: 'row', alignItems: 'center' },
   pickerNameRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 4 },
   pickerName: { fontSize: 15, fontWeight: '700', color: Colors.white, flex: 1 },
   pickerChevron: { fontSize: 11, color: Colors.textMuted, marginLeft: 8 },

@@ -356,9 +356,11 @@ export async function clearAllowedGuests(slug: string, organiserPhone: string, o
   return del(`/api/native/events/${slug}/allowed-guests`, { organiserPhone, organiserPassword });
 }
 
-export async function clearJoinedGuests(slug: string, organiserPhone: string, organiserPassword: string) {
-  return del(`/api/native/events/${slug}/joined-guests`, { organiserPhone, organiserPassword });
-}
+// ⛔ `clearJoinedGuests` was removed on 2026-10-21 together with the backend
+// handler it called. It purged every joined guest except the organiser, for a
+// "close the event and remove everyone" option that was itself deleted on
+// 2026-10-20 when invite-only became a creation-only setting. Do not add it
+// back: removing guests should be per guest, through block/unblock.
 
 export async function setGuestBlocked(slug: string, mobile: string, isBlocked: boolean, organiserPhone: string, organiserPassword: string): Promise<{ success?: boolean; error?: string }> {
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/guests/${mobile}`, {

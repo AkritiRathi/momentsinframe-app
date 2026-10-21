@@ -313,9 +313,11 @@ export default function EventDetailScreen() {
   //
   // The reopen branch is gone for the same reason: it deleted the entire
   // allowed-guest list, and `is_closed` can no longer change.
-  // ⚠ `clearJoinedGuests` still EXISTS in the backend and in lib/api, unused.
-  // Deleting a backend route needs a front-end sweep first — deliberately
-  // not done here.
+  // ✅ The purge is now gone end to end (2026-10-21): the backend DELETE
+  // handler and `clearJoinedGuests` in lib/api were both removed after a
+  // front-end sweep of both repos found no callers. It also held the last
+  // unsafe `owner_phone &&` guard, which skipped the ownership check for an
+  // event with a NULL owner.
 
   function copyCode() {
     const text = `You're invited to ${params.name}!\n\nEvent Code: ${params.join_code}\nJoin here: https://momentsinframe.com/join/${params.join_code}`;

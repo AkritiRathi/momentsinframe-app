@@ -115,7 +115,7 @@ export default function HomeScreen() {
   function showDeleteConfirmation() {
     showAlert(
       'Delete Account',
-      'You will be removed from all events, co-admin roles, and organiser access. Your photos will remain but show as Unknown User. This cannot be undone.',
+      'You will be removed from all events, admin roles, and organiser access. Your photos will remain but show as Unknown User. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -213,7 +213,7 @@ export default function HomeScreen() {
                 setTimeout(() => {
                   showAlert(
                     'Log out?',
-                    'You will be removed from all events you have joined, including any co-admin roles. Your uploaded photos will remain with your name. If you log in again with the same number, you can rejoin open events and manage your photos.',
+                    'You will be removed from all events you have joined, including any admin roles. Your uploaded photos will remain with your name. If you log in again with the same number, you can rejoin open events and manage your photos.',
                     [
                       { text: 'Cancel' },
                       {

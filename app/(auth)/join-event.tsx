@@ -268,7 +268,7 @@ export default function JoinEventScreen() {
     // event, which registers them in `event_users` — so the label becomes
     // "Guest" by itself on the next load. Nothing clears it manually.
     const roleLabel = item.isOrganiser ? 'Organiser'
-      : isCoadminCard ? 'Co-Admin'
+      : isCoadminCard ? 'Admin'
       : item.invited ? 'Invited' : 'Guest';
     const canOpen = !expired || item.isOrganiser || isCoadminCard;
     return (

@@ -211,7 +211,7 @@ export default function ManageGuestsScreen() {
                   </View>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  {guest.role === 'coadmin' && <Text style={styles.coadminBadge}>Co-Admin</Text>}
+                  {guest.role === 'coadmin' && <Text style={styles.coadminBadge}>Admin</Text>}
                   {guest.role !== 'organiser' && guest.mobile !== params.userMobile && (params.viewerRole === 'organiser' || guest.role === 'user') && (
                     togglingGuest === guest.mobile ? (
                       <ActivityIndicator size="small" color={Colors.accent} />

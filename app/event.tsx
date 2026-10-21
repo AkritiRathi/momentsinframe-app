@@ -228,7 +228,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
               <Text style={styles.deleteNote}>You can only delete photos that you have uploaded.</Text>
             )}
             {isCoadmin && !myUploadsFilter && (
-              <Text style={styles.deleteNote}>You can delete any guest's photos, but not photos uploaded by the Organiser or other Co-Admins.</Text>
+              <Text style={styles.deleteNote}>You can delete any guest's photos, but not photos uploaded by the Organiser or other Admins.</Text>
             )}
           </View>
         )}
@@ -726,7 +726,7 @@ export default function EventScreen() {
 
   const [userRole, setUserRole] = useState(params.role ?? '');
   const isAdmin = userRole === 'organiser' || userRole === 'coadmin';
-  const adminLabel = userRole === 'organiser' ? 'Organiser' : userRole === 'coadmin' ? 'Co-Admin' : 'Admin';
+  const adminLabel = userRole === 'organiser' ? 'Organiser' : userRole === 'coadmin' ? 'Admin' : 'Admin';
   const [allowGuestDelete, setAllowGuestDelete] = useState(params.allowGuestDelete === 'true');
   const [viewOnly, setViewOnly] = useState(params.viewOnly === 'true');
   const [expiresAt, setExpiresAt] = useState(params.expiresAt ?? '');
@@ -2959,7 +2959,7 @@ export default function EventScreen() {
             <Text style={styles.emptyText}>No photos to delete.</Text>
             <Text style={styles.emptySub}>
               {isCoadmin
-                ? "All photos here were uploaded by the Organiser, which Co-Admins cannot delete."
+                ? "All photos here were uploaded by the Organiser, which Admins cannot delete."
                 : "You can only delete photos you uploaded. You haven't uploaded any photos to this event yet."}
             </Text>
           </View>

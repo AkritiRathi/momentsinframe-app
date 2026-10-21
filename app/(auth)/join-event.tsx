@@ -10,7 +10,8 @@ import { useState, useEffect } from 'react';
 import { joinEvent, joinEventUser, checkAdminStatus, listEvents, listMyEvents, checkEventExists } from '../../lib/api';
 import {
   saveLastEventCode, getLastEventCode, getDeviceId, saveEventUserId, getUserProfile,
-  saveJoinedEvent, getJoinedEvents, removeJoinedEvent, JoinedEventEntry,
+  saveJoinedEvent, saveJoinedEvents, getJoinedEvents, removeJoinedEvent,
+  removeJoinedEvents, JoinedEventEntry,
 } from '../../lib/storage';
 import { getOrganiserPassword } from '../../lib/auth';
 import { Colors } from '../../constants/colors';
@@ -54,7 +55,10 @@ export default function JoinEventScreen() {
       try {
         const mine = await listMyEvents();
         if (Array.isArray(mine?.events)) {
-          await Promise.all(mine.events.map((ev: any) => saveJoinedEvent({
+          // ⛔ ONE batched write, never a write per event. Concurrent
+          // read-modify-writes lost events: the server returned two and one
+          // survived, which is how an INVITED event could never appear.
+          await saveJoinedEvents(mine.events.map((ev: any) => ({
             slug: ev.slug,
             name: ev.name,
             expiresAt: ev.expires_at,
@@ -70,7 +74,7 @@ export default function JoinEventScreen() {
           // removed, or the event deleted.
           const live = new Set(mine.events.map((ev: any) => ev.slug));
           const cached = await getJoinedEvents();
-          await Promise.all(cached.filter(e => !live.has(e.slug)).map(e => removeJoinedEvent(e.slug)));
+          await removeJoinedEvents(cached.filter(e => !live.has(e.slug)).map(e => e.slug));
         }
         // A 401 (no valid token) leaves the cached list alone.
       } catch { /* offline — show whatever is cached */ }
@@ -81,7 +85,7 @@ export default function JoinEventScreen() {
         try {
           const result = await listEvents(profile.mobile, pw);
           if (result.events) {
-            await Promise.all(result.events.map((ev: any) => saveJoinedEvent({
+            await saveJoinedEvents(result.events.map((ev: any) => ({
               slug: ev.slug,
               name: ev.name,
               expiresAt: ev.expires_at,
@@ -94,9 +98,9 @@ export default function JoinEventScreen() {
             // Remove cached organiser events that no longer exist on server (deleted)
             const serverSlugs = new Set(result.events.map((ev: any) => ev.slug));
             const cached = await getJoinedEvents();
-            await Promise.all(cached.filter(e => e.isOrganiser && !serverSlugs.has(e.slug)).map(e => removeJoinedEvent(e.slug)));
+            await removeJoinedEvents(cached.filter(e => e.isOrganiser && !serverSlugs.has(e.slug)).map(e => e.slug));
           }
-        } catch { /* silent — show whatever is cached */ }
+        } catch { /* offline — show whatever is cached */ }
       }
       setJoinedEvents(await getJoinedEvents());
     }
@@ -321,15 +325,19 @@ export default function JoinEventScreen() {
     setCheckingEvents(true);
     const profile = await getUserProfile();
     const guestEvents = visibleEvents.filter(e => !e.isOrganiser);
-    await Promise.all(guestEvents.map(async (e) => {
+    // ⭐ The NETWORK calls still run in parallel — that is the slow part and
+    // it is safe. Only the CACHE WRITES are collected and applied once, which
+    // is what the race needed. Same wall-clock, no lost events.
+    const checks = await Promise.all(guestEvents.map(async (e) => {
       const exists = await checkEventExists(e.slug);
-      if (!exists) { await removeJoinedEvent(e.slug); return; }
-      if (profile?.mobile) {
-        const adminCheck = await checkAdminStatus(e.slug, profile.mobile);
-        const freshRole = adminCheck.role ?? 'user';
-        await saveJoinedEvent({ ...e, role: freshRole, isOrganiser: e.isOrganiser || freshRole === 'organiser' });
-      }
+      if (!exists) return { remove: e.slug };
+      if (!profile?.mobile) return {};
+      const adminCheck = await checkAdminStatus(e.slug, profile.mobile);
+      const freshRole = adminCheck.role ?? 'user';
+      return { save: { ...e, role: freshRole, isOrganiser: e.isOrganiser || freshRole === 'organiser' } };
     }));
+    await removeJoinedEvents(checks.map(c => c.remove).filter(Boolean) as string[]);
+    await saveJoinedEvents(checks.map(c => c.save).filter(Boolean) as JoinedEventEntry[]);
     setJoinedEvents(await getJoinedEvents());
     setCheckingEvents(false);
     setEventsModalVisible(true);

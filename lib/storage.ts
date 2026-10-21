@@ -164,6 +164,40 @@ export async function getJoinedEvents(): Promise<JoinedEventEntry[]> {
   } catch { return []; }
 }
 
+// ⛔ THE LIST IS READ-MODIFY-WRITE, SO NEVER WRITE IT CONCURRENTLY.
+// Until 2026-10-22, five places did `Promise.all(events.map(saveJoinedEvent))`.
+// Every writer read the SAME starting list, each built its own version, and
+// the last to finish overwrote the others. The server returned two events and
+// one survived — proven on device: "server returned 2 … cached: 1".
+// ⚠ It stayed hidden for months because every other event is ALSO in the
+// cache from joining it, so the race just rewrote what was already there.
+// An INVITED event exists only on the server, so it was the first thing the
+// race could actually destroy.
+// ⭐ These two read once, merge everything, and write once. The fault is not
+// avoided, it is unrepresentable — which is what matters at 300 guests.
+export async function saveJoinedEvents(entries: JoinedEventEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+  try {
+    const existing = await getJoinedEvents();
+    const incoming = new Set(entries.map(e => e.slug));
+    const merged = [
+      ...entries.map(e => ({ ...e, role: e.isOrganiser ? 'organiser' : (e.role ?? 'user') })),
+      ...existing.filter(e => !incoming.has(e.slug)),
+    ].slice(0, MAX_JOINED_EVENTS);
+    await AsyncStorage.setItem(JOINED_EVENTS_KEY, JSON.stringify(merged));
+  } catch {}
+}
+
+export async function removeJoinedEvents(slugs: string[]): Promise<void> {
+  if (slugs.length === 0) return;
+  try {
+    const gone = new Set(slugs);
+    const existing = await getJoinedEvents();
+    await AsyncStorage.setItem(
+      JOINED_EVENTS_KEY, JSON.stringify(existing.filter(e => !gone.has(e.slug))));
+  } catch {}
+}
+
 export async function removeJoinedEvent(slug: string): Promise<void> {
   try {
     const existing = await getJoinedEvents();

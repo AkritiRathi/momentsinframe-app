@@ -138,6 +138,9 @@ export type JoinedEventEntry = {
   isOrganiser?: boolean;
   ownerPhone?: string;
   role?: string;
+  // On the event's allowed list but not yet entered. Computed by the server
+  // on every load, never persisted as state — see my-events.
+  invited?: boolean;
 };
 
 const JOINED_EVENTS_KEY = 'joined_events_list';

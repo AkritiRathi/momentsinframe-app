@@ -64,6 +64,7 @@ export default function JoinEventScreen() {
             viewOnly: ev.view_only ?? false,
             isOrganiser: ev.role === 'organiser',
             role: ev.role,
+            invited: ev.invited ?? false,
           })));
           // Cached but not returned means it is no longer ours — co-admin
           // removed, or the event deleted.
@@ -262,7 +263,13 @@ export default function JoinEventScreen() {
   function renderEventCard(item: JoinedEventEntry) {
     const expired = isExpired(item.expiresAt);
     const isCoadminCard = item.role === 'coadmin';
-    const roleLabel = item.isOrganiser ? 'Organiser' : isCoadminCard ? 'Co-Admin' : 'Guest';
+    // ⭐ "Invited" means the organiser added this number to an invite-only
+    // event and the person has not opened it yet. Tapping the card enters the
+    // event, which registers them in `event_users` — so the label becomes
+    // "Guest" by itself on the next load. Nothing clears it manually.
+    const roleLabel = item.isOrganiser ? 'Organiser'
+      : isCoadminCard ? 'Co-Admin'
+      : item.invited ? 'Invited' : 'Guest';
     const canOpen = !expired || item.isOrganiser || isCoadminCard;
     return (
       <TouchableOpacity
@@ -278,12 +285,23 @@ export default function JoinEventScreen() {
         activeOpacity={canOpen ? 0.7 : 1}
       >
         <View style={styles.eventCardLeft}>
-          <Text style={[styles.eventName, expired && !canOpen && styles.eventNameExpired]} numberOfLines={1}>
-            {item.name}
-          </Text>
+          {/* ⚠ A ROW, not one Text, so a long event name TRUNCATES and the
+              INVITED tag always stays visible. Putting the tag inside the name
+              Text would let `numberOfLines={1}` cut the tag off instead. */}
+          <View style={styles.eventNameRow}>
+            <Text style={[styles.eventName, expired && !canOpen && styles.eventNameExpired]} numberOfLines={1}>
+              {item.name}
+            </Text>
+            {item.invited && <Text style={styles.invitedTag}> · INVITED</Text>}
+          </View>
           <Text style={styles.eventExpiry}>Event Code: {item.joinCode}</Text>
           <Text style={styles.eventExpiry}>
-            {!item.isOrganiser && item.role !== 'coadmin'
+            {/* ⛔ NO ROLE WORD WHEN INVITED. The status already sits beside the
+                name, and the alternative would be calling them a "Guest" —
+                which they are not until they open the event. */}
+            {item.invited
+              ? (expired ? 'Expired' : `expires ${formatExpiry(item.expiresAt)}`)
+              : !item.isOrganiser && item.role !== 'coadmin'
               ? `${roleLabel} · ${expired ? 'Expired' : `expires ${formatExpiry(item.expiresAt)}`}`
               : <><Text style={styles.organiserPrefix}>{roleLabel}</Text>{` · ${expired ? 'Expired' : `expires ${formatExpiry(item.expiresAt)}`}`}</>
             }
@@ -545,7 +563,13 @@ const styles = StyleSheet.create({
   },
   eventCardExpired: { opacity: 0.45 },
   eventCardLeft: { flex: 1 },
-  eventName: { fontSize: 15, fontWeight: '700', color: Colors.white, marginBottom: 3 },
+  eventNameRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3 },
+  // ⚠ flexShrink lets the NAME give way, never the tag.
+  eventName: { fontSize: 15, fontWeight: '700', color: Colors.white, flexShrink: 1 },
+  // ⭐ GREEN, and deliberately not the accent gold: gold already means
+  // Organiser and Co-Admin in this very list, and a third gold label would
+  // blur into them. Red is 'blocked' everywhere else, so it is out too.
+  invitedTag: { fontSize: 11, fontWeight: '800', color: Colors.success },
   eventNameExpired: { color: Colors.textMuted },
   eventExpiry: { fontSize: 12, color: Colors.textMuted },
   eventArrow: { fontSize: 22, color: Colors.accent, marginLeft: 8 },

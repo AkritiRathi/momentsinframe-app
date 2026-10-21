@@ -850,7 +850,31 @@ export default function EventDetailScreen() {
       </Modal>
 
       {/* Co-Admin Panel */}
-      <Modal visible={showCoadminPanel} animationType="slide" onRequestClose={() => setShowCoadminPanel(false)}>
+      {/* ⛔ MOUNTED ONLY WHILE OPEN — `{flag && <Modal visible>}`, NOT
+          `<Modal visible={flag}>`. This is not a style preference.
+          Until 2026-10-21 this panel was always mounted, and it was the ONLY
+          panel in the file that kept a HIDDEN MODAL MOUNTED INSIDE ANOTHER
+          MODAL'S TREE (the Add Co-Admin picker below). Its search box then
+          rendered its placeholder stretched across the full width and
+          clipped — "S e a r c h   b y   n a m e   o r   n u" — while the
+          identical SearchBox rendered correctly everywhere else.
+          ⭐ THE EVIDENCE, because the cause is not guessable from one screen:
+            · Manage Guests  — always mounted, NO nested modal  → fine
+            · Allowed Guests — conditionally mounted, 2 nested  → fine
+            · Co-Admins      — always mounted, nested modal     → BROKEN
+          Only the combination breaks, so neither nesting alone nor
+          always-mounting alone is the cause.
+          ⭐ Allowed Guests has had this exact shape since `7cd6d5c`
+          (13 July), in a commit titled "...contact picker safe area fix" —
+          the same family of iOS problem as
+          [[feedback-ios-modal-safe-area]]: a Modal makes a new root view on
+          iOS and context does not propagate into it cleanly.
+          ⚠ THE NESTING ITSELF MUST STAY. React Native will not present a
+          Modal over an already-open SIBLING modal; that was the 2026-10-20
+          bug ("nothing happens until I close the Co-admins panel"). This
+          changes WHEN the modal exists, never WHERE it sits. */}
+      {showCoadminPanel && (
+      <Modal visible animationType="slide" onRequestClose={() => setShowCoadminPanel(false)}>
         <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           <View style={styles.panelHeader}>
             <Text style={styles.panelTitle}>Co-Admins{coadmins.length > 0 ? ` (${coadmins.length})` : ''}</Text>
@@ -936,7 +960,12 @@ export default function EventDetailScreen() {
               Co-admins panel". The two modals above are nested for the same
               reason; the convention was already here. ⚠ No typecheck, hook
               check or string audit can see this. */}
-          <Modal visible={showCoadminPicker} animationType="slide" onRequestClose={() => setShowCoadminPicker(false)}>
+          {/* ⚠ Conditionally mounted for the same reason as the panel above:
+              a hidden Modal left mounted inside another Modal's tree is what
+              broke the panel's search box. Still NESTED, which is what keeps
+              it presenting over the panel rather than underneath it. */}
+          {showCoadminPicker && (
+          <Modal visible animationType="slide" onRequestClose={() => setShowCoadminPicker(false)}>
             <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
               <View style={styles.panelHeader}>
                 <Text style={styles.panelTitle}>Add Co-Admin</Text>
@@ -1058,10 +1087,12 @@ export default function EventDetailScreen() {
               {alertOverlay}
             </View>
           </Modal>
+          )}
 
           {alertOverlay}
         </View>
       </Modal>
+      )}
 
       {/* Allowed Guests Panel */}
       {showGuestsPanel && (

@@ -2459,7 +2459,7 @@ export default function EventScreen() {
   // Guests cannot even open an expired event, so expiry only affects co-admins.
   const canDelete = isAdmin ? !(isEventExpired && isCoadmin) : (allowGuestDelete && !viewOnly);
   const deleteClosedHint = !canDelete
-    ? (isEventExpired ? 'Deletes are closed for this event' : 'The organiser has turned off deleting for guests.')
+    ? (isEventExpired ? 'Deletes are closed for this event' : 'The Organiser has turned off deleting for guests.')
     : null;
   const deletablePhotos = myUploadsFilter && userMobile
     ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
@@ -2845,7 +2845,7 @@ export default function EventScreen() {
             )}
             <Text style={styles.uploadHint}>
               {viewOnly && !isAdmin
-                ? 'The organiser has disabled uploads for this event.'
+                ? 'The Organiser has disabled uploads for this event.'
                 : uploadsClosed
                   ? 'Uploads are closed for this event'
                   : `Max ${UPLOAD_BATCH_LIMIT} photos per batch.\nKeep the app open while uploading.`}

@@ -54,7 +54,7 @@ export default function OrganiserLoginScreen() {
 
   async function handleSetup() {
     if (password.length < 6) {
-      showAlert('Password too short', 'Your organiser password must be at least 6 characters.');
+      showAlert('Password too short', 'Your Organiser password must be at least 6 characters.');
       return;
     }
     if (password !== confirmPassword) {
@@ -81,7 +81,7 @@ export default function OrganiserLoginScreen() {
 
   async function handleLogin() {
     if (!password) {
-      showAlert('Enter your password', 'Please enter your organiser password to continue.');
+      showAlert('Enter your password', 'Please enter your Organiser password to continue.');
       return;
     }
     const profile = await getUserProfile();
@@ -201,7 +201,7 @@ export default function OrganiserLoginScreen() {
       ? "We'll send a one-time code to your registered WhatsApp number to verify it's you."
       : forgotStep === 'verify'
       ? 'Enter the 6-digit code sent to your WhatsApp number.'
-      : 'Choose a new password for your organiser account.';
+      : 'Choose a new password for your Organiser account.';
 
     return (
       <SafeAreaView style={styles.container}>
@@ -304,8 +304,8 @@ export default function OrganiserLoginScreen() {
           <Text style={styles.title}>{title}</Text>
           <Text style={styles.subtitle}>
             {mode === 'setup'
-              ? "Create a password to protect your organiser account. You'll use this every time you manage your events."
-              : 'Enter your organiser password to access your events.'}
+              ? "Create a password to protect your Organiser account. You'll use this every time you manage your events."
+              : 'Enter your Organiser password to access your events.'}
           </Text>
 
           <Text style={styles.label}>PASSWORD</Text>

@@ -82,7 +82,7 @@ export default function CreateEventScreen() {
       'Make this a view only event?',
       [
         '• Guests can only view and download photos uploaded to this event',
-        '• Only you and your admins can add photos',
+        '• Only you and your Admins can add photos',
         '• Guests cannot delete anything, including their own photos',
         '',
         'This cannot be changed after the event is created.',

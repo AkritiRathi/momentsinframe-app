@@ -115,7 +115,7 @@ export default function HomeScreen() {
   function showDeleteConfirmation() {
     showAlert(
       'Delete Account',
-      'You will be removed from all events, admin roles, and organiser access. Your photos will remain but show as Unknown User. This cannot be undone.',
+      'You will be removed from all events, Admin roles, and Organiser access. Your photos will remain but show as Unknown User. This cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -134,7 +134,7 @@ export default function HomeScreen() {
 
   async function handleDeletePasswordConfirm() {
     if (!deletePassword.trim()) {
-      setDeletePasswordError('Please enter your organiser password.');
+      setDeletePasswordError('Please enter your Organiser password.');
       return;
     }
     if (!profile) return;
@@ -162,7 +162,7 @@ export default function HomeScreen() {
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setDeletePasswordVisible(false)}>
           <View style={styles.userDetailsSheet}>
             <Text style={styles.userDetailsTitle}>Confirm Password</Text>
-            <Text style={styles.userDetailsText}>Enter your organiser password to delete your account.</Text>
+            <Text style={styles.userDetailsText}>Enter your Organiser password to delete your account.</Text>
             <TextInput
               style={[styles.passwordInput, deletePasswordError ? styles.passwordInputError : null]}
               placeholder="Organiser password"
@@ -213,7 +213,7 @@ export default function HomeScreen() {
                 setTimeout(() => {
                   showAlert(
                     'Log out?',
-                    'You will be removed from all events you have joined, including any admin roles. Your uploaded photos will remain with your name. If you log in again with the same number, you can rejoin open events and manage your photos.',
+                    'You will be removed from all events you have joined, including any Admin roles. Your uploaded photos will remain with your name. If you log in again with the same number, you can rejoin open events and manage your photos.',
                     [
                       { text: 'Cancel' },
                       {

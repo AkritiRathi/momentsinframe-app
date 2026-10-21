@@ -94,7 +94,7 @@
       [
         "expo-contacts",
         {
-          "contactsPermission": "Allow MomentsInFrame to access your contacts to add admins."
+          "contactsPermission": "Allow MomentsInFrame to access your contacts to add Admins."
         }
       ],
       [

@@ -480,11 +480,11 @@ export default function EventDetailScreen() {
 
   async function confirmAddCoadmin(phone: string, name: string | null) {
     if (phone === params.organiserPhone) {
-      showAlert('Not allowed', 'You cannot add yourself as an admin.');
+      showAlert('Not allowed', 'You cannot add yourself as an Admin.');
       return;
     }
     if (coadmins.some(c => c.phone === phone)) {
-      showAlert('Already added', `${name ?? phone} is already an admin.`);
+      showAlert('Already added', `${name ?? phone} is already an Admin.`);
       return;
     }
     const pw = await getOrganiserPassword();
@@ -511,7 +511,7 @@ export default function EventDetailScreen() {
 
   async function confirmAddGuest(phone: string, name?: string) {
     if (phone === params.organiserPhone) {
-      showAlert('Already in event', 'You are the organiser of this event and always have access.');
+      showAlert('Already in event', 'You are the Organiser of this event and always have access.');
       return;
     }
     const displayName = name ?? phone;
@@ -586,7 +586,7 @@ export default function EventDetailScreen() {
   async function handleRemoveCoadmin(phone: string, name: string | null) {
     showAlert(
       `Remove ${name ?? phone}?`,
-      'They will no longer have admin access to this event.',
+      'They will no longer have Admin access to this event.',
       [
         {
           text: 'Remove',
@@ -888,7 +888,7 @@ export default function EventDetailScreen() {
             {coadminsLoading ? (
               <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
             ) : coadmins.length === 0 ? (
-              <Text style={styles.emptyText}>No admins added yet.</Text>
+              <Text style={styles.emptyText}>No Admins added yet.</Text>
             ) : shownCoadmins.length === 0 ? (
               <Text style={styles.emptyText}>No one matches that search.</Text>
             ) : (
@@ -973,7 +973,7 @@ export default function EventDetailScreen() {
                   <Text style={styles.panelClose}>×</Text>
                 </TouchableOpacity>
               </View>
-              <Text style={styles.panelDesc}>Choose someone who has already joined this event. An admin can manage photos, so they must be in the event first.</Text>
+              <Text style={styles.panelDesc}>Choose someone who has already joined this event. An Admin can manage photos, so they must be in the event first.</Text>
           {/* ⭐ SEARCH IS NOT OPTIONAL AT SCALE. With one test guest a plain
                   list looks fine; at a 300-guest wedding an organiser would scroll
                   300 names to find one person — and the contact picker this
@@ -1027,7 +1027,7 @@ export default function EventDetailScreen() {
                   // can ONLY mean nobody has joined. This sentence was false
                   // twice before (see above).
                   if (eligible.length === 0) {
-                    return <Text style={styles.panelEmpty}>Nobody is available. Guests need to join the event before they can be made an admin.</Text>;
+                    return <Text style={styles.panelEmpty}>Nobody is available. Guests need to join the event before they can be made an Admin.</Text>;
                   }
               // ⛔ A SECOND, DIFFERENT EMPTY STATE. Without it, searching a name
                   // that is not there would say "guests need to join" — which is

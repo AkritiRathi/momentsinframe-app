@@ -253,7 +253,7 @@ export default function WhitelistScreen() {
         <Modal transparent animationType="fade" onRequestClose={() => setDeleteStep(null)}>
           <View style={styles.deleteOverlay}>
             <View style={styles.deleteModal}>
-              <Text style={styles.deleteModalTitle}>Remove organiser?</Text>
+              <Text style={styles.deleteModalTitle}>Remove Organiser?</Text>
               <Text style={styles.deleteModalWarning}>
                 {deleteTarget} will be removed from the whitelist.{'\n\n'}
                 All their created events and every photo in those events will be permanently deleted.{'\n\n'}
@@ -278,7 +278,7 @@ export default function WhitelistScreen() {
         <Modal transparent animationType="fade">
           <View style={styles.deletingOverlay}>
             <ActivityIndicator size="large" color={Colors.accent} />
-            <Text style={styles.deletingText}>Removing organiser…</Text>
+            <Text style={styles.deletingText}>Removing Organiser…</Text>
           </View>
         </Modal>
       )}

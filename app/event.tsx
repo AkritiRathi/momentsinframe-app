@@ -3498,7 +3498,7 @@ export default function EventScreen() {
               <Text style={styles.menuItemText}>Sort & Display</Text>
             </TouchableOpacity>
             {isAdmin && (
-              <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); requestAppPermission('contacts', () => router.push({ pathname: '/manage-guests', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', userMobile: userMobile ?? '', eventName: params.name ?? '' } }), userMobile ?? params.adminPhone ?? null); }}>
+              <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); router.push({ pathname: '/manage-guests', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', userMobile: userMobile ?? '', eventName: params.name ?? '' } }); }}>
                 <Text style={styles.menuItemText}>Manage Guests</Text>
               </TouchableOpacity>
             )}

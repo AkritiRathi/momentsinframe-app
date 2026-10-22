@@ -502,7 +502,10 @@ export default function EventDetailScreen() {
       'Add Guest',
       'How would you like to add a guest?',
       [
-        { text: 'From contacts', onPress: () => loadContactsForPicker('guest') },
+        // The ONLY place contacts permission is asked for (with the priming
+        // screen first). Every other screen opens without it and shows
+        // names only when it has already been granted.
+        { text: 'From contacts', onPress: () => requestAppPermission('contacts', () => loadContactsForPicker('guest'), params.organiserPhone) },
         { text: 'Enter number manually', onPress: () => { setManualInputMode('guest'); setManualPhone(''); setShowManualInput(true); } },
         { text: 'Cancel', style: 'cancel' },
       ]
@@ -675,7 +678,9 @@ export default function EventDetailScreen() {
             // blocking lives in `event_users`, which the co-admin list does
             // not carry. Without it the panel renders before the status is
             // known and no badge appears.
-            onPress={() => requestAppPermission('contacts', () => { loadCoadmins(); loadJoinedGuests(); setShowCoadminPanel(true); }, params.organiserPhone)}>
+            // Opens WITHOUT contacts permission: contacts only add names here.
+            // Contacts are asked for only at "From contacts" (handleAddGuest).
+            onPress={() => { loadCoadmins(); loadJoinedGuests(); setShowCoadminPanel(true); }}>
             <Text style={[styles.btnText, { color: Colors.accent }]}>+ Admins</Text>
           </TouchableOpacity>
         </View>
@@ -705,7 +710,7 @@ export default function EventDetailScreen() {
             </Text>
             <Text style={styles.settingLocked}>Chosen when the event was created</Text>
             {isClosed && (
-              <TouchableOpacity onPress={() => requestAppPermission('contacts', () => { loadAllowedGuests(); setShowGuestsPanel(true); }, params.organiserPhone)}>
+              <TouchableOpacity onPress={() => { loadAllowedGuests(); setShowGuestsPanel(true); }}>
                 <Text style={styles.manageGuestsInline}>
                   Allowed Guests{allowedGuests.length > 0 ? ` (${allowedGuests.length})` : ''} →
                 </Text>
@@ -1291,6 +1296,10 @@ export default function EventDetailScreen() {
               </View>
             </Modal>
             {alertOverlay}
+            {/* "From contacts" asks for permission from INSIDE this panel, so the
+                priming screen must be rendered in here too — a modal will not
+                present over an open sibling modal. Same pattern as alertOverlay. */}
+            {primingOverlay}
           </View>
         </Modal>
       )}
@@ -1304,7 +1313,8 @@ export default function EventDetailScreen() {
             <View style={[styles.dropdown, { position: 'absolute', top: gearDropPos.top, right: gearDropPos.right }]}>
               <TouchableOpacity style={styles.dropRow} onPress={() => {
                 setGearMenuVisible(false);
-                requestAppPermission('contacts', () => { loadJoinedGuests(); setShowManageGuestsPanel(true); }, params.organiserPhone);
+                loadJoinedGuests();
+                setShowManageGuestsPanel(true);
               }}>
                 <Text style={styles.dropText}>Manage Guests</Text>
               </TouchableOpacity>

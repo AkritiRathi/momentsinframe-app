@@ -7,17 +7,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Contacts from 'expo-contacts';
 import { listJoinedGuestsForUser, setGuestBlockedByUser } from '../lib/api';
 
-// ⛔ THIS SCREEN IS THE TWIN OF THE "Manage Guests" PANEL IN
-// app/(master)/event-detail.tsx — same API, same contact map, same rows,
-// reached from the Event screen instead of Manage Event. ⚠ The user pointed
-// this out on 2026-10-20: *"Manage Guest are in 2 places - Event screen and
-// Manage Event."* **Anything changed here must be changed there, and this
-// match rule is deliberately IDENTICAL to the one over there.**
+// ⭐ THE ONLY "Manage Guests" IN THE APP (since 2026-10-23). It is opened
+// from the Event screen's ⋮ menu (Organiser and Admins) AND from the gear
+// menu in app/(master)/event-detail.tsx (Organiser). That file used to carry
+// its own copy as a panel; the two drifted apart several times, so it was
+// removed. ⛔ Do not build a second copy — route here.
+// The match rule below is deliberately IDENTICAL to the one in
+// event-detail.tsx, which uses it for its other people-lists.
 // ⭐ It matches anything a row can DISPLAY: the organiser's contact name, the
 // name the guest registered with, and the number. If you can see it, you can
 // search it.
-// ⏸ Unifying the two copies into one shared component was raised the same
-// day and NOT done — it is a refactor of its own and needs the user's say.
 function matchesPersonSearch(query: string, phone: string, ...names: (string | null | undefined)[]) {
   const q = query.trim().toLowerCase();
   if (!q) return true;

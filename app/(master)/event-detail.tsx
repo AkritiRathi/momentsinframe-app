@@ -17,8 +17,8 @@ import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
 
-// ⛔ ONE MATCH RULE FOR EVERY PEOPLE-SEARCH ON THIS SCREEN. Four lists use
-// it, so they cannot drift apart. It matches anything a row can DISPLAY: the
+// ⛔ ONE MATCH RULE FOR EVERY PEOPLE-SEARCH ON THIS SCREEN. Three lists use
+// it, so they cannot drift apart (app/manage-guests.tsx carries the same rule). It matches anything a row can DISPLAY: the
 // name from the organiser's contacts, the name the person registered with,
 // any name stored when they were invited, and the number.
 // ⭐ The principle: IF YOU CAN SEE IT, YOU CAN SEARCH IT. A row that shows a
@@ -104,12 +104,10 @@ export default function EventDetailScreen() {
   }, []);
 
   type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number; role?: 'organiser' | 'coadmin' | 'user' };
-  const [showManageGuestsPanel, setShowManageGuestsPanel] = useState(false);
+  // `joinedGuests` still feeds the + Admins panel (its picker and BLOCKED
+  // badges) and Allowed Guests. Manage Guests itself is app/manage-guests.tsx.
   const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
-  const [joinedGuestsTotalPhotos, setJoinedGuestsTotalPhotos] = useState<number | null>(null);
   const [joinedGuestsLoading, setJoinedGuestsLoading] = useState(false);
-  const [joinedGuestsError, setJoinedGuestsError] = useState<string | null>(null);
-  const [togglingGuest, setTogglingGuest] = useState<string | null>(null);
   const [guestContactMap, setGuestContactMap] = useState<Record<string, string>>({});
 
   type PickerContact = { name: string; phones: string[] };
@@ -120,7 +118,6 @@ export default function EventDetailScreen() {
   const [coadminSearch, setCoadminSearch] = useState('');
   const [coadminListSearch, setCoadminListSearch] = useState('');
   const [allowedSearch, setAllowedSearch] = useState('');
-  const [joinedSearch, setJoinedSearch] = useState('');
   // ⛔ DEFAULTS TO 'guest' SINCE 2026-10-20. 'coadmin' is no longer
   // displayable — its modals are gone — so starting there would mean a
   // future mistake produced a button that SILENTLY DID NOTHING. In a public
@@ -184,12 +181,15 @@ export default function EventDetailScreen() {
         listJoinedGuestsForUser(params.slug, params.organiserPhone),
       ]);
       if (joinedResult.guests) {
-        const organiserName = (await getUserProfile())?.name ?? '';
+        // Built exactly as loadJoinedGuests builds it: UserProfile has no
+        // `name` field, so reading one gave the Organiser an empty name.
+        const profile = await getUserProfile();
+        const organiserName = profile ? `${profile.firstName} ${profile.lastName}`.trim() : 'Organiser';
         const organiserPhone = params.organiserPhone;
-        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false, role: 'organiser' };
+        const organiserFromApi = joinedResult.guests.find(g => g.mobile === organiserPhone);
+        const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false, photo_count: organiserFromApi?.photo_count ?? 0, role: 'organiser' };
         const others = joinedResult.guests.filter(g => g.mobile !== organiserPhone);
         setJoinedGuests([organiserEntry, ...others]);
-        setJoinedGuestsTotalPhotos(joinedResult.total_photo_count ?? null);
       }
       if (allowedResult.guests) {
         setAllowedGuests(allowedResult.guests);
@@ -219,7 +219,6 @@ export default function EventDetailScreen() {
     const pw = await getOrganiserPassword();
     if (!pw || !params.organiserPhone) return;
     setJoinedGuestsLoading(true);
-    setJoinedGuestsError(null);
     try {
       const result = await listJoinedGuestsForUser(params.slug, params.organiserPhone);
       if (result.guests) {
@@ -232,7 +231,6 @@ export default function EventDetailScreen() {
         const organiserFromApi = result.guests.find(g => g.mobile === organiserPhone);
         const organiserEntry: JoinedGuest = { name: organiserName, mobile: organiserPhone, is_blocked: false, photo_count: organiserFromApi?.photo_count ?? 0, role: 'organiser' };
         setJoinedGuests([organiserEntry, ...others]);
-        setJoinedGuestsTotalPhotos(result.total_photo_count ?? null);
         // Look up each mobile in the organiser's contacts
         try {
           const { status } = await Contacts.getPermissionsAsync();
@@ -248,28 +246,15 @@ export default function EventDetailScreen() {
             setGuestContactMap(prev => ({ ...prev, ...map }));
           }
         } catch {}
-      } else {
-        setJoinedGuestsError(result.error ?? 'Could not load guests.');
       }
+      // A failed load leaves the list as it was. The error message lived only
+      // in the removed Manage Guests panel; the panels still using this list
+      // never showed it.
     } catch {
-      setJoinedGuestsError('Network error. Please try again.');
     } finally {
       setJoinedGuestsLoading(false);
     }
   }, [params.slug, params.organiserPhone]);
-
-  async function handleToggleBlock(mobile: string, currentlyBlocked: boolean) {
-    const pw = await getOrganiserPassword();
-    if (!pw || !params.organiserPhone) return;
-    setTogglingGuest(mobile);
-    const result = await setGuestBlocked(params.slug, mobile, !currentlyBlocked, params.organiserPhone, pw);
-    setTogglingGuest(null);
-    if (result.error) {
-      showAlert('Error', result.error);
-    } else {
-      setJoinedGuests(prev => prev.map(g => g.mobile === mobile ? { ...g, is_blocked: !currentlyBlocked } : g));
-    }
-  }
 
   async function handleToggleGuestDelete(value: boolean) {
     const pw = await getOrganiserPassword();
@@ -622,8 +607,6 @@ export default function EventDetailScreen() {
     jg.is_blocked && jg.mobile !== params.organiserPhone && !allowedGuests.some(ag => ag.phone === jg.mobile));
   const shownBlockedNotAllowed = blockedNotAllowed.filter(jg =>
     matchesPersonSearch(allowedSearch, jg.mobile, guestContactMap[jg.mobile], jg.name));
-  const shownJoined = joinedGuests.filter(g =>
-    matchesPersonSearch(joinedSearch, g.mobile, guestContactMap[g.mobile], g.name));
 
   return (
     <SafeAreaView style={styles.container}>
@@ -1312,9 +1295,11 @@ export default function EventDetailScreen() {
           <TouchableOpacity style={styles.dropBackdrop} activeOpacity={1} onPress={() => setGearMenuVisible(false)}>
             <View style={[styles.dropdown, { position: 'absolute', top: gearDropPos.top, right: gearDropPos.right }]}>
               <TouchableOpacity style={styles.dropRow} onPress={() => {
+                // ONE Manage Guests for the whole app (2026-10-23): the same
+                // screen the Event screen's ⋮ menu opens. This file used to
+                // carry its own copy as a panel, and the two kept drifting.
                 setGearMenuVisible(false);
-                loadJoinedGuests();
-                setShowManageGuestsPanel(true);
+                router.push({ pathname: '/manage-guests', params: { slug: params.slug, adminPhone: params.organiserPhone ?? '', viewerRole: 'organiser', userMobile: params.organiserPhone ?? '', eventName: params.name ?? '' } });
               }}>
                 <Text style={styles.dropText}>Manage Guests</Text>
               </TouchableOpacity>
@@ -1322,92 +1307,6 @@ export default function EventDetailScreen() {
           </TouchableOpacity>
         </Modal>
       )}
-
-      {/* Manage Guests panel */}
-      <Modal visible={showManageGuestsPanel} animationType="slide" onRequestClose={() => setShowManageGuestsPanel(false)}>
-        <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-          <View style={styles.panelHeader}>
-            <Text style={styles.panelTitle}>Manage Guests{joinedGuests.filter(g => g.role !== 'organiser').length > 0 ? ` (${joinedGuests.filter(g => g.role !== 'organiser').length})` : ''}{joinedGuestsTotalPhotos != null ? ` · ${joinedGuestsTotalPhotos} photos` : ''}</Text>
-            <TouchableOpacity onPress={() => setShowManageGuestsPanel(false)}>
-              <Text style={styles.panelClose}>×</Text>
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.panelDesc}>Block a guest to remove their access to this event. They will not be able to rejoin. You can unblock them at any time.</Text>
-          <SearchBox value={joinedSearch} onChange={setJoinedSearch} />
-          <ScrollView contentContainerStyle={styles.panelScroll}>
-            {joinedGuestsLoading ? (
-              <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
-            ) : joinedGuestsError ? (
-              <View style={styles.guestErrorBox}>
-                <Text style={styles.guestErrorText}>{joinedGuestsError}</Text>
-                <TouchableOpacity onPress={loadJoinedGuests} style={styles.retryBtn}>
-                  <Text style={styles.retryBtnText}>Retry</Text>
-                </TouchableOpacity>
-              </View>
-            ) : joinedGuests.length <= 1 ? (
-              <>
-                {joinedGuests.map(guest => {
-                  const contactName = guestContactMap[guest.mobile] ?? null;
-                  const appName = guest.name || guest.mobile;
-                  return (
-                    <View key={guest.mobile} style={styles.coadminRow}>
-                      <View style={styles.coadminInfo}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <Text style={styles.coadminName}>{appName}</Text>
-                          <Text style={[styles.coadminPhone, { marginLeft: 6 }]}>· {guest.photo_count ?? 0} photos</Text>
-                        </View>
-                        <Text style={styles.coadminPhone}>{contactName || 'Number not in contacts'}</Text>
-                        <Text style={styles.coadminPhone}>{guest.mobile}</Text>
-                      </View>
-                    </View>
-                  );
-                })}
-                <Text style={[styles.emptyText, { marginTop: 12 }]}>No guests have joined this event yet.</Text>
-              </>
-            ) : shownJoined.length === 0 ? (
-              <Text style={[styles.emptyText, { marginTop: 12 }]}>No one matches that search.</Text>
-            ) : (
-              shownJoined.map(guest => {
-                const contactName = guestContactMap[guest.mobile] ?? null;
-                const appName = guest.name || guest.mobile;
-                return (
-                  <View key={guest.mobile} style={[styles.coadminRow, guest.is_blocked && styles.blockedRow]}>
-                    <View style={styles.coadminInfo}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Text style={[styles.coadminName, guest.is_blocked && styles.blockedText]}>{appName}</Text>
-                        <Text style={[styles.coadminPhone, { marginLeft: 6 }, guest.is_blocked && styles.blockedText]}>· {guest.photo_count ?? 0} photos</Text>
-                      </View>
-                      <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{contactName || 'Number not in contacts'}</Text>
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Text style={[styles.coadminPhone, guest.is_blocked && styles.blockedText]}>{guest.mobile}</Text>
-                        {guest.is_blocked && <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
-                      </View>
-                    </View>
-                    {guest.mobile === params.organiserPhone ? null : (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        {guest.role === 'coadmin' && <Text style={styles.coadminBadge}>Admin</Text>}
-                        {togglingGuest === guest.mobile ? (
-                          <ActivityIndicator size="small" color={Colors.accent} />
-                        ) : (
-                          <TouchableOpacity
-                            style={[styles.removeBtn, guest.is_blocked && styles.unblockBtn]}
-                            onPress={() => handleToggleBlock(guest.mobile, guest.is_blocked)}
-                          >
-                            <Text style={[styles.removeBtnText, guest.is_blocked && styles.unblockBtnText]}>
-                              {guest.is_blocked ? 'Unblock' : 'Block'}
-                            </Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-                    )}
-                  </View>
-                );
-              })
-            )}
-          </ScrollView>
-          {alertOverlay}
-        </View>
-      </Modal>
 
       {Platform.OS === 'ios' && (
         <Modal transparent animationType="fade" visible={showExtendPicker} onRequestClose={() => setShowExtendPicker(false)}>

@@ -1337,17 +1337,16 @@ export default function EventDetailScreen() {
             ) : joinedGuests.length <= 1 ? (
               <>
                 {joinedGuests.map(guest => {
-                  const contactName = guestContactMap[guest.mobile];
-                  const displayName = contactName || guest.name || guest.mobile;
-                  const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
+                  const contactName = guestContactMap[guest.mobile] ?? null;
+                  const appName = guest.name || guest.mobile;
                   return (
                     <View key={guest.mobile} style={styles.coadminRow}>
                       <View style={styles.coadminInfo}>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <Text style={styles.coadminName}>{displayName}</Text>
+                          <Text style={styles.coadminName}>{appName}</Text>
                           <Text style={[styles.coadminPhone, { marginLeft: 6 }]}>· {guest.photo_count ?? 0} photos</Text>
                         </View>
-                        {subName ? <Text style={styles.coadminPhone}>{subName}</Text> : null}
+                        <Text style={styles.coadminPhone}>{contactName || 'Number not in contacts'}</Text>
                         <Text style={styles.coadminPhone}>{guest.mobile}</Text>
                       </View>
                     </View>

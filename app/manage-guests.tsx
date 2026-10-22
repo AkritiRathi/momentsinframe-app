@@ -171,18 +171,17 @@ export default function ManageGuestsScreen() {
         ) : guests.length <= 1 ? (
           <>
             {guests.map(guest => {
-              const contactName = contactMap[guest.mobile];
-              const displayName = contactName || guest.name || guest.mobile;
-              const subName = contactName && guest.name && guest.name !== contactName ? guest.name : null;
+              const contactName = contactMap[guest.mobile] ?? null;
+              const appName = guest.name || guest.mobile;
               return (
                 <TouchableOpacity key={guest.mobile} style={styles.row} activeOpacity={0.7}
                   onPress={() => router.push({ pathname: '/guest-uploads', params: { slug: params.slug, adminPhone: params.userMobile || params.adminPhone || '', viewerRole: params.viewerRole, guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: contactMap[guest.mobile] ?? '', eventName: params.eventName ?? '' } })}>
                   <View style={styles.guestInfo}>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Text style={styles.guestName}>{displayName}</Text>
+                      <Text style={styles.guestName}>{appName}</Text>
                       <Text style={[styles.guestSub, { marginLeft: 6 }]}>· {guest.photo_count ?? 0} photos</Text>
                     </View>
-                    {subName ? <Text style={styles.guestSub}>{subName}</Text> : null}
+                    <Text style={styles.guestSub}>{contactName || 'Number not in contacts'}</Text>
                     <Text style={styles.guestSub}>{guest.mobile}</Text>
                   </View>
                 </TouchableOpacity>

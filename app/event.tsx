@@ -774,6 +774,34 @@ export default function EventScreen() {
   useEffect(() => { lightboxVisibleRef.current = lightboxVisible; }, [lightboxVisible]);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxSection, setLightboxSection] = useState<'main' | 'other'>('main');
+
+  // ⛔ BLOCKED WHILE INSIDE THE EVENT (2026-10-23). The photo list answers a
+  // blocked person with isBlocked and no photos. This used to router.back()
+  // with no word, which could leave a blank screen. Now it SAYS so first.
+  // ⭐ The sentence is the WEBSITE's and the server's join-user refusal, word
+  // for word, so app and web match — and join-event.tsx matches on
+  // 'removed from this event', so do not reword one side alone.
+  // ⚠ The alert is an overlay on THIS screen, not a pop-up of its own: an
+  // open panel would hide it, and while it shows Android's back button is
+  // disabled. So every panel is closed first.
+  const removedShownRef = useRef(false);
+  function leaveBecauseRemoved() {
+    if (removedShownRef.current) return; // two reloads can both report it
+    removedShownRef.current = true;
+    setLightboxVisible(false);
+    setSkippedViewerVisible(false);
+    setDuplicateViewerVisible(false);
+    setMenuVisible(false);
+    setSortPanelVisible(false);
+    setShowPhotoSelectModal(false);
+    setShowDatePickerModal(false);
+    setNotificationsVisible(false);
+    // Same title and sentence as the rejoin refusal in join-event.tsx.
+    showAlert('Access removed', 'You have been removed from this event.', [{
+      text: 'OK',
+      onPress: () => { router.canGoBack() ? router.back() : router.replace('/(auth)/home'); },
+    }]);
+  }
   const [imageLoading, setImageLoading] = useState(false);
   const imageLoadingRef = useRef(false);
 
@@ -978,7 +1006,7 @@ export default function EventScreen() {
           if (typeof data.event.view_only === 'boolean') setViewOnly(data.event.view_only);
           if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
           if (data.event.expires_at) setExpiresAt(data.event.expires_at);
-          if (mobileAtCallTime && data.event.isBlocked === true) router.back();
+          if (mobileAtCallTime && data.event.isBlocked === true) leaveBecauseRemoved();
           if (data.event.role && mobileAtCallTime) setUserRole(data.event.role);
         }
       });
@@ -1053,7 +1081,7 @@ export default function EventScreen() {
         if (data.event.expires_at) setExpiresAt(data.event.expires_at);
         if (userMobileRef.current && data.event.isBlocked === true) {
           setLoading(false);
-          router.back();
+          leaveBecauseRemoved();
           return;
         }
         if (data.event.role && userMobileRef.current) setUserRole(data.event.role);

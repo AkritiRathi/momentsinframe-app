@@ -725,6 +725,13 @@ export default function EventScreen() {
   }>();
 
   const [userRole, setUserRole] = useState(params.role ?? '');
+  // The role the CURRENT photo list was loaded under (set by a full load only).
+  // The quick refresh on returning to this screen updates the role but keeps
+  // the old list, so when the role has changed (guest ⇄ Admin mid-event) it
+  // must trigger a full reload: the server sends uploader numbers and the
+  // Admin list only for the role the caller has NOW. Null until the first
+  // full load finishes, so opening the event never reloads twice.
+  const loadedRoleRef = useRef<string | null>(null);
   const isAdmin = userRole === 'organiser' || userRole === 'coadmin';
   const adminLabel = userRole === 'organiser' ? 'Organiser' : userRole === 'coadmin' ? 'Admin' : 'Admin';
   const [allowGuestDelete, setAllowGuestDelete] = useState(params.allowGuestDelete === 'true');
@@ -966,7 +973,10 @@ export default function EventScreen() {
     });
 
     const appStateSub = AppState.addEventListener('change', state => {
-      if (state === 'active') refreshNotifications(userMobileRef.current);
+      if (state === 'active') {
+        refreshNotifications(userMobileRef.current);
+        reloadIfRoleChanged();
+      }
     });
     return () => appStateSub.remove();
   }, []);
@@ -1007,7 +1017,12 @@ export default function EventScreen() {
           if (typeof data.event.allow_guest_delete === 'boolean') setAllowGuestDelete(data.event.allow_guest_delete);
           if (data.event.expires_at) setExpiresAt(data.event.expires_at);
           if (mobileAtCallTime && data.event.isBlocked === true) leaveBecauseRemoved();
-          if (data.event.role && mobileAtCallTime) setUserRole(data.event.role);
+          if (data.event.role && mobileAtCallTime) {
+            setUserRole(data.event.role);
+            // Role changed since the list was loaded → reload it (keeps the
+            // "New" badges: skipSave). See loadedRoleRef.
+            if (loadedRoleRef.current && loadedRoleRef.current !== data.event.role) loadPhotos(true);
+          }
         }
       });
       return () => { clearTimeout(saveTimer); };
@@ -1049,6 +1064,22 @@ export default function EventScreen() {
     prevSelectedSize.current = selected.size;
   }, [selected.size, selectMode, deleteMode]);
 
+  // Light role check for the moments a promotion/demotion is likely to be
+  // noticed: the app returning to the foreground and the bell being opened
+  // (where "you've been made an Admin" appears). The screen-focus refresh
+  // does the same check on its own. Uses the small check-admin route, not
+  // the whole photo list. If the role differs from the one the current list
+  // was loaded under, do the full reload; otherwise nothing visible happens.
+  async function reloadIfRoleChanged() {
+    const mobile = userMobileRef.current;
+    if (!mobile || !loadedRoleRef.current) return;
+    try {
+      const res = await checkAdminStatus(slug, mobile);
+      const role = res?.isAdmin ? res.role : 'user';
+      if (role && role !== loadedRoleRef.current) loadPhotos(true);
+    } catch { /* offline — the next refresh will catch it */ }
+  }
+
   async function loadPhotos(skipSave = false) {
     setLoading(true);
     setUploadSummary(null);
@@ -1084,7 +1115,10 @@ export default function EventScreen() {
           leaveBecauseRemoved();
           return;
         }
-        if (data.event.role && userMobileRef.current) setUserRole(data.event.role);
+        if (data.event.role && userMobileRef.current) {
+          setUserRole(data.event.role);
+          loadedRoleRef.current = data.event.role;
+        }
         if (Array.isArray(data.event.coadminPhones)) setCoadminPhones(new Set(data.event.coadminPhones));
         if (typeof data.event.find_my_photos_enabled === 'boolean') setFindMyPhotosEnabled(data.event.find_my_photos_enabled);
       }
@@ -2775,6 +2809,7 @@ export default function EventScreen() {
                 <TouchableOpacity style={styles.notifGearBtn} onPress={async () => {
                   const mobile = userMobileRef.current;
                   await refreshNotifications(mobile);
+                  reloadIfRoleChanged();
                   await markNotificationsRead(slug);
                   if (mobile) {
                     await markServerNotificationsRead(slug);

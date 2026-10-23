@@ -2,6 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as Application from 'expo-application';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
+import { clearOrganiserSession } from './auth';
 
 const KEYS = {
   FIRST_NAME: 'user_first_name',
@@ -93,6 +94,10 @@ export async function clearUserProfile(): Promise<void> {
   // Logout and account deletion both come through here — the login token must
   // go with the profile, never outlive it on the device.
   await clearSessionToken();
+  // ⛔ And so must the Organiser password (2026-10-23, the user's yes). It used
+  // to survive logout for up to 24h, so the next person to log in on this phone
+  // inherited the previous Organiser's saved password.
+  await clearOrganiserSession();
 }
 
 // ── Last Event ────────────────────────────────────────────────────────────────

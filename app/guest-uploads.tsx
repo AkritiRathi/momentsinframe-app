@@ -687,7 +687,9 @@ export default function GuestUploadsScreen() {
               await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', dateTakenMs);
             } else {
               if (PhotoSaver) {
-                await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs, eventName);
+                // ⛔ iPhone: ALWAYS 0 — a date makes PhotoSaver re-encode the JPEG
+                // (2026-10-26, the user's yes). See event.tsx saveFileToDownloads.
+                await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);
               } else {
                 await MediaLibrary.saveToLibraryAsync(cacheUri);
               }
@@ -897,7 +899,9 @@ export default function GuestUploadsScreen() {
             await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', dateTakenMs);
           } else {
             if (PhotoSaver) {
-              await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs, eventName);
+              // ⛔ iPhone: ALWAYS 0 — a date makes PhotoSaver re-encode the JPEG
+              // (2026-10-26, the user's yes). See event.tsx saveFileToDownloads.
+              await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);
             } else {
               await MediaLibrary.saveToLibraryAsync(cacheUri);
             }

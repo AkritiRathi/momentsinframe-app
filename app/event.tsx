@@ -2170,7 +2170,11 @@ export default function EventScreen() {
       const dlResult = await FileSystem.downloadAsync(url, cacheUri);
       if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
       if (PhotoSaver) {
-        const result = await PhotoSaver.saveToPhotos(cacheUri, dateTakenMs ?? 0, params.name);
+        // ⛔ iPhone: ALWAYS 0 (2026-10-26, the user's yes — "all screens the same").
+        // A non-zero date makes PhotoSaver rebuild the JPEG to write the date in,
+        // which RE-ENCODES it (measured: 7.6 MB → 5.6 MB). The file already
+        // carries its date — camera EXIF, or the server's stamp on Other Photos.
+        const result = await PhotoSaver.saveToPhotos(cacheUri, 0, params.name);
         if (result === 'limited_access') {
           const alreadyShown = await SecureStore.getItemAsync('mif_limited_access_shown');
           if (!alreadyShown) {

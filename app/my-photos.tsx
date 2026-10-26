@@ -527,7 +527,10 @@ export default function MyPhotosScreen() {
                 await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
               }
               const localPath = dlResult.uri.replace('file://', '');
-              await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', 0);
+              // ⛔ Android: the photo's REAL date (2026-10-26, the user's yes — "all screens
+              // the same"). It only labels the gallery entry (DATE_TAKEN); the file is copied
+              // byte-for-byte. 0 here wrote DATE_TAKEN = 1970. Same as event.tsx.
+              await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined);
             } else {
               if (PhotoSaver) {
                 await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);
@@ -773,7 +776,10 @@ export default function MyPhotosScreen() {
           if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
           if (Platform.OS === 'android') {
             const localPath = dlResult.uri.replace('file://', '');
-            await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', 0);
+            // ⛔ Android: the photo's REAL date (2026-10-26, the user's yes — "all screens
+            // the same"). It only labels the gallery entry (DATE_TAKEN); the file is copied
+            // byte-for-byte. 0 here wrote DATE_TAKEN = 1970. Same as event.tsx.
+            await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined);
           } else {
             if (PhotoSaver) {
               await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);

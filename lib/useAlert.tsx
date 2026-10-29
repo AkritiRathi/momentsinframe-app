@@ -60,7 +60,30 @@ export function useAlert() {
       <View style={alertStyles.overlay}>
         <View style={alertStyles.card}>
           <Text style={alertStyles.title}>{config.title}</Text>
-          {config.message ? <Text style={alertStyles.message}>{config.message}</Text> : null}
+          {config.message ? (
+            // ⭐ BULLET POINTS (2026-10-30, the user's yes): a message with
+            // "• " lines draws each point as the dot + its text in its own
+            // column, so a wrapped line sits under the first WORD, not under
+            // the dot. Messages without bullets are drawn exactly as before.
+            config.message.split('\n').some(l => l.startsWith('• ')) ? (
+              <View style={alertStyles.messageBlock}>
+                {config.message.split('\n').map((line, i) =>
+                  line.startsWith('• ') ? (
+                    <View key={i} style={alertStyles.bulletRow}>
+                      <Text style={[alertStyles.message, alertStyles.messageLine]}>•</Text>
+                      <Text style={[alertStyles.message, alertStyles.messageLine, alertStyles.bulletText]}>{line.slice(2)}</Text>
+                    </View>
+                  ) : line === '' ? (
+                    <View key={i} style={alertStyles.blankLine} />
+                  ) : (
+                    <Text key={i} style={[alertStyles.message, alertStyles.messageLine]}>{line}</Text>
+                  )
+                )}
+              </View>
+            ) : (
+              <Text style={alertStyles.message}>{config.message}</Text>
+            )
+          ) : null}
           {config.detail ? (
             <View style={alertStyles.detailCard}>
               <Text style={alertStyles.detailText}>{config.detail}</Text>
@@ -97,6 +120,12 @@ export const alertStyles = StyleSheet.create({
   card: { width: '100%', backgroundColor: '#1c1c1e', borderRadius: 16, padding: 24, borderWidth: 0.5, borderColor: '#333' },
   title: { fontSize: 18, fontWeight: '600', color: Colors.white, textAlign: 'center', marginBottom: 8 },
   message: { fontSize: 15, color: Colors.textMuted, lineHeight: 21, textAlign: 'left', marginBottom: 16 },
+  // Bulleted messages: the block keeps the message's bottom gap; its lines do not.
+  messageBlock: { marginBottom: 16 },
+  messageLine: { marginBottom: 0 },
+  bulletRow: { flexDirection: 'row' },
+  bulletText: { flex: 1, paddingLeft: 6 },
+  blankLine: { height: 21 },
   buttons: { gap: 8 },
   btn: { backgroundColor: '#2a2a2a', borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 0.5, borderColor: '#3a3a3a' },
   btnPrimary: { backgroundColor: Colors.accent, borderColor: Colors.accent },

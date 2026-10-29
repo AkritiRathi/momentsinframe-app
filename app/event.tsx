@@ -2914,8 +2914,15 @@ export default function EventScreen() {
         return (
           <View style={styles.expiryBanner}>
             <Text style={styles.expiryText}>
+              {/* After expiry only the Organiser and Admins can open the event,
+                  so the wording is theirs (2026-10-30, the user's yes). The old
+                  line promised photos "will be removed" — nothing removes them. */}
               {daysLeft < 0
-                ? `This event closed on ${formatDate(expiresAt)}.\nDownload your photos before they are removed.`
+                ? userRole === 'organiser'
+                  ? `This event expired on ${formatDate(expiresAt)}.\nGuests can no longer open it. You can still view, delete, upload and download photos.`
+                  : userRole === 'coadmin'
+                  ? `This event expired on ${formatDate(expiresAt)}.\nGuests can no longer open it. You can still view and download photos.`
+                  : `This event expired on ${formatDate(expiresAt)}.`
                 : daysLeft === 0
                 ? `This event closes today (${formatDate(expiresAt)}).\nDownload your photos before then.`
                 : `This event closes on ${formatDate(expiresAt)}.\nDownload your photos before then.`}

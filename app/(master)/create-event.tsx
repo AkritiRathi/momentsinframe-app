@@ -72,7 +72,7 @@ export default function CreateEventScreen() {
         '',
         'This cannot be changed after the event is created.',
       ].join('\n'),
-      [{ text: 'Cancel', style: 'cancel' }, { text: 'Yes, invite only', onPress: () => setIsClosed(true) }],
+      [{ text: 'Yes, invite only', onPress: () => setIsClosed(true) }, { text: 'Cancel', style: 'cancel' }],
     );
   }
 
@@ -83,25 +83,42 @@ export default function CreateEventScreen() {
       [
         '• Guests can only view and download photos uploaded to this event',
         '• Only you and your Admins can add photos',
-        '• Guests cannot delete anything, including their own photos',
+        '• Guests cannot delete anything',
         '',
         'This cannot be changed after the event is created.',
       ].join('\n'),
-      [{ text: 'Cancel', style: 'cancel' }, { text: 'Yes, view only', onPress: () => setViewOnly(true) }],
+      [{ text: 'Yes, view only', onPress: () => setViewOnly(true) }, { text: 'Cancel', style: 'cancel' }],
     );
   }
 
   // Listed on BOTH final screens, and listed even when nothing was touched —
   // leaving a toggle alone is just as permanent as switching it on, and an
   // organiser who is never told that is the gap this closes.
+  // ⭐ Wording approved 2026-10-30: each point names the switch and what was
+  // chosen. Deleting is NOT fixed at creation (Manage Event can change it; on by
+  // default in the database), so it is listed but kept out of the "cannot be
+  // changed" line. Never shown for view-only — guests can never delete there.
   const settingsSummary = [
     isClosed
-      ? '• Invite only — only people you add can join'
-      : '• Open event — anyone with the event code can join',
+      ? 'Invite-only: On — only people you add can join'
+      : 'Invite-only: Off — anyone with the event code can join',
     viewOnly
-      ? '• View only — guests can only view and download photos'
-      : '• Guests can upload photos, as well as view and download',
-  ].join('\n');
+      ? 'View-only: On — guests can only view and download photos'
+      : 'View-only: Off — guests can view, download and upload photos',
+    ...(viewOnly ? [] : ['Guests can delete the photos they uploaded (if allowed by you in Manage Event)']),
+  ];
+  // Each point as the dot + its text in its own column, so a wrapped line sits
+  // under the first word — the same look as the app's bulleted messages.
+  const settingsSummaryView = (
+    <View style={styles.modalBulletBlock}>
+      {settingsSummary.map((line, i) => (
+        <View key={i} style={styles.modalBulletRow}>
+          <Text style={styles.modalBullets}>•</Text>
+          <Text style={[styles.modalBullets, styles.modalBulletText]}>{line}</Text>
+        </View>
+      ))}
+    </View>
+  );
 
   function handleCreate() {
     if (!name.trim()) {
@@ -301,8 +318,8 @@ export default function CreateEventScreen() {
             <Text style={styles.modalWarning}>
               You are about to create <Text style={styles.modalStrong}>{name.trim()}</Text> with these settings:
             </Text>
-            <Text style={styles.modalBullets}>{settingsSummary}</Text>
-            <Text style={styles.modalWarning}>These cannot be changed later.</Text>
+            {settingsSummaryView}
+            <Text style={styles.modalWarning}>Invite-only and View-only cannot be changed later.</Text>
             <TextInput
               style={styles.modalInput}
               value={password}
@@ -335,9 +352,9 @@ export default function CreateEventScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Create “{name.trim()}”?</Text>
-            <Text style={styles.modalBullets}>{settingsSummary}</Text>
+            {settingsSummaryView}
             <Text style={styles.modalWarning}>
-              Neither of these can be changed after the event is created.
+              Invite-only and View-only cannot be changed after the event is created.
             </Text>
             <View style={styles.modalButtons}>
               <TouchableOpacity style={styles.modalCancel} onPress={() => setCreateStep(null)}>
@@ -426,7 +443,10 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 16, fontWeight: '800', color: Colors.white, marginBottom: 8 },
   modalWarning: { fontSize: 13, color: '#888780', lineHeight: 20, marginBottom: 12 },
   modalStrong: { color: Colors.white, fontWeight: '700' },
-  modalBullets: { fontSize: 13, color: Colors.white, lineHeight: 22, marginBottom: 12 },
+  modalBullets: { fontSize: 13, color: Colors.white, lineHeight: 22 },
+  modalBulletBlock: { marginBottom: 12 },
+  modalBulletRow: { flexDirection: 'row' },
+  modalBulletText: { flex: 1, paddingLeft: 6 },
   modalInput: { backgroundColor: '#111', borderWidth: 0.5, borderColor: '#333', borderRadius: 10, padding: 14, fontSize: 15, color: Colors.white, marginBottom: 10 },
   modalError: { fontSize: 13, color: '#E53935', marginBottom: 10 },
   modalButtons: { flexDirection: 'row', gap: 10 },

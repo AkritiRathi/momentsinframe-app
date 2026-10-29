@@ -482,10 +482,10 @@ export default function EventDetailScreen() {
       // vague, so each power is spelled out. Keep in step with the server:
       // an Admin cannot delete the Organiser's or another Admin's photos.
       "An Admin can:\n" +
-        "• delete photos uploaded by guests (not yours or other Admins')\n" +
-        "• block a guest from this event\n" +
-        "• see guests' names and phone numbers\n" +
-        "• upload even when the event is view-only\n\n" +
+        "• Delete photos uploaded by guests (not yours or other Admins')\n" +
+        "• Block a guest from this event\n" +
+        "• See guests' names and phone numbers\n" +
+        "• Upload even when the event is view-only\n\n" +
         "You can remove them as an Admin at any time.",
       [
         {

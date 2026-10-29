@@ -83,11 +83,49 @@ const JPG_LIMIT = 40;
 // ⚠ The WEBSITE tells guests "up to 100 photos at a time". If both numbers
 // are arbitrary they disagree for no reason — and the app is the master.
 const UPLOAD_BATCH_LIMIT = 40;
+
+// ⛔ THE ALREADY-UPLOADED CHECK — NAME + "LAST CHANGED" TIME (2026-10-29, the
+// user's yes). It used to match the FILE NAME only, so an edit that kept its
+// name (an iPhone Photos edit, Android Gallery "Save") was skipped and never
+// reached the server — against the decision that an edited photo is a NEW
+// photo, kept beside the original. An edit changes the phone's "last changed"
+// time, so a photo is skipped only when the name AND that time match one this
+// guest already uploaded. Falls back to the name alone when either side has no
+// time: photos uploaded before this change, or a photo the phone gave no time
+// for (Android picker when the photo cannot be identified).
+// Names are normalised to .jpg on both sides — the server stores every photo
+// as .jpg (see the notes at the two call sites).
+type UploadedIndex = Map<string, Set<number | null>>;
+const storedName = (name: string) => name.replace(/\.[^.]+$/, '.jpg');
+const asTime = (t: unknown): number | null =>
+  typeof t === 'number' && Number.isFinite(t) && t > 0 ? Math.round(t) : null;
+function indexMyUploads(photos: Photo[], userMobile: string | null | undefined): UploadedIndex {
+  const index: UploadedIndex = new Map();
+  if (!userMobile) return index;
+  for (const p of photos) {
+    if (!p.original_filename || p.uploaded_by_mobile !== userMobile) continue;
+    const key = storedName(p.original_filename);
+    if (!index.has(key)) index.set(key, new Set());
+    index.get(key)!.add(asTime(p.source_modified_at));
+  }
+  return index;
+}
+function isAlreadyUploaded(index: UploadedIndex, filename: string, modifiedAt: unknown): boolean {
+  const times = index.get(storedName(filename));
+  if (!times) return false;
+  if (times.has(null)) return true;            // uploaded before this change: name alone
+  const t = asTime(modifiedAt);
+  if (t === null) return true;                 // the phone gave no time: name alone
+  return times.has(t);                         // a different time = an edit → upload it
+}
 // Plan C: a row counts as "on screen" as soon as any of it shows.
 const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 1, minimumViewTime: 100 };
 
 type Photo = {
   id: string;
+  // The phone's "last changed" time when it was uploaded (2026-10-29); empty
+  // for photos uploaded before then. See isAlreadyUploaded().
+  source_modified_at?: number | null;
   thumbnail_path: string | null;
   media_type: string;
   taken_at: string;
@@ -504,18 +542,13 @@ async function backgroundUploadTask(): Promise<void> {
   // Pre-check: collect already-uploaded filenames so exact matches are skipped.
   // Only include photos uploaded by the current user — same filename from a
   // different user is a different photo and must go through backend pHash detection.
-  const existingFilenames = new Set<string>();
+  // NAME + "last changed" time since 2026-10-29 — see isAlreadyUploaded().
+  let myUploads: UploadedIndex = new Map();
   try {
     const existingRes = await getEventPhotos(slug);
     if (!existingRes.error) {
       const allPhotos = [...(existingRes.photos ?? []), ...(existingRes.otherPhotos ?? [])];
-      for (const p of allPhotos) {
-        if (p.original_filename && userMobile && p.uploaded_by_mobile === userMobile) {
-          // Normalised on this side too, so a row stored before the server
-          // started rewriting extensions still matches.
-          existingFilenames.add(p.original_filename.replace(/\.[^.]+$/, '.jpg'));
-        }
-      }
+      myUploads = indexMyUploads(allPhotos, userMobile);
     }
   } catch {}
 
@@ -537,8 +570,8 @@ async function backgroundUploadTask(): Promise<void> {
   // iPhone — every photo re-uploaded and was caught by backend duplicate
   // detection instead, which is the slow, wrong way round. Android happened to
   // work only because its photos are already .jpg. Fixed 2026-10-15.
-  const asStoredName = (name: string) => name.replace(/\.[^.]+$/, '.jpg');
-  const alreadyUploaded = (asset: MediaLibrary.Asset) => existingFilenames.has(asStoredName(asset.filename));
+  const alreadyUploaded = (asset: MediaLibrary.Asset) =>
+    isAlreadyUploaded(myUploads, asset.filename, asset.modificationTime);
   const preSkipped = allAssets.filter(alreadyUploaded).length;
   const toUpload = allAssets.filter(asset => !alreadyUploaded(asset) && !_bgDeselectedIds.has(asset.id));
 
@@ -623,7 +656,7 @@ async function backgroundUploadTask(): Promise<void> {
         if (!uploadOk) {
           result = { status: 'failed', section: null, uri: asset.uri, filename };
         } else {
-          const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined);
+          const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined, asTime(asset.modificationTime));
           if (proc.error) {
             result = { status: 'failed', section: null, uri: asset.uri, filename };
           } else if (proc.duplicate) {
@@ -1552,10 +1585,12 @@ export default function EventScreen() {
     const resolved = await Promise.all(assets.map(async (asset) => {
       let uri = asset.uri;
       let filename: string | undefined;
+      let modifiedAt: number | null = null;   // the phone's "last changed" time (2026-10-29)
       if (asset.assetId) {
         try {
           const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
           if (info?.filename) filename = info.filename;
+          modifiedAt = asTime(info?.modificationTime);
           // iOS: only file:// is usable — ph:// cannot be read by FileSystem,
           // and the file:// localUri is the original and preserves EXIF.
           // Android: any localUri it returns is fine.
@@ -1603,6 +1638,7 @@ export default function EventScreen() {
             // check is merely slow.
             if (sameShape && info.filename && !/^\d+\.[A-Za-z0-9]+$/.test(info.filename)) {
               filename = info.filename;
+              modifiedAt = asTime(info.modificationTime);
             }
           } catch {}
         }
@@ -1611,7 +1647,7 @@ export default function EventScreen() {
       // cache copy is already known-good and keeps its EXIF on Android, so
       // swapping it in would buy nothing and risk uploading the wrong photo.
 
-      return { uri, filename };
+      return { uri, filename, modifiedAt };
     }));
     const localUris = resolved.map(r => r.uri);
 
@@ -1637,6 +1673,9 @@ export default function EventScreen() {
     let resolvedFilenames: string[] = assets.map((a, i) =>
       resolved[i]?.filename ?? a.fileName ?? `photo_${Date.now()}.jpg`
     );
+    // ⛔ FOURTH index-aligned array (2026-10-29): rebuilt below together with
+    // assets, localUris and resolvedFilenames — never on its own.
+    let resolvedTimes: (number | null)[] = resolved.map(r => r?.modifiedAt ?? null);
 
     // Skip photos this user has already uploaded to this event, the same way
     // Upload by Date does. Without this, re-picking a photo from the gallery
@@ -1652,14 +1691,10 @@ export default function EventScreen() {
     try {
       const existingRes = await getEventPhotos(slug);
       if (!existingRes.error) {
-        const mine = new Set<string>();
-        for (const p of [...(existingRes.photos ?? []), ...(existingRes.otherPhotos ?? [])]) {
-          if (p.original_filename && userMobile && p.uploaded_by_mobile === userMobile) {
-            mine.add(p.original_filename.replace(/\.[^.]+$/, '.jpg'));
-          }
-        }
+        // NAME + "last changed" time since 2026-10-29 — see isAlreadyUploaded().
+        const mine = indexMyUploads([...(existingRes.photos ?? []), ...(existingRes.otherPhotos ?? [])], userMobile);
         if (mine.size > 0) {
-          const keep = resolvedFilenames.map(f => !mine.has(f.replace(/\.[^.]+$/, '.jpg')));
+          const keep = resolvedFilenames.map((f, i) => !isAlreadyUploaded(mine, f, resolvedTimes[i]));
           pickerPreSkipped = keep.filter(k => !k).length;
           if (pickerPreSkipped > 0) {
             // Rebuild all three index-aligned arrays together. localUris holds
@@ -1668,6 +1703,7 @@ export default function EventScreen() {
             const keptUris = localUris.filter((_, i) => keep[i]);
             assets = assets.filter((_, i) => keep[i]);
             resolvedFilenames = resolvedFilenames.filter((_, i) => keep[i]);
+            resolvedTimes = resolvedTimes.filter((_, i) => keep[i]);
             localUris.length = 0;
             localUris.push(...keptUris);
           }
@@ -1746,7 +1782,7 @@ export default function EventScreen() {
             if (!uploadOk) {
               result = { status: 'failed', section: null, uri: asset.uri, filename };
             } else {
-              const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined);
+              const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined, resolvedTimes[index]);
               if (proc.error) {
                 result = { status: 'failed', section: null, uri: asset.uri, filename };
               } else if (proc.duplicate) {

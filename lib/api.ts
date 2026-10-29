@@ -202,12 +202,15 @@ export async function getUploadUrl(eventSlug: string, filename: string, contentT
   return post('/api/upload-url', { eventSlug, filename, contentType, uploaderMobile });
 }
 
-export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, eventUserId?: string) {
+export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, eventUserId?: string, sourceModifiedAt?: number | null) {
   // uploaderMobile and uploaderName are deliberately NOT sent: since
   // 2026-10-08 the server takes the uploader from the login token and looks
   // the name up from app_users, so sending them implied identity came from
   // the client. eventUserId IS still read by the route, so it stays.
-  return post('/api/upload', { eventSlug, stagingKey, originalFilename, eventUserId }, 60000);
+  // sourceModifiedAt: the phone's "last changed" time for the photo (2026-10-29)
+  // — stored so the already-uploaded check can tell an EDIT from the same photo.
+  const timed = typeof sourceModifiedAt === 'number' && sourceModifiedAt > 0 ? { sourceModifiedAt } : {};
+  return post('/api/upload', { eventSlug, stagingKey, originalFilename, eventUserId, ...timed }, 60000);
 }
 
 // Only the ids are sent. The route takes the caller from the login token and

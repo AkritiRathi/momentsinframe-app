@@ -21,7 +21,8 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
-import { getEventPhotos, getPhotoUrls, deletePhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
+import { getEventPhotos, deletePhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
+import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
 import { buildDownloadFilename } from '../lib/downloadFilename';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
@@ -32,13 +33,13 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const GAP = 2;
 const THUMB_SIZE = (SCREEN_WIDTH - GAP * 2) / 3;
 const JPG_LIMIT = 40;
+// Plan C: a row counts as "on screen" as soon as any of it shows.
+const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 1, minimumViewTime: 100 };
 
 type GuestPhotoItem = {
   id: string;
   takenAt: string;
   date: string;
-  thumbUrl: string | null;
-  displayUrl: string | null;
   // Which gallery it belongs to. ⛔ The array itself stays FLAT and in display
   // order (main first, then other) because `photos[lightboxIndex]` is indexed
   // POSITIONALLY throughout this file. Splitting it into two arrays would
@@ -129,6 +130,9 @@ export default function GuestUploadsScreen() {
   };
 
   const [photos, setPhotos] = useState<GuestPhotoItem[]>([]);
+  // ⛔ Image addresses load AS NEEDED (2026-10-29, plan C) — see lib/usePhotoUrls.ts.
+  // This screen used to wait for EVERY address before showing anything.
+  const { urls: photoUrls, request: requestUrls, sync: syncUrls } = usePhotoUrls(eventSlug, () => adminPhone);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<'normal' | 'delete' | 'download'>('normal');
@@ -269,7 +273,7 @@ export default function GuestUploadsScreen() {
       // ⚠ These two were MERGED into one list until 2026-10-17, so this screen
       // showed every photo under "Photo Gallery" while the Event and My Photos
       // screens separated them. Kept apart now, main first.
-      type Row = { id: string; taken_at: string; uploaded_by_mobile: string | null };
+      type Row = { id: string; taken_at: string; uploaded_by_mobile: string | null; thumbnail_path?: string | null };
       const byDate = (a: Row, b: Row) =>
         new Date(a.taken_at).getTime() - new Date(b.taken_at).getTime();
       const forGuest = (rows: Row[]) =>
@@ -286,18 +290,14 @@ export default function GuestUploadsScreen() {
         return 0;
       }
 
-      const ids = mine.map(p => p.id);
-      const batches: string[][] = [];
-      for (let i = 0; i < ids.length; i += 20) batches.push(ids.slice(i, i + 20));
-      const urlResults = await Promise.all(batches.map(b => getPhotoUrls(eventSlug, b, adminPhone)));
-      const urls: Record<string, { thumbUrl?: string; displayUrl?: string; url?: string }> = Object.assign({}, ...urlResults.map(r => r.urls ?? {}));
+      // The grid is shown at once; addresses follow as rows come into view.
+      syncUrls(mine);
+      requestUrls(mine.slice(0, 60).map(p => p.id));
 
       const items: GuestPhotoItem[] = mine.map(p => ({
         id: p.id,
         takenAt: p.taken_at,
         date: formatDate(p.taken_at),
-        thumbUrl: urls[p.id]?.thumbUrl ?? null,
-        displayUrl: urls[p.id]?.displayUrl ?? null,
         isOther: otherIds.has(p.id),
       }));
       setPhotos(items);
@@ -352,9 +352,35 @@ export default function GuestUploadsScreen() {
     return items;
   }, [photos]);
 
-  const flatListExtraData = useMemo(() => ({ selected, mode }), [selected, mode]);
+  // photoUrls is here so a row already on screen re-draws when its addresses arrive.
+  const flatListExtraData = useMemo(() => ({ selected, mode, photoUrls }), [selected, mode, photoUrls]);
 
-  const lightboxImageUrl = photos[lightboxIndex]?.displayUrl ?? photos[lightboxIndex]?.thumbUrl ?? null;
+  const lightboxUrls = photos[lightboxIndex] ? photoUrls[photos[lightboxIndex].id] : undefined;
+  const lightboxImageUrl = lightboxUrls?.displayUrl ?? lightboxUrls?.thumbUrl ?? null;
+
+  // ── Image addresses for what is about to be shown (plan C) ──────────────
+  const visibleRowsRef = useRef<{ first: number; last: number }>({ first: 0, last: 8 });
+  const requestAroundVisible = useCallback(() => {
+    const { first, last } = visibleRowsRef.current;
+    requestUrls(idsAroundRows(listDataRef.current, first, last,
+      row => (row.type === 'photo_row' ? row.photos.map(p => p.id) : [])));
+  }, [requestUrls]);
+  const requestAroundVisibleRef = useRef(requestAroundVisible);
+  useEffect(() => { requestAroundVisibleRef.current = requestAroundVisible; }, [requestAroundVisible]);
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: { index: number | null }[] }) => {
+    const idx = viewableItems.map(v => v.index).filter((i): i is number => i !== null && i !== undefined);
+    if (idx.length === 0) return;
+    visibleRowsRef.current = { first: Math.min(...idx), last: Math.max(...idx) };
+    requestAroundVisibleRef.current();
+  }).current;
+  useEffect(() => { requestAroundVisible(); }, [listItems, requestAroundVisible]);
+  // The lightbox: the photo shown and two either side.
+  useEffect(() => {
+    if (!lightboxVisible) return;
+    requestUrls([0, 1, -1, 2, -2]
+      .map(d => photos[lightboxIndex + d]?.id)
+      .filter(Boolean) as string[]);
+  }, [lightboxVisible, lightboxIndex, photos, requestUrls]);
 
   // Closing the lightbox used to leave the grid exactly where it was when the
   // lightbox opened: the Modal sits OVER this screen, so the list never
@@ -1114,7 +1140,7 @@ export default function GuestUploadsScreen() {
               }}
               photoId={photo.id}
               flatIndex={item.startIndex + colIdx}
-              thumbUrl={photo.thumbUrl}
+              thumbUrl={photoUrls[photo.id]?.thumbUrl ?? null}
               isSelected={selected.has(photo.id)}
               mode={mode}
               onPress={handleThumbPress}
@@ -1285,6 +1311,8 @@ export default function GuestUploadsScreen() {
                 renderItem={renderItem}
                 extraData={flatListExtraData}
                 estimatedItemSize={THUMB_SIZE + GAP}
+                onViewableItemsChanged={onViewableItemsChanged}
+                viewabilityConfig={VIEWABILITY_CONFIG}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
                 contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}

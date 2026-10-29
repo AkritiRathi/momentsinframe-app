@@ -20,8 +20,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
-import { findMyPhotos, getPhotoUrls, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
+import { findMyPhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
 import { buildDownloadFilename } from '../lib/downloadFilename';
+import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
@@ -37,7 +38,8 @@ const JPG_LIMIT = 40;
 const PRIVACY_KEY = 'myPhotosPrivacySeen';
 
 type Photo = { id: string; taken_at: string; uploaded_by_name?: string };
-type PhotoUrls = { url?: string; thumbUrl?: string; displayUrl?: string };
+// Plan C: a row counts as "on screen" as soon as any of it shows.
+const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 1, minimumViewTime: 100 };
 type Mode = 'camera' | 'searching' | 'results';
 
 type ListItem =
@@ -109,7 +111,6 @@ export default function MyPhotosScreen() {
 
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [otherPhotos, setOtherPhotos] = useState<Photo[]>([]);
-  const [photoUrls, setPhotoUrls] = useState<Record<string, PhotoUrls>>({});
   const [capturing, setCapturing] = useState(false);
   const [downloadMode, setDownloadMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -192,6 +193,9 @@ export default function MyPhotosScreen() {
   const userMobile = params.userMobile || undefined;
   // Logged-in number for downloads/links; the server decides the role
   const idPhone = userMobile ?? adminPhone;
+  // ⛔ Image addresses load AS NEEDED (2026-10-29, plan C) — see lib/usePhotoUrls.ts.
+  // Called here, below slug and idPhone, which it needs; above every early return.
+  const { urls: photoUrls, request: requestUrls } = usePhotoUrls(slug, () => idPhone);
   const totalPhotos = parseInt(params.totalPhotos ?? '0', 10);
 
   const allIds = useMemo(() => [
@@ -251,6 +255,30 @@ export default function MyPhotosScreen() {
     listDataRef.current = items;
     return items;
   }, [photos, otherPhotos]);
+
+  // ── Image addresses for what is about to be shown (plan C) ──────────────
+  const visibleRowsRef = useRef<{ first: number; last: number }>({ first: 0, last: 8 });
+  const requestAroundVisible = useCallback(() => {
+    const { first, last } = visibleRowsRef.current;
+    requestUrls(idsAroundRows(listDataRef.current, first, last,
+      row => (row.type === 'photo_row' ? row.ids : [])));
+  }, [requestUrls]);
+  const requestAroundVisibleRef = useRef(requestAroundVisible);
+  useEffect(() => { requestAroundVisibleRef.current = requestAroundVisible; }, [requestAroundVisible]);
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: { index: number | null }[] }) => {
+    const idx = viewableItems.map(v => v.index).filter((i): i is number => i !== null && i !== undefined);
+    if (idx.length === 0) return;
+    visibleRowsRef.current = { first: Math.min(...idx), last: Math.max(...idx) };
+    requestAroundVisibleRef.current();
+  }).current;
+  useEffect(() => { requestAroundVisible(); }, [listItems, requestAroundVisible]);
+  // The lightbox: the photo shown and two either side.
+  useEffect(() => {
+    if (!lightboxVisible) return;
+    requestUrls([0, 1, -1, 2, -2]
+      .map(d => allIds[lightboxIndex + d])
+      .filter(Boolean) as string[]);
+  }, [lightboxVisible, lightboxIndex, allIds, requestUrls]);
 
   // ── Drag select helpers ─────────────────────────────────────────────────────
   function getPhotoIdAtFlatIndex(index: number): string | null {
@@ -674,7 +702,8 @@ export default function MyPhotosScreen() {
       setOtherPhotos(other);
       setMode('results');
       const ids = [...main.map(p => p.id), ...other.map(p => p.id)];
-      if (ids.length > 0) loadUrls(ids);
+      // The first screens straight away; the grid asks for the rest as it scrolls.
+      if (ids.length > 0) requestUrls(ids.slice(0, 60));
       // ⛔ DO NOT CLEAR THE BREADCRUMB HERE. It was cleared on this line until
       // 2026-10-17, three lines after step 8 was written — so the delete and
       // the crash RACED. One run the crash won and we saw "8"; the next the
@@ -689,16 +718,6 @@ export default function MyPhotosScreen() {
       setMode('camera');
     }
     setCapturing(false);
-  }
-
-  async function loadUrls(ids: string[]) {
-    const batches = chunk(ids, 20);
-    await Promise.all(batches.map(async (batch) => {
-      try {
-        const result = await getPhotoUrls(slug, batch, idPhone);
-        if (result.urls) setPhotoUrls(prev => ({ ...prev, ...result.urls }));
-      } catch {}
-    }));
   }
 
   async function handleDownload() {
@@ -1105,6 +1124,9 @@ export default function MyPhotosScreen() {
               data={listItems}
               keyExtractor={item => item.key}
               estimatedItemSize={THUMB_SIZE + GAP}
+              extraData={photoUrls}
+              onViewableItemsChanged={onViewableItemsChanged}
+              viewabilityConfig={VIEWABILITY_CONFIG}
               contentContainerStyle={{ paddingBottom: 20 }}
               onScroll={e => { scrollOffsetRef.current = e.nativeEvent.contentOffset.y; }}
               scrollEventThrottle={16}

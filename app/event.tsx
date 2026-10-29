@@ -30,6 +30,7 @@ import {
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
   checkAdminStatus, findMyPhotos,
 } from '../lib/api';
+import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
 import { API_BASE_URL } from '../constants/config';
 import {
   getUserProfile, getEventUserId,
@@ -82,6 +83,8 @@ const JPG_LIMIT = 40;
 // ⚠ The WEBSITE tells guests "up to 100 photos at a time". If both numbers
 // are arbitrary they disagree for no reason — and the app is the master.
 const UPLOAD_BATCH_LIMIT = 40;
+// Plan C: a row counts as "on screen" as soon as any of it shows.
+const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 1, minimumViewTime: 100 };
 
 type Photo = {
   id: string;
@@ -93,13 +96,6 @@ type Photo = {
   uploaded_by_name: string | null;
   uploaded_by_mobile: string | null;
   uploaded_at: string | null;
-};
-
-type PhotoUrls = {
-  thumbUrl: string | null;
-  displayUrl: string | null;
-  url: string | null;
-  originalFilename: string | null;
 };
 
 type ListItem =
@@ -742,7 +738,10 @@ export default function EventScreen() {
 
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [otherPhotos, setOtherPhotos] = useState<Photo[]>([]);
-  const [photoUrls, setPhotoUrls] = useState<Record<string, PhotoUrls>>({});
+  // ⛔ Image addresses load AS NEEDED (2026-10-29, plan C) — see lib/usePhotoUrls.ts.
+  // userMobileRef is read when a request runs, never during this render.
+  const { urls: photoUrls, request: requestUrls, sync: syncUrls } =
+    usePhotoUrls(slug, () => (userMobileRef.current ?? params.adminPhone) || undefined);
   const [loading, setLoading] = useState(true);
   const [userMobile, setUserMobile] = useState<string | null>(null);
   const userMobileRef = useRef<string | null>(null);
@@ -1123,7 +1122,11 @@ export default function EventScreen() {
         if (typeof data.event.find_my_photos_enabled === 'boolean') setFindMyPhotosEnabled(data.event.find_my_photos_enabled);
       }
       setLoading(false);
-      loadAllUrls([...main, ...other]);
+      // Drop addresses made for an older version of a photo (replaced by a
+      // better copy), then ask for the first screens straight away; the grid
+      // asks for the rest as it scrolls.
+      syncUrls([...main, ...other]);
+      requestUrls([...main, ...other].slice(0, 60).map(p => p.id));
     }
     try {
       await attempt();
@@ -1137,24 +1140,6 @@ export default function EventScreen() {
         setLoading(false);
       }
     }
-  }
-
-  async function loadAllUrls(all: Photo[]) {
-    const ids = all.map(p => p.id);
-    const batches: string[][] = [];
-    for (let i = 0; i < ids.length; i += 20) batches.push(ids.slice(i, i + 20));
-    await Promise.all(
-      batches.map(async (batch) => {
-        try {
-          const result = await getPhotoUrls(slug, batch, (userMobileRef.current ?? params.adminPhone) || undefined);
-          if (result.urls) {
-            setPhotoUrls(prev => ({ ...prev, ...result.urls }));
-            const thumbs = Object.values(result.urls).map(u => u.thumbUrl).filter(Boolean) as string[];
-            if (thumbs.length > 0 && Platform.OS === 'ios') ExpoImage.prefetch(thumbs);
-          }
-        } catch { /* skip */ }
-      })
-    );
   }
 
   // lightboxPhotos is declared after listData useMemo (below) so orderedMain/orderedOther are in scope
@@ -2666,6 +2651,39 @@ export default function EventScreen() {
 
   useEffect(() => { lightboxPhotosRef.current = lightboxPhotos; }, [lightboxPhotos]);
 
+  // ── Image addresses for what is about to be shown (plan C) ──────────────
+  // The grid: the rows on screen plus a few screens ahead, whenever the
+  // visible rows change — and again when the list itself changes (an upload
+  // adds photos without the visible rows moving).
+  const visibleRowsRef = useRef<{ first: number; last: number }>({ first: 0, last: 8 });
+  const requestAroundVisible = useCallback(() => {
+    const { first, last } = visibleRowsRef.current;
+    requestUrls(idsAroundRows(listDataRef.current, first, last,
+      row => (row.type === 'photo_row' ? row.photos.map(p => p.id) : [])));
+  }, [requestUrls]);
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: { index: number | null }[] }) => {
+    const idx = viewableItems.map(v => v.index).filter((i): i is number => i !== null && i !== undefined);
+    if (idx.length === 0) return;
+    visibleRowsRef.current = { first: Math.min(...idx), last: Math.max(...idx) };
+    requestAroundVisibleRef.current();
+  }).current;
+  const requestAroundVisibleRef = useRef(requestAroundVisible);
+  useEffect(() => { requestAroundVisibleRef.current = requestAroundVisible; }, [requestAroundVisible]);
+  useEffect(() => { listDataRef.current = listData; requestAroundVisible(); }, [listData, requestAroundVisible]);
+  // The lightbox: the photo shown and two either side, so a swipe is ready.
+  useEffect(() => {
+    if (!lightboxVisible) return;
+    requestUrls([0, 1, -1, 2, -2]
+      .map(d => lightboxPhotos[lightboxIndex + d]?.id)
+      .filter(Boolean) as string[]);
+  }, [lightboxVisible, lightboxIndex, lightboxPhotos, requestUrls]);
+  // The skipped and duplicate viewers show photos already in the gallery.
+  useEffect(() => { if (skippedIds.length > 0) requestUrls(skippedIds); }, [skippedIds, requestUrls]);
+  useEffect(() => {
+    const ids = duplicateResults.map(r => r.existingPhotoId).filter(Boolean) as string[];
+    if (ids.length > 0) requestUrls(ids);
+  }, [duplicateResults, requestUrls]);
+
   // Closing the lightbox used to leave the grid exactly where it was when the
   // lightbox opened: the Modal sits OVER this screen, so the list never
   // unmounts and keeps its old scroll position. Open photo 1, swipe to 50,
@@ -2701,9 +2719,11 @@ export default function EventScreen() {
     lightboxWasVisible.current = lightboxVisible;
   }, [lightboxVisible, lightboxIndex]);
 
+  // photoUrls is here so a row already on screen re-draws when its addresses
+  // arrive — they now load while the guest scrolls (plan C).
   const flatListExtraData = useMemo(
-    () => ({ selected, deleteMode, selectMode }),
-    [selected, deleteMode, selectMode]
+    () => ({ selected, deleteMode, selectMode, photoUrls }),
+    [selected, deleteMode, selectMode, photoUrls]
   );
 
   useEffect(() => {
@@ -3486,6 +3506,8 @@ export default function EventScreen() {
             renderItem={renderItem}
             extraData={flatListExtraData}
             estimatedItemSize={130}
+            onViewableItemsChanged={onViewableItemsChanged}
+            viewabilityConfig={VIEWABILITY_CONFIG}
             onScroll={handleScroll}
             scrollEventThrottle={16}
             maintainVisibleContentPosition={{ minIndexForVisible: 0 }}

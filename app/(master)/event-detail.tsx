@@ -472,14 +472,38 @@ export default function EventDetailScreen() {
       showAlert('Already added', `${name ?? phone} is already an Admin.`);
       return;
     }
-    const pw = await getOrganiserPassword();
-    if (!pw || !params.organiserPhone) return;
-    const result = await addCoadmin(params.slug, params.organiserPhone, pw, phone, name);
-    if (result.error) {
-      showAlert('Error', result.error);
-    } else {
-      await loadCoadmins();
-    }
+    // ⛔ ASK FIRST (2026-10-27 decided, wording approved; built 2026-10-30, the
+    // user's yes). Picking a name used to make them an Admin on one tap, so a
+    // mis-tap created an Admin who can delete guests' photos. No lock: the
+    // Organiser can still remove or block them (project-admin-lock).
+    showAlert(
+      `Make ${name ?? phone} an Admin?`,
+      // Wording re-approved 2026-10-30: the user found "manage guests" too
+      // vague, so each power is spelled out. Keep in step with the server:
+      // an Admin cannot delete the Organiser's or another Admin's photos.
+      "An Admin can:\n" +
+        "• delete photos uploaded by guests (not yours or other Admins')\n" +
+        "• block a guest from this event\n" +
+        "• see guests' names and phone numbers\n" +
+        "• upload even when the event is view-only\n\n" +
+        "You can remove them as an Admin at any time.",
+      [
+        {
+          text: 'Make Admin',
+          onPress: async () => {
+            const pw = await getOrganiserPassword();
+            if (!pw || !params.organiserPhone) return;
+            const result = await addCoadmin(params.slug, params.organiserPhone, pw, phone, name);
+            if (result.error) {
+              showAlert('Error', result.error);
+            } else {
+              await loadCoadmins();
+            }
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
   }
 
   async function handleAddGuest() {
@@ -870,7 +894,7 @@ export default function EventDetailScreen() {
               <Text style={styles.panelClose}>×</Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.panelDesc}>Admins can delete any photo uploaded by any guest or other Admins but not photos by the Organiser. They join using the event code, just like other guests.</Text>
+          <Text style={styles.panelDesc}>Admins can delete photos uploaded by guests, but not photos by you or other Admins. They join using the event code, just like other guests.</Text>
           <SearchBox value={coadminListSearch} onChange={setCoadminListSearch} />
           <ScrollView contentContainerStyle={styles.panelScroll}>
             {coadminsLoading ? (

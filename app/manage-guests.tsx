@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, TextInput,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,6 +26,7 @@ function matchesPersonSearch(query: string, phone: string, ...names: (string | n
 import { getUserProfile } from '../lib/storage';
 import { Colors } from '../constants/colors';
 import { useAlert } from '../lib/useAlert';
+import SearchBox from '../components/SearchBox';
 
 type Guest = {
   name: string;
@@ -147,16 +148,8 @@ export default function ManageGuestsScreen() {
         </TouchableOpacity>
       </View>
       <Text style={styles.desc}>Block a guest to remove their access to this event. They will not be able to rejoin. You can unblock them at any time.</Text>
-      <View style={styles.searchWrap}>
-        <TextInput
-          style={styles.search}
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Search by name or number"
-          placeholderTextColor="#555"
-          autoCorrect={false}
-        />
-      </View>
+      {/* The app-wide SearchBox, keeping this screen's own look. */}
+      <SearchBox value={search} onChangeText={setSearch} wrapStyle={styles.searchWrap} inputStyle={styles.search} />
       <ScrollView contentContainerStyle={styles.scroll}>
         {loading ? (
           <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />

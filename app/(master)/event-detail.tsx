@@ -16,6 +16,7 @@ import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
+import SearchBox from '../../components/SearchBox';
 
 // ⛔ ONE MATCH RULE FOR EVERY PEOPLE-SEARCH ON THIS SCREEN. Three lists use
 // it, so they cannot drift apart (app/manage-guests.tsx carries the same rule). It matches anything a row can DISPLAY: the
@@ -30,21 +31,8 @@ function matchesPersonSearch(query: string, phone: string, ...names: (string | n
   return names.some(n => (n ?? '').toLowerCase().includes(q));
 }
 
-// One definition so all four boxes look and behave identically.
-function SearchBox({ value, onChange }: { value: string; onChange: (t: string) => void }) {
-  return (
-    <View style={styles.pickerSearchWrap}>
-      <TextInput
-        style={styles.pickerSearch}
-        value={value}
-        onChangeText={onChange}
-        placeholder="Search by name or number"
-        placeholderTextColor="#555"
-        autoCorrect={false}
-      />
-    </View>
-  );
-}
+// Every search box here is the app-wide SearchBox (components/SearchBox.tsx),
+// whose hint is drawn by the app — never the phone's stretched placeholder.
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -895,7 +883,7 @@ export default function EventDetailScreen() {
             </TouchableOpacity>
           </View>
           <Text style={styles.panelDesc}>Admins can delete photos uploaded by guests, but not photos by you or other Admins. They join using the event code, just like other guests.</Text>
-          <SearchBox value={coadminListSearch} onChange={setCoadminListSearch} />
+          <SearchBox value={coadminListSearch} onChangeText={setCoadminListSearch} />
           <ScrollView contentContainerStyle={styles.panelScroll}>
             {coadminsLoading ? (
               <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
@@ -991,16 +979,7 @@ export default function EventDetailScreen() {
                   300 names to find one person — and the contact picker this
                   replaced already had search. It searches ONLY the people who have
                   joined this event. */}
-              <View style={styles.pickerSearchWrap}>
-                <TextInput
-                  style={styles.pickerSearch}
-                  value={coadminSearch}
-                  onChangeText={setCoadminSearch}
-                  placeholder="Search by name or number"
-                  placeholderTextColor="#555"
-                  autoCorrect={false}
-                />
-              </View>
+              <SearchBox value={coadminSearch} onChangeText={setCoadminSearch} />
               <ScrollView contentContainerStyle={styles.panelScroll}>
                 {joinedGuestsLoading ? (
                   <ActivityIndicator color={Colors.accent} style={{ marginTop: 24 }} />
@@ -1117,7 +1096,7 @@ export default function EventDetailScreen() {
               </TouchableOpacity>
             </View>
             <Text style={styles.panelDesc}>Only guests on this list can join the event. Add guests by their phone number and they'll be able to enter the event code and join.</Text>
-            <SearchBox value={allowedSearch} onChange={setAllowedSearch} />
+            <SearchBox value={allowedSearch} onChangeText={setAllowedSearch} />
             <ScrollView contentContainerStyle={styles.panelScroll}>
               {allowedGuestsLoading ? (
                 <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
@@ -1269,16 +1248,11 @@ export default function EventDetailScreen() {
                     <Text style={styles.panelClose}>×</Text>
                   </TouchableOpacity>
                 </View>
-                <View style={styles.pickerSearchWrap}>
-                  <TextInput
-                    style={styles.pickerSearch}
-                    value={contactSearch}
-                    onChangeText={t => { setContactSearch(t); setExpandedContact(null); }}
-                    placeholder="Search by name…"
-                    placeholderTextColor="#555"
-                    autoCorrect={false}
-                  />
-                </View>
+                <SearchBox
+                  value={contactSearch}
+                  onChangeText={t => { setContactSearch(t); setExpandedContact(null); }}
+                  hint="Search by name…"
+                />
                 <ScrollView contentContainerStyle={styles.panelScroll}>
                   {contactsList
                     .filter(c => c.name.toLowerCase().includes(contactSearch.toLowerCase()))
@@ -1425,8 +1399,6 @@ const styles = StyleSheet.create({
   panelClose: { fontSize: 28, color: Colors.textMuted, paddingHorizontal: 4 },
   panelDesc: { fontSize: 13, color: Colors.textMuted, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, lineHeight: 19 },
   panelScroll: { padding: 16, gap: 8 },
-  pickerSearchWrap: { paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: '#222' },
-  pickerSearch: { backgroundColor: '#1E1E1E', borderRadius: 8, padding: 10, fontSize: 14, color: Colors.white, borderWidth: 0.5, borderColor: '#333' },
   pickerContact: { borderBottomWidth: 0.5, borderBottomColor: '#1E1E1E' },
   pickerBadgeRow: { flexDirection: 'row', alignItems: 'center', paddingRight: 4 },
   pickerBadgeText: { flex: 1 },

@@ -198,8 +198,17 @@ function formatDate(iso: string) {
   });
 }
 
+// Calendar days from TODAY to the expiry date, both in India time (0 = expires
+// today, 1 = tomorrow, -1 = expired yesterday). ⛔ 2026-10-30: this used to
+// round the hours left UP (Math.ceil), so on the last day it said "closes on
+// <today>" and for the 24 h after expiry it said "closes today". Whether the
+// event HAS expired comes from the real time (isEventExpired), never from this.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+function istDayNumber(ms: number): number {
+  return Math.floor((ms + IST_OFFSET_MS) / 86400000);
+}
 function daysUntil(iso: string): number {
-  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
+  return istDayNumber(new Date(iso).getTime()) - istDayNumber(Date.now());
 }
 
 import { buildDownloadFilename } from '../lib/downloadFilename';
@@ -2917,7 +2926,7 @@ export default function EventScreen() {
               {/* After expiry only the Organiser and Admins can open the event,
                   so the wording is theirs (2026-10-30, the user's yes). The old
                   line promised photos "will be removed" — nothing removes them. */}
-              {daysLeft < 0
+              {isEventExpired
                 ? userRole === 'organiser'
                   ? `This event expired on ${formatDate(expiresAt)}.\nGuests can no longer open it. You can still view, delete, upload and download photos.`
                   : userRole === 'coadmin'

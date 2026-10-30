@@ -8,7 +8,7 @@ import { useEffect, useCallback, useState, useRef } from 'react';
 import * as Updates from 'expo-updates';
 import * as Application from 'expo-application';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getUserProfile, clearUserProfile, UserProfile } from '../../lib/storage';
+import { getUserProfile, clearUserProfile, UserProfile, getSessionExpiry } from '../../lib/storage';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
@@ -28,10 +28,19 @@ export default function HomeScreen() {
   const [deletePasswordError, setDeletePasswordError] = useState('');
   const [deletingAccount, setDeletingAccount] = useState(false);
   const gearRef = useRef<TouchableOpacity>(null);
+  // ⭐ LOGIN-ENDS STRIP (2026-10-30, the user: option D, "3", "Only on the
+  // Welcome <name> screen/Home screen"): from 3 days before this device's
+  // 30-day login ends, a strip under "Welcome" offers Renew now. Shown here ONLY.
+  const [loginEndsAt, setLoginEndsAt] = useState<Date | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       (async () => {
+        getSessionExpiry().then(iso => {
+          const at = iso ? new Date(iso) : null;
+          const msLeft = at ? at.getTime() - Date.now() : -1;
+          setLoginEndsAt(at && msLeft > 0 && msLeft <= 3 * 24 * 60 * 60 * 1000 ? at : null);
+        }).catch(() => setLoginEndsAt(null));
         const p = await getUserProfile();
         if (!p?.mobile) { setProfile(p); return; }
 
@@ -211,20 +220,41 @@ export default function HomeScreen() {
                   return;
                 }
                 setTimeout(() => {
+                  // ⭐ "Log out from all devices" (2026-10-30, the user's yes):
+                  // also ends this number's login on every other phone and
+                  // browser. Main buttons first, Cancel last (app convention).
+                  const finishLocalLogout = async () => {
+                    await clearUserProfile();
+                    await AsyncStorage.clear();
+                    router.replace('/(auth)/name-entry');
+                  };
                   showAlert(
                     'Log out?',
-                    'You will be removed from all events you have joined, including any Admin roles. Your uploaded photos will remain with your name. If you log in again with the same number, you can rejoin open events and manage your photos.',
+                    'You will be removed from all events you have joined, including any Admin roles. Your uploaded photos will remain with your name. If you log in again with the same number, you can rejoin open events and manage your photos.\n\n"Log out from all devices" also logs you out on your other phones and browsers.',
                     [
-                      { text: 'Cancel' },
                       {
                         text: 'Log out', onPress: async () => {
                           const profile = await getUserProfile();
-                          if (profile?.mobile) await logoutUser(profile.mobile).catch(() => {});
-                          await clearUserProfile();
-                          await AsyncStorage.clear();
-                          router.replace('/(auth)/name-entry');
+                          if (profile?.mobile) await logoutUser(profile.mobile).catch(() => false);
+                          await finishLocalLogout();
                         },
                       },
+                      {
+                        text: 'Log out from all devices', onPress: async () => {
+                          const profile = await getUserProfile();
+                          const ok = profile?.mobile ? await logoutUser(profile.mobile, true).catch(() => false) : false;
+                          if (!ok) {
+                            // Stay logged in here, so they can try again.
+                            setTimeout(() => showAlert(
+                              'Could not log out other devices',
+                              'Please check your connection and try again. If your login has ended, renew it first.',
+                            ), 300);
+                            return;
+                          }
+                          await finishLocalLogout();
+                        },
+                      },
+                      { text: 'Cancel', style: 'cancel' },
                     ]
                   );
                 }, 300);
@@ -287,6 +317,17 @@ export default function HomeScreen() {
         <Text style={styles.heading}>
           Welcome <Text style={styles.accent}>{profile?.firstName ?? '...'}</Text> 👋
         </Text>
+        {loginEndsAt && (
+          <View style={styles.loginStrip}>
+            <Text style={styles.loginStripText}>Your login ends {describeLoginEnd(loginEndsAt)}.</Text>
+            <TouchableOpacity
+              style={styles.loginStripBtn}
+              onPress={() => router.push({ pathname: '/(auth)/name-entry', params: { renew: 'renew' } })}
+            >
+              <Text style={styles.loginStripBtnText}>Renew now</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       <View style={styles.body}>
@@ -322,7 +363,24 @@ export default function HomeScreen() {
   );
 }
 
+// "today at 8:16 PM" / "tomorrow at 8:16 PM" / "on 2 Nov at 8:16 PM"
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function describeLoginEnd(at: Date): string {
+  const h = at.getHours() % 12 || 12;
+  const time = `${h}:${String(at.getMinutes()).padStart(2, '0')} ${at.getHours() < 12 ? 'AM' : 'PM'}`;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const day = new Date(at); day.setHours(0, 0, 0, 0);
+  const diff = Math.round((day.getTime() - today.getTime()) / 86400000);
+  if (diff === 0) return `today at ${time}`;
+  if (diff === 1) return `tomorrow at ${time}`;
+  return `on ${at.getDate()} ${MONTHS[at.getMonth()]} at ${time}`;
+}
+
 const styles = StyleSheet.create({
+  loginStrip: { marginTop: 14, backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 1, borderColor: Colors.accent, paddingVertical: 12, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  loginStripText: { flex: 1, fontSize: 14, color: Colors.white, lineHeight: 20 },
+  loginStripBtn: { backgroundColor: Colors.accent, borderRadius: 10, paddingVertical: 8, paddingHorizontal: 12 },
+  loginStripBtnText: { fontSize: 14, fontWeight: '700', color: Colors.background },
   container: { flex: 1, backgroundColor: Colors.background },
 
   header: {

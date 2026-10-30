@@ -2,9 +2,9 @@ import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ScrollView, StatusBar, ActivityIndicator,
 } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { saveUserProfile } from '../../lib/storage';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useState, useEffect } from 'react';
+import { saveUserProfile, getUserProfile } from '../../lib/storage';
 import { registerUser, lookupUsers, sendOtp, verifyOtp } from '../../lib/api';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -29,6 +29,21 @@ export default function NameEntryScreen() {
   const [isExisting, setIsExisting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // ⭐ RENEW MODE (2026-10-30, the user's yes): `renew=renew` from the Home
+  // screen's "Renew now", `renew=expired` when the server refused the login.
+  // The user's own number is filled in and locked — this is a new code for the
+  // same person, not a different login. The user still taps Go (no code is
+  // sent without a tap).
+  const { renew } = useLocalSearchParams<{ renew?: string }>();
+  const renewMode = renew === 'renew' || renew === 'expired';
+  const [renewNumberLocked, setRenewNumberLocked] = useState(false);
+  useEffect(() => {
+    if (!renewMode) return;
+    getUserProfile().then(p => {
+      if (p?.mobile) { setMobile(p.mobile); setRenewNumberLocked(true); }
+    }).catch(() => {});
+  }, [renewMode]);
 
   async function handleContinue() {
     if (!/^\d{10}$/.test(mobile.trim())) {
@@ -124,8 +139,16 @@ export default function NameEntryScreen() {
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.appName}>MomentsInFrame</Text>
-          <Text style={styles.title}>Let's get started</Text>
-          {!isExisting && <Text style={styles.warning}>Details once entered cannot be changed.</Text>}
+          <Text style={styles.title}>{renewMode ? (renew === 'expired' ? 'Log in again' : 'Renew your login') : "Let's get started"}</Text>
+          {renewMode ? (
+            <Text style={styles.renewNote}>
+              {renew === 'expired'
+                ? 'Your login has ended. Tap Go to get a new code on WhatsApp — your events and photos are safe.'
+                : 'Tap Go to get a new code on WhatsApp. Your login will then last another 30 days.'}
+            </Text>
+          ) : (
+            !isExisting && <Text style={styles.warning}>Details once entered cannot be changed.</Text>
+          )}
 
           <View style={styles.form}>
             {/* Mobile number */}
@@ -142,7 +165,7 @@ export default function NameEntryScreen() {
                 onChangeText={setMobile}
                 keyboardType="phone-pad"
                 maxLength={10}
-                editable={isPhoneStep}
+                editable={isPhoneStep && !renewNumberLocked}
               />
               {isPhoneStep && (
                 <TouchableOpacity style={styles.goButton} onPress={handleContinue} disabled={loading}>
@@ -229,6 +252,7 @@ const styles = StyleSheet.create({
   appName: { fontSize: 13, fontWeight: '700', color: Colors.accent, letterSpacing: 1.5, marginBottom: 16, textTransform: 'uppercase' },
   title: { fontSize: 30, fontWeight: '800', color: Colors.white, lineHeight: 36, marginBottom: 10 },
   warning: { fontSize: 13, fontWeight: '700', color: Colors.accent, marginBottom: 24 },
+  renewNote: { fontSize: 14, color: Colors.textMuted, lineHeight: 20, marginBottom: 24 },
   form: { marginTop: 8 },
   label: { ...Typography.inputLabel, color: Colors.accent, marginBottom: 8 },
   input: {

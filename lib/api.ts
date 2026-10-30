@@ -15,21 +15,25 @@ async function authHeaders(base: Record<string, string> = {}): Promise<Record<st
   return base;
 }
 
-// One bounce only: several parallel requests failing at once must not fire
-// several navigations.
+// One bounce at a time: several parallel requests failing at once must not fire
+// several navigations. ⭐ Reset when a new code is verified (verifyOtp), so a
+// LATER refusal in the same app run bounces again — before 2026-10-30 this was
+// never reset, and a second refusal left the user stranded.
 let handlingExpiry = false;
 
 /**
- * The server refused our token. Since 2026-10-08 the photo and download routes
- * require one, so this is what a 30-day expiry — or a login from before tokens
- * existed — actually looks like. Send the user to log in again rather than
- * letting the screen sit there empty with no explanation.
+ * The server refused our token: the 30-day login ended, or the user chose
+ * "Log out from all devices" on another device. Send them straight to the
+ * code screen for THEIR number ("Log in again").
+ * ⛔ 2026-10-30: this used to go to `/(auth)/login`, which is only a redirect
+ * to Home — the profile is kept, so the user sat on Home with no login and no
+ * way to enter a code (the user hit this on device, 2026-10-29).
  */
 async function handleUnauthorised(res: Response): Promise<void> {
   if (res.status !== 401 || handlingExpiry) return;
   handlingExpiry = true;
   try { await clearSessionToken(); } catch { /* keep going — the bounce matters more */ }
-  try { router.replace('/(auth)/login'); } catch { /* no navigator yet */ }
+  try { router.replace({ pathname: '/(auth)/name-entry', params: { renew: 'expired' } }); } catch { /* no navigator yet */ }
 }
 
 function makeTimeout(ms: number) {
@@ -274,8 +278,25 @@ export async function registerUser(phone: string, name: string): Promise<void> {
   await post('/api/native/users/register', { phone, name });
 }
 
-export async function logoutUser(phone: string): Promise<void> {
-  await post('/api/native/users/logout', { phone });
+// allDevices: "Log out from all devices" (2026-10-30) — the server ends every
+// login for the number in THIS device's token. A plain fetch, not `post`, on
+// purpose: a refused token here must not trigger the expiry bounce in the
+// middle of logging out. Returns whether the server confirmed it.
+export async function logoutUser(phone: string, allDevices = false): Promise<boolean> {
+  const { signal, clear } = makeTimeout(15000);
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/native/users/logout`, {
+      method: 'POST',
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(allDevices ? { phone, all: true } : { phone }),
+      signal,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clear();
+  }
 }
 
 export async function sendOtp(phone: string): Promise<void> {
@@ -336,6 +357,7 @@ export async function verifyOtp(phone: string, code: string): Promise<void> {
   // Keep the login token issued with the OTP.
   if (data?.token && data?.expiresAt) {
     await saveSessionToken(data.token, data.expiresAt).catch(() => {});
+    handlingExpiry = false; // a fresh login: the next refusal may bounce again
   }
 }
 

@@ -35,6 +35,14 @@ export async function getSessionToken(): Promise<string | null> {
   return token;
 }
 
+// When this device's login ends (ISO string), or null when there is no login.
+// Read by the Home screen's "Your login ends on…" strip (2026-10-30).
+export async function getSessionExpiry(): Promise<string | null> {
+  const token = await SecureStore.getItemAsync(KEYS.SESSION_TOKEN);
+  if (!token) return null;
+  return SecureStore.getItemAsync(KEYS.SESSION_EXPIRES);
+}
+
 export async function clearSessionToken(): Promise<void> {
   await SecureStore.deleteItemAsync(KEYS.SESSION_TOKEN);
   await SecureStore.deleteItemAsync(KEYS.SESSION_EXPIRES);

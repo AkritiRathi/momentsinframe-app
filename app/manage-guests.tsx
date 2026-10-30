@@ -27,6 +27,7 @@ import { getUserProfile } from '../lib/storage';
 import { Colors } from '../constants/colors';
 import { useAlert } from '../lib/useAlert';
 import SearchBox from '../components/SearchBox';
+import { PersonLines } from '../components/PersonLines';
 
 type Guest = {
   name: string;
@@ -169,12 +170,7 @@ export default function ManageGuestsScreen() {
                 <TouchableOpacity key={guest.mobile} style={styles.row} activeOpacity={0.7}
                   onPress={() => router.push({ pathname: '/guest-uploads', params: { slug: params.slug, adminPhone: params.userMobile || params.adminPhone || '', viewerRole: params.viewerRole, guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: contactMap[guest.mobile] ?? '', eventName: params.eventName ?? '' } })}>
                   <View style={styles.guestInfo}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Text style={styles.guestName}>{appName}</Text>
-                      <Text style={[styles.guestSub, { marginLeft: 6 }]}>· {guest.photo_count ?? 0} photos</Text>
-                    </View>
-                    <Text style={styles.guestSub}>{contactName || 'Number not in contacts'}</Text>
-                    <Text style={styles.guestSub}>{guest.mobile}</Text>
+                    <PersonLines name={appName} contactName={contactName} phone={guest.mobile} photoCount={guest.photo_count ?? 0} />
                   </View>
                 </TouchableOpacity>
               );
@@ -191,15 +187,7 @@ export default function ManageGuestsScreen() {
               <TouchableOpacity key={guest.mobile} style={[styles.row, guest.is_blocked && styles.blockedRow]} activeOpacity={0.7}
                 onPress={() => router.push({ pathname: '/guest-uploads', params: { slug: params.slug, adminPhone: params.userMobile || params.adminPhone || '', viewerRole: params.viewerRole, guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: contactMap[guest.mobile] ?? '', eventName: params.eventName ?? '' } })}>
                 <View style={styles.guestInfo}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Text style={[styles.guestName, guest.is_blocked && styles.blockedText]}>{appName}</Text>
-                    <Text style={[styles.guestSub, { marginLeft: 6 }, guest.is_blocked && styles.blockedText]}>· {guest.photo_count ?? 0} photos</Text>
-                  </View>
-                  <Text style={[styles.guestSub, guest.is_blocked && styles.blockedText]}>{contactName || 'Number not in contacts'}</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <Text style={[styles.guestSub, guest.is_blocked && styles.blockedText]}>{guest.mobile}</Text>
-                    {guest.is_blocked && <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
-                  </View>
+                  <PersonLines name={appName} contactName={contactName} phone={guest.mobile} photoCount={guest.photo_count ?? 0} blocked={guest.is_blocked} />
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   {guest.role === 'coadmin' && <Text style={styles.coadminBadge}>Admin</Text>}

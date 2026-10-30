@@ -17,6 +17,7 @@ import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
 import SearchBox from '../../components/SearchBox';
+import { PersonLines } from '../../components/PersonLines';
 
 // ⛔ ONE MATCH RULE FOR EVERY PEOPLE-SEARCH ON THIS SCREEN. Three lists use
 // it, so they cannot drift apart (app/manage-guests.tsx carries the same rule). It matches anything a row can DISPLAY: the
@@ -186,11 +187,13 @@ export default function EventDetailScreen() {
           if (status === 'granted') {
             const { data: allContacts } = await Contacts.getContactsAsync({ fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name] });
             const map: Record<string, string> = {};
-            for (const guest of allowedResult.guests) {
+            // The Organiser's own row shows a contact line too (2026-10-31).
+            const phones = [...allowedResult.guests.map(g => g.phone), params.organiserPhone];
+            for (const phone of phones) {
               const match = allContacts.find(c =>
-                (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === guest.phone)
+                (c.phoneNumbers ?? []).some(pn => normalizeIndianPhone(pn.number ?? '') === phone)
               );
-              if (match?.name) map[guest.phone] = match.name;
+              if (match?.name) map[phone] = match.name;
             }
             setGuestContactMap(prev => ({ ...prev, ...map }));
           }
@@ -893,10 +896,10 @@ export default function EventDetailScreen() {
               <Text style={styles.emptyText}>No one matches that search.</Text>
             ) : (
               shownCoadmins.map(ca => {
-                const contactName = guestContactMap[ca.phone];
-                const appName = ca.appName ?? null;
-                const displayName = contactName || appName || ca.name || ca.phone;
-                const subName = contactName && appName && appName !== contactName ? appName : null;
+                const contactName = guestContactMap[ca.phone] ?? null;
+                // Signed-in name first, as in Manage Guests (the user, 2026-10-31).
+                const signedInName = ca.appName || ca.name || ca.phone;
+                const joined = joinedGuests.find(g => g.mobile === ca.phone);
                 // ⛔ BLOCKED STATUS COMES FROM `joinedGuests`, NOT FROM THE
                 // CO-ADMIN LIST. `event_coadmins` has no `is_blocked` column —
                 // blocking lives in `event_users` — so this panel could not tell
@@ -915,14 +918,9 @@ export default function EventDetailScreen() {
                 return (
                   <View key={ca.phone} style={styles.coadminRow}>
                     <View style={styles.coadminInfo}>
-                      <Text style={[styles.coadminName, blocked && styles.blockedText]}>{displayName}</Text>
-                      {subName ? <Text style={[styles.coadminPhone, blocked && styles.blockedText]}>{subName}</Text> : null}
-                      {/* Same shape as Manage Guests and the picker: the badge
-                          follows the NUMBER. */}
-                      <View style={styles.pickerPhoneLine}>
-                        <Text style={[styles.coadminPhone, blocked && styles.blockedText]}>{ca.phone}</Text>
-                        {blocked && <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
-                      </View>
+                      {/* Same three lines as Manage Guests: the badge follows
+                          the NUMBER. Photo count only when known. */}
+                      <PersonLines name={signedInName} contactName={contactName} phone={ca.phone} photoCount={joined?.photo_count ?? null} blocked={blocked} />
                     </View>
                     <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveCoadmin(ca.phone, ca.name)}>
                       <Text style={styles.removeBtnText}>Remove</Text>
@@ -1034,7 +1032,10 @@ export default function EventDetailScreen() {
                     return (
                     <TouchableOpacity
                       key={g.mobile}
-                      style={styles.pickerContact}
+                      // Same card as Manage Guests (the user, 2026-10-31: "Why
+                      // is this different????") — it used to borrow the phone-
+                      // contacts picker's look (bigger, yellow, no card).
+                      style={styles.coadminRow}
                       disabled={!pickable}
                       // ⚠ No press highlight on a row that does nothing, and no
                       // alert on tap either: the badge already says why, and a
@@ -1042,7 +1043,7 @@ export default function EventDetailScreen() {
                       activeOpacity={pickable ? 0.2 : 1}
                       onPress={() => { setShowCoadminPicker(false); confirmAddCoadmin(g.mobile, g.name); }}
                     >
-                      <View style={styles.pickerBadgeRow}>
+                      <>
                         {/* ⭐ THE SAME THREE LINES AS MANAGE GUESTS, IN THE SAME
                             ORDER, DIMMED THE SAME WAY, WITH "· BLOCKED" IN THE
                             SAME PLACE — after the NUMBER on the third line, not
@@ -1056,20 +1057,21 @@ export default function EventDetailScreen() {
                             dimmed too — which reads as "blocked" on the screen
                             next door. A co-admin now renders at full strength and
                             the badge alone says why the row does nothing. */}
-                        <View style={styles.pickerBadgeText}>
-                          <Text style={[styles.pickerName, g.is_blocked && styles.blockedText]}>{g.name || g.mobile}</Text>
-                          <Text style={[styles.pickerPhone, g.is_blocked && styles.blockedText]}>{guestContactMap[g.mobile] || 'Number not in contacts'}</Text>
-                          <View style={styles.pickerPhoneLine}>
-                            <Text style={[styles.pickerPhone, g.is_blocked && styles.blockedText]}>{g.mobile}</Text>
-                            {g.is_blocked && <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>}
-                          </View>
+                        <View style={styles.coadminInfo}>
+                          <PersonLines
+                            name={g.name || g.mobile}
+                            contactName={guestContactMap[g.mobile] ?? null}
+                            phone={g.mobile}
+                            photoCount={g.photo_count ?? 0}
+                            blocked={g.is_blocked}
+                          />
                         </View>
                         {/* ⭐ A blocked co-admin shows BOTH markers — the badge here
                             and "· BLOCKED" on the number line — because either one
                             alone hides half the reason they cannot be picked.
                             Blocking a co-admin became possible in 5823500. */}
                         {g.role === 'coadmin' && <Text style={styles.coadminBadge}>Admin</Text>}
-                      </View>
+                      </>
                     </TouchableOpacity>
                     );
                   });
@@ -1102,11 +1104,16 @@ export default function EventDetailScreen() {
                 <ActivityIndicator color={Colors.accent} style={{ marginVertical: 20 }} />
               ) : (
                 <>
-                  {/* Organiser always pinned first, no Remove button */}
+                  {/* Organiser always pinned first, no Remove button. Same
+                      three lines as Manage Guests (the user, 2026-10-31). */}
                   <View style={styles.coadminRow}>
                     <View style={styles.coadminInfo}>
-                      <Text style={styles.coadminName}>{organiserDisplayName}</Text>
-                      <Text style={styles.coadminPhone}>{params.organiserPhone}</Text>
+                      <PersonLines
+                        name={organiserDisplayName}
+                        contactName={guestContactMap[params.organiserPhone ?? ''] ?? null}
+                        phone={params.organiserPhone ?? ''}
+                        photoCount={joinedGuests.find(g => g.mobile === params.organiserPhone)?.photo_count ?? 0}
+                      />
                     </View>
                   </View>
                   {allowedGuests.length === 0
@@ -1114,17 +1121,16 @@ export default function EventDetailScreen() {
                     : shownAllowed.length === 0 && shownBlockedNotAllowed.length === 0
                     ? <Text style={[styles.emptyText, { marginTop: 12 }]}>No one matches that search.</Text>
                     : shownAllowed.map(g => {
-                        const appName = g.appName ?? null;
                         const contactName = guestContactMap[g.phone] ?? null;
+                        // Signed-in name first, as in Manage Guests (the user,
+                        // 2026-10-31). Someone who has not signed in yet has no
+                        // signed-in name: the name typed when adding them, else
+                        // the number.
+                        const signedInName = g.appName || g.name || g.phone;
                         return (
                           <View key={g.phone} style={styles.coadminRow}>
                             <View style={styles.coadminInfo}>
-                              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <Text style={styles.coadminName}>{contactName || appName || g.phone}</Text>
-                                <Text style={[styles.coadminPhone, { marginLeft: 6 }]}>· {g.photo_count ?? 0} photos</Text>
-                              </View>
-                              {contactName && appName && appName !== contactName ? <Text style={styles.coadminPhone}>{appName}</Text> : null}
-                              {(contactName || appName) ? <Text style={styles.coadminPhone}>{g.phone}</Text> : null}
+                              <PersonLines name={signedInName} contactName={contactName} phone={g.phone} photoCount={g.photo_count ?? 0} />
                             </View>
                             <TouchableOpacity style={styles.removeBtn} onPress={() => handleRemoveGuest(g.phone, g.name)}>
                               <Text style={styles.removeBtnText}>Remove</Text>
@@ -1140,15 +1146,7 @@ export default function EventDetailScreen() {
                       return (
                         <View key={jg.mobile} style={styles.coadminRow}>
                           <View style={styles.coadminInfo}>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Text style={styles.coadminName}>{jg.name || jg.mobile}</Text>
-                              <Text style={[styles.coadminPhone, { marginLeft: 6 }]}>· {jg.photo_count ?? 0} photos</Text>
-                            </View>
-                            <Text style={styles.coadminPhone}>{contactName || 'Number not in contacts'}</Text>
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Text style={styles.coadminPhone}>{jg.mobile}</Text>
-                              <Text style={[styles.blockedBadge, { marginLeft: 6 }]}>· BLOCKED</Text>
-                            </View>
+                            <PersonLines name={jg.name || jg.mobile} contactName={contactName} phone={jg.mobile} photoCount={jg.photo_count ?? 0} blocked />
                           </View>
                           <TouchableOpacity
                             style={[styles.removeBtn, { backgroundColor: 'rgba(34,197,94,0.15)', borderColor: 'rgba(34,197,94,0.5)' }]}

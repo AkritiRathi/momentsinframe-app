@@ -239,7 +239,10 @@ export async function deletePhotos(slug: string, photoIds: string[], recycle = f
 // ── Recycle bin (2026-10-30) ─────────────────────────────────────────────────
 // Only the photos THIS person moved to the bin in this event (the server takes
 // who they are from the login token).
-export type RecycleBinPhoto = { id: string; deletedAt: string; goneAt: string; takenAt: string | null; thumbUrl: string | null; displayUrl: string };
+// deletedBy (2026-11-01): "me" = I moved it to the bin (I can Restore / Delete
+// permanently); "organiser" / "admin" = MY upload that they moved there —
+// shown read-only. Missing (an older server) = "me".
+export type RecycleBinPhoto = { id: string; deletedAt: string; goneAt: string; takenAt: string | null; thumbUrl: string | null; displayUrl: string; deletedBy?: 'me' | 'organiser' | 'admin' };
 export async function getRecycleBin(slug: string): Promise<{ photos?: RecycleBinPhoto[]; canRestore?: boolean; error?: string }> {
   return get(`/api/native/events/${slug}/recycle-bin`);
 }

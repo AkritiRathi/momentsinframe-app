@@ -166,8 +166,16 @@ export default function RecycleBinScreen() {
     });
   }
 
+  // ⭐ READ-ONLY PHOTOS (2026-11-01, the user's yes): my uploads that the
+  // Organiser or an Admin moved to the bin are shown with a tag, but only the
+  // person who moved a photo there can Restore / Delete it — these cannot be
+  // selected, and their full-screen view has no buttons.
+  const isMine = (p: RecycleBinPhoto) => p.deletedBy !== 'organiser' && p.deletedBy !== 'admin';
+  // "Deleted by Organiser" (no "the") so it fits one line (the user, 2026-11-01).
+  const deletedByLabel = (p: RecycleBinPhoto) => (p.deletedBy === 'organiser' ? 'Deleted by Organiser' : 'Deleted by an Admin');
+  const mineIds = photos.filter(isMine).map(p => p.id);
   const selectedIds = [...selected];
-  const allSelected = photos.length > 0 && selected.size === photos.length;
+  const allSelected = mineIds.length > 0 && selected.size === mineIds.length;
   const current = viewerIndex !== null ? photos[viewerIndex] : undefined;
 
   return (
@@ -202,16 +210,18 @@ export default function RecycleBinScreen() {
               permanently once photos are ticked. At the TOP, under the text,
               styled like Guest Uploads' select bar. */}
           {!selectMode ? (
-            <View style={styles.btnRow}>
-              <Pressable style={styles.selBtn} onPress={() => setSelectMode(true)}>
-                <Text style={[styles.selBtnText, { color: Colors.white }]}>Select</Text>
-              </Pressable>
-            </View>
+            mineIds.length > 0 ? (
+              <View style={styles.btnRow}>
+                <Pressable style={styles.selBtn} onPress={() => setSelectMode(true)}>
+                  <Text style={[styles.selBtnText, { color: Colors.white }]}>Select</Text>
+                </Pressable>
+              </View>
+            ) : null
           ) : (
             <View style={styles.selectBar}>
               <Text style={styles.selectCount}>{selected.size}</Text>
               <View style={styles.selectBarBtns}>
-                <Pressable style={styles.selBtn} onPress={() => setSelected(allSelected ? new Set() : new Set(photos.map(p => p.id)))}>
+                <Pressable style={styles.selBtn} onPress={() => setSelected(allSelected ? new Set() : new Set(mineIds))}>
                   <Text style={styles.selBtnText}>{allSelected ? 'Clear' : 'Select all'}</Text>
                 </Pressable>
                 <Pressable style={styles.selBtn} onPress={() => { setSelectMode(false); setSelected(new Set()); }}>
@@ -245,20 +255,38 @@ export default function RecycleBinScreen() {
             contentContainerStyle={{ paddingBottom: 16 }}
             renderItem={({ item, index }) => {
               const isSel = selected.has(item.id);
+              const mine = isMine(item);
               return (
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={{ width: cell, height: cell, padding: 1 }}
-                  onPress={() => (selectMode ? toggle(item.id) : setViewerIndex(index))}
-                  onLongPress={() => { if (!selectMode) { setSelectMode(true); toggle(item.id); } }}
+                  onPress={() => (selectMode ? (mine && toggle(item.id)) : setViewerIndex(index))}
+                  onLongPress={() => { if (!selectMode && mine) { setSelectMode(true); toggle(item.id); } }}
                 >
                   <Image source={{ uri: item.thumbUrl ?? item.displayUrl }} style={[styles.thumb, isSel && styles.thumbSelected]} />
-                  <View style={styles.daysTag}>
-                    <Text style={styles.daysText}>{daysLeftLabel(item.goneAt)}</Text>
+                  {/* Bottom-left, stacked: "Deleted by …" just above "N days
+                      left" (the user, 2026-11-01). */}
+                  <View style={styles.bottomTags}>
+                    {!mine && (
+                      <View style={styles.tagPill}>
+                        <Text style={styles.byText} numberOfLines={1}>{deletedByLabel(item)}</Text>
+                      </View>
+                    )}
+                    <View style={styles.tagPill}>
+                      <Text style={styles.daysText}>{daysLeftLabel(item.goneAt)}</Text>
+                    </View>
                   </View>
-                  {selectMode && (
+                  {selectMode && mine && (
                     <View style={[styles.check, isSel && styles.checkOn]}>
                       {isSel && <Text style={styles.checkMark}>✓</Text>}
+                    </View>
+                  )}
+                  {/* 🔒 ALWAYS on a read-only photo, in the tick circle's
+                      corner (the user, 2026-11-01). NOT greyed out: dimmed
+                      means BLOCKED and nothing else (convention 2026-10-21). */}
+                  {!mine && (
+                    <View style={styles.lock}>
+                      <Text style={styles.lockText}>🔒</Text>
                     </View>
                   )}
                 </TouchableOpacity>
@@ -307,18 +335,27 @@ export default function RecycleBinScreen() {
           )}
           {current && (
             <View style={[styles.viewerBar, { paddingBottom: 16 + insets.bottom }]}>
-              <Text style={styles.viewerDays}>{daysLeftLabel(current.goneAt)}</Text>
-              <View style={styles.barRow}>
+              <Text style={styles.viewerDays}>
+                {isMine(current) ? daysLeftLabel(current.goneAt) : `${deletedByLabel(current)} · ${daysLeftLabel(current.goneAt)}`}
+              </Text>
+              {/* ⛔ The button row is ALWAYS laid out, so the bottom area is
+                  one height for every photo and the photo never moves up or
+                  down when swiping (the user, 2026-11-01). On a read-only
+                  photo it is invisible and cannot be tapped. */}
+              <View
+                style={[styles.barRow, !isMine(current) && { opacity: 0 }]}
+                pointerEvents={isMine(current) ? 'auto' : 'none'}
+              >
                 <TouchableOpacity
                   style={[styles.restoreBtn, (busy || !canRestore) && { opacity: 0.4 }]}
-                  disabled={busy}
+                  disabled={busy || !isMine(current)}
                   onPress={() => restore([current.id])}
                 >
                   <Text style={styles.restoreText}>Restore</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.deleteBtn, busy && { opacity: 0.4 }]}
-                  disabled={busy}
+                  disabled={busy || !isMine(current)}
                   onPress={() => deletePermanently([current.id])}
                 >
                   <Text style={styles.deleteText}>Delete permanently</Text>
@@ -346,10 +383,14 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 14, color: Colors.textMuted, textAlign: 'center', lineHeight: 20 },
   thumb: { width: '100%', height: '100%', backgroundColor: '#1A1A1A' },
   thumbSelected: { opacity: 0.6 },
-  daysTag: { position: 'absolute', left: 5, bottom: 5, backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  byText: { fontSize: 10, fontWeight: '600', color: Colors.white },
+  bottomTags: { position: 'absolute', left: 5, right: 5, bottom: 5, alignItems: 'flex-start', gap: 3 },
+  tagPill: { backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, maxWidth: '100%' },
   daysText: { fontSize: 10, color: Colors.white, fontWeight: '600' },
   check: { position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: Colors.white, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center' },
   checkOn: { backgroundColor: Colors.accent, borderColor: Colors.accent },
+  lock: { position: 'absolute', top: 6, right: 6, width: 22, height: 22, borderRadius: 11, backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center' },
+  lockText: { fontSize: 11 },
   checkMark: { fontSize: 13, fontWeight: '800', color: Colors.background },
   // Same sizes as Guest Uploads' select bar (app/guest-uploads.tsx styles).
   btnRow: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8 },

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator,
 } from 'react-native';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
+import { markGalleryChanged } from '../lib/galleryRefresh';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Contacts from 'expo-contacts';
 import { listJoinedGuestsForUser, setGuestBlockedByUser } from '../lib/api';
@@ -67,10 +68,18 @@ export default function ManageGuestsScreen() {
 
   useEffect(() => { loadGuests(); }, []);
 
-  async function loadGuests() {
+  // Back from a guest's photos: this screen stays alive now (root Stack,
+  // 2026-11-01), so refresh the photo counts quietly — a delete there changes them.
+  const focusedOnceRef = useRef(false);
+  useFocusEffect(useCallback(() => {
+    if (focusedOnceRef.current) loadGuests(true);
+    focusedOnceRef.current = true;
+  }, []));
+
+  async function loadGuests(silent = false) {
     const phone = params.userMobile || params.adminPhone;
     if (!phone) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const result = await listJoinedGuestsForUser(params.slug, phone);
@@ -126,6 +135,7 @@ export default function ManageGuestsScreen() {
       showAlert('Error', result.error);
     } else {
       setGuests(prev => prev.map(g => g.mobile === mobile ? { ...g, is_blocked: !currentlyBlocked } : g));
+      markGalleryChanged(params.slug); // the event screen behind reloads on return
     }
   }
 
@@ -139,7 +149,9 @@ export default function ManageGuestsScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: Colors.background, paddingTop: insets.top, paddingBottom: insets.bottom }}>
-      <Stack.Screen options={{ presentation: 'modal', headerShown: false }} />
+      {/* Full-screen card, as it has always looked (the root layout became a
+          Stack on 2026-11-01 — 'modal' would now make it a sliding sheet). */}
+      <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.header}>
         <Text style={styles.title}>
           Manage Guests{guestCount > 0 ? ` (${guestCount})` : ''}{totalPhotos != null ? ` · ${totalPhotos} photos` : ''}
@@ -157,7 +169,7 @@ export default function ManageGuestsScreen() {
         ) : error ? (
           <View style={styles.errorBox}>
             <Text style={styles.errorText}>{error}</Text>
-            <TouchableOpacity onPress={loadGuests} style={styles.retryBtn}>
+            <TouchableOpacity onPress={() => loadGuests()} style={styles.retryBtn}>
               <Text style={styles.retryBtnText}>Retry</Text>
             </TouchableOpacity>
           </View>

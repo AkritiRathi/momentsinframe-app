@@ -2,7 +2,7 @@ import {
   View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput, Platform, Dimensions,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Clipboard } from 'react-native';
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
@@ -152,13 +152,17 @@ export default function EventDetailScreen() {
 
   useEffect(() => { loadCoadmins(); }, [loadCoadmins]);
 
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      router.replace('/(master)/dashboard');
-      return true;
-    });
-    return () => sub.remove();
-  }, [router]);
+  // Only while Manage Event is the screen in front (2026-11-01): screens stay
+  // alive behind others now, so an always-on rule fired from Manage Guests too.
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        router.replace('/(master)/dashboard');
+        return true;
+      });
+      return () => sub.remove();
+    }, [router])
+  );
 
   const loadAllowedGuests = useCallback(async () => {
     const pw = await getOrganiserPassword();

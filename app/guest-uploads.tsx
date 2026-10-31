@@ -21,13 +21,15 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
-import { getEventPhotos, deletePhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
+import { getEventPhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
 import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
 import { buildDownloadFilename } from '../lib/downloadFilename';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { useAlert } from '../lib/useAlert';
+import { askAndDeletePhotos } from '../lib/deletePrompt';
+import { markGalleryChanged } from '../lib/galleryRefresh';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const GAP = 2;
@@ -150,6 +152,7 @@ export default function GuestUploadsScreen() {
   // Bulk delete keeps its own flag, separate from the download ones below, so
   // a download can never be captioned "Deleting...".
   const [deletingBulk, setDeletingBulk] = useState(false);
+  const [eventExpired, setEventExpired] = useState(false);
   const [downloadingPhoto, setDownloadingPhoto] = useState(false);
   // ⛔ THE PROGRESS DIALOG — added 2026-10-17, this screen had NONE.
   // It showed only a small spinner where the Download button had been, so a
@@ -270,6 +273,8 @@ export default function GuestUploadsScreen() {
     setError(null);
     try {
       const data = await getEventPhotos(eventSlug, adminPhone);
+      // For the Admin-after-expiry rule below (the server refuses anyway).
+      setEventExpired(!!(data?.event?.expires_at && new Date(data.event.expires_at) < new Date()));
       // ⚠ These two were MERGED into one list until 2026-10-17, so this screen
       // showed every photo under "Photo Gallery" while the Event and My Photos
       // screens separated them. Kept apart now, main first.
@@ -408,6 +413,10 @@ export default function GuestUploadsScreen() {
     lightboxWasVisible.current = lightboxVisible;
   }, [lightboxVisible, lightboxIndex, photos]);
   const showDeleteBtn = viewerRole === 'organiser' || guest.role === 'user' || guest.mobile === adminPhone;
+  // ⭐ An Admin cannot delete after the event expires (the server refuses with
+  // "This event has expired."): the button stays but is greyed out, matching
+  // the event screen (decided 2026-10-27, built 2026-10-30).
+  const adminDeleteClosed = viewerRole === 'coadmin' && eventExpired;
 
   // Lightbox zoom gestures
   const pinchGesture = Gesture.Pinch()
@@ -659,33 +668,25 @@ export default function GuestUploadsScreen() {
     scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
   }
 
+  // ⭐ Both delete buttons on this screen use the ONE shared delete question
+  // (lib/deletePrompt.ts, 2026-10-30). What happens AFTER stays here.
   async function handleLightboxDelete(photoId: string) {
-    showAlert(
-      'Delete photo',
-      'Delete this photo? This cannot be undone.',
-      [
-        {
-          text: 'Delete', style: 'destructive',
-          onPress: async () => {
-            setDeletingPhoto(true);
-            try {
-              const result = await deletePhotos(eventSlug, [photoId]);
-              if (result.error) { showAlert('Error', result.error); return; }
-              const newPhotos = photos.filter(p => p.id !== photoId);
-              if (newPhotos.length === 0) {
-                setLightboxVisible(false);
-              } else {
-                setLightboxIndex(prev => Math.min(prev, newPhotos.length - 1));
-              }
-              setPhotos(newPhotos);
-            } finally {
-              setDeletingPhoto(false);
-            }
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
+    askAndDeletePhotos({
+      slug: eventSlug,
+      photoIds: [photoId],
+      showAlert,
+      setBusy: setDeletingPhoto,
+      onDeleted: () => {
+        markGalleryChanged(eventSlug); // the event screen behind reloads on return
+        const newPhotos = photos.filter(p => p.id !== photoId);
+        if (newPhotos.length === 0) {
+          setLightboxVisible(false);
+        } else {
+          setLightboxIndex(prev => Math.min(prev, newPhotos.length - 1));
+        }
+        setPhotos(newPhotos);
+      },
+    });
   }
 
   async function handleLightboxDownload() {
@@ -762,28 +763,18 @@ export default function GuestUploadsScreen() {
   async function handleDelete() {
     const ids = [...selected];
     if (ids.length === 0) return;
-    showAlert(
-      'Delete photos',
-      `Delete ${ids.length} photo${ids.length > 1 ? 's' : ''}? This cannot be undone.`,
-      [
-        {
-          text: 'Delete', style: 'destructive',
-          onPress: async () => {
-            setDeletingBulk(true);
-            try {
-              const result = await deletePhotos(eventSlug, ids);
-              if (result.error) { showAlert('Error', result.error); return; }
-              setMode('normal');
-              setSelected(new Set());
-              await fetchPhotos();
-            } finally {
-              setDeletingBulk(false);
-            }
-          },
-        },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
+    askAndDeletePhotos({
+      slug: eventSlug,
+      photoIds: ids,
+      showAlert,
+      setBusy: setDeletingBulk,
+      onDeleted: async () => {
+        markGalleryChanged(eventSlug); // the event screen behind reloads on return
+        setMode('normal');
+        setSelected(new Set());
+        await fetchPhotos();
+      },
+    });
   }
 
   async function handleDownload() {
@@ -1033,7 +1024,7 @@ export default function GuestUploadsScreen() {
       return (
         <View style={styles.btnRow}>
           {showDeleteBtn && (
-            <TouchableOpacity style={styles.deleteBtn} onPress={() => setMode('delete')}>
+            <TouchableOpacity style={[styles.deleteBtn, adminDeleteClosed && { opacity: 0.4 }]} disabled={adminDeleteClosed} onPress={() => setMode('delete')}>
               <Text style={styles.deleteBtnText}>Delete Photos</Text>
             </TouchableOpacity>
           )}
@@ -1171,7 +1162,8 @@ export default function GuestUploadsScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ presentation: 'modal', headerShown: false }} />
+      {/* Full-screen card, as it has always looked (root Stack since 2026-11-01). */}
+      <Stack.Screen options={{ headerShown: false }} />
       {/* Bulk delete — the same overlay the lightbox uses, at screen level */}
       {deletingBulk && (
         <View style={[styles.lbDeletingOverlay, { zIndex: 200 }]}>
@@ -1335,7 +1327,8 @@ export default function GuestUploadsScreen() {
             <View style={styles.lbActions}>
               {showDeleteBtn && (
                 <TouchableOpacity
-                  style={[styles.lbBtn, styles.lbBtnDanger]}
+                  style={[styles.lbBtn, styles.lbBtnDanger, adminDeleteClosed && { opacity: 0.4 }]}
+                  disabled={adminDeleteClosed}
                   onPress={() => { const p = photos[lightboxIndex]; if (p) handleLightboxDelete(p.id); }}
                 >
                   <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>

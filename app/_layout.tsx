@@ -1,9 +1,10 @@
-import { Slot, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Dimensions, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import OfflineBanner from '../components/OfflineBanner';
+import { Colors } from '../constants/colors';
 import * as SplashScreen from 'expo-splash-screen';
 import { getUserProfile } from '../lib/storage';
 import * as Updates from 'expo-updates';
@@ -94,7 +95,7 @@ export default function RootLayout() {
 
       // Event screen, organiser screens, and deep link handler are accessible to authenticated users
       const inJoin = segments[0] === 'join';
-      if (inEvent || inMaster || inJoin || segments[0] === 'my-photos' || segments[0] === 'guest-uploads' || segments[0] === 'manage-guests') return;
+      if (inEvent || inMaster || inJoin || segments[0] === 'my-photos' || segments[0] === 'guest-uploads' || segments[0] === 'manage-guests' || segments[0] === 'recycle-bin') return;
 
       if (!inAuth) {
         router.replace('/(auth)/home');
@@ -140,7 +141,24 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <Slot />
+        {/* ⛔ A STACK, NOT A SLOT (2026-11-01, the user's "Yes"). A <Slot />
+            keeps only the screen in front alive, so leaving the Organiser
+            group (My Events / Manage Event) for a top-level screen threw the
+            group away, and coming back started again at My Events — Manage
+            Event → Manage Guests → ✕ landed on My Events. A Stack keeps the
+            screens behind alive. Looks unchanged: no animation, no iPhone
+            swipe-back (drag-to-select, protected item 5), every screen a
+            full-screen card. Android back rules must act only while their
+            screen is in front (useFocusEffect) — they stay mounted now. */}
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            animation: 'none',
+            gestureEnabled: false,
+            presentation: 'card',
+            contentStyle: { backgroundColor: Colors.background },
+          }}
+        />
         <OfflineBanner />
       </SafeAreaProvider>
     </GestureHandlerRootView>

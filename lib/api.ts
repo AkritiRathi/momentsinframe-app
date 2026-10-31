@@ -230,8 +230,24 @@ export async function processUpload(eventSlug: string, stagingKey: string, origi
 // of them is deliberate — they were all `string | undefined`, so a missed call
 // site would have slid its arguments silently into the wrong positions with no
 // type error. Dropping to two arguments makes every stale call a compile error.
-export async function deletePhotos(slug: string, photoIds: string[]) {
-  return del(`/api/native/events/${slug}/photos`, { photoIds });
+// recycle: true → "Move to Recycle bin"; without it → "Delete permanently"
+// (today's delete, unchanged). Called only through lib/deletePrompt.ts.
+export async function deletePhotos(slug: string, photoIds: string[], recycle = false) {
+  return del(`/api/native/events/${slug}/photos`, recycle ? { photoIds, recycle: true } : { photoIds });
+}
+
+// ── Recycle bin (2026-10-30) ─────────────────────────────────────────────────
+// Only the photos THIS person moved to the bin in this event (the server takes
+// who they are from the login token).
+export type RecycleBinPhoto = { id: string; deletedAt: string; goneAt: string; takenAt: string | null; thumbUrl: string | null; displayUrl: string };
+export async function getRecycleBin(slug: string): Promise<{ photos?: RecycleBinPhoto[]; canRestore?: boolean; error?: string }> {
+  return get(`/api/native/events/${slug}/recycle-bin`);
+}
+export async function recycleBinRestore(slug: string, photoIds: string[]): Promise<{ restored?: string[]; alreadyInEvent?: string[]; error?: string }> {
+  return post(`/api/native/events/${slug}/recycle-bin`, { action: 'restore', photoIds }, 60000);
+}
+export async function recycleBinDeletePermanently(slug: string, photoIds: string[]): Promise<{ deleted?: string[]; error?: string }> {
+  return post(`/api/native/events/${slug}/recycle-bin`, { action: 'delete', photoIds }, 60000);
 }
 
 export async function getPhotoDownloadUrl(photoId: string, adminPhone?: string): Promise<{ url: string; filename: string; error?: string }> {

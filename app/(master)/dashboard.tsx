@@ -3,7 +3,7 @@ import {
   FlatList, RefreshControl, ActivityIndicator, BackHandler, TextInput, Dimensions, TouchableWithoutFeedback,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { getOrganiserPassword, saveOrganiserSession } from '../../lib/auth';
 import { getUserProfile, saveJoinedEvent } from '../../lib/storage';
@@ -51,13 +51,17 @@ export default function DashboardScreen() {
   const [organiserPhone, setOrganiserPhone] = useState<string | null>(null);
   const [organiserPassword, setOrganiserPassword] = useState<string | null>(null);
 
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      BackHandler.exitApp();
-      return true;
-    });
-    return () => sub.remove();
-  }, []);
+  // Only while My Events is the screen in front (2026-11-01): it stays alive
+  // behind Manage Event and the top-level screens now.
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        BackHandler.exitApp();
+        return true;
+      });
+      return () => sub.remove();
+    }, [])
+  );
 
   const load = useCallback(async (phone?: string, pw?: string) => {
     const p = phone ?? organiserPhone;

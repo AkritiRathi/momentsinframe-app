@@ -48,6 +48,8 @@ import { useAppPermission } from '../lib/permissions';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { useAlert, alertStyles } from '../lib/useAlert';
+import { askAndDeletePhotos } from '../lib/deletePrompt';
+import { consumeGalleryRestored } from '../lib/galleryRefresh';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const GAP = 2;
@@ -1025,6 +1027,8 @@ export default function EventScreen() {
   useFocusEffect(
     useCallback(() => {
       let saveTimer: ReturnType<typeof setTimeout> | undefined;
+      // Back from the Recycle bin after a Restore: show the photos again.
+      if (hasInitiallyLoadedRef.current && consumeGalleryRestored(slug)) loadPhotos(true);
       if (!hasInitiallyLoadedRef.current) {
         hasInitiallyLoadedRef.current = true;
         saveTimer = setTimeout(async () => {
@@ -1070,7 +1074,11 @@ export default function EventScreen() {
     }, [])
   );
 
-  useEffect(() => {
+  // Only while the event screen is in front (2026-11-01): it stays alive under
+  // Manage Guests / Recycle bin / My Photos now, and an always-on rule closed
+  // the app from those. On the event screen itself it still closes the app
+  // (the user: "always close the app as now").
+  useFocusEffect(useCallback(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (isAlertVisible) return true;
       if (bgUploading) {
@@ -1092,7 +1100,7 @@ export default function EventScreen() {
       return true;
     });
     return () => sub.remove();
-  }, [selectMode, deleteMode, bgUploading, isAlertVisible]);
+  }, [selectMode, deleteMode, bgUploading, isAlertVisible]));
 
   useEffect(() => {
     if (selectMode && !deleteMode && prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
@@ -1476,12 +1484,25 @@ export default function EventScreen() {
       setDeleteMode(false);
       setAnchorForPhoto(photoId);
       toggleSelect(photoId);
-      if (scrollOffsetRef.current > 0) {
-        selectBarStickyRef.current = true;
-        setSelectBarSticky(true);
-      }
+      // ⛔ FLOAT THE BAR ONLY IF THE PAGE IS SCROLLED PAST ITS PLACE — the same
+      // rule as handleScroll. Until 2026-10-31 this floated it whenever the
+      // page was scrolled AT ALL (`> 0`, a FlashList workaround from 60139aa),
+      // so a slightly scrolled page put the bar at the top and left a gap
+      // where it belongs (the user's screenshots). updateSectionPositions
+      // re-checks once the bar has its real size.
+      syncSelectBarSticky();
     }
   }, [selectMode, deleteMode]);
+
+  // The ONE rule for "should the select bar float at the top?": the page is
+  // scrolled past the bar's own place in the list.
+  function syncSelectBarSticky() {
+    const next = selectBarYRef.current !== null && scrollOffsetRef.current >= selectBarYRef.current;
+    if (selectBarStickyRef.current !== next) {
+      selectBarStickyRef.current = next;
+      setSelectBarSticky(next);
+    }
+  }
 
   function exitSelectMode(skipLoad = false) {
     setSelectMode(false);
@@ -1505,13 +1526,18 @@ export default function EventScreen() {
   function updateSectionPositions() {
     let y = 0;
     for (const item of listDataRef.current) {
-      if (item.type === 'select_bar') selectBarYRef.current = y;
+      // The select bar takes the Delete / Download row's place, so before the
+      // bar exists (the moment of a long press) that row's place is its place.
+      if (item.type === 'select_bar' || item.type === 'select_photos_btn') selectBarYRef.current = y;
       if (item.type === 'section_header') {
         if (item.section === 'main') mainHeaderY.current = y;
         else otherHeaderY.current = y;
       }
       y += accumulatedHeights.current[item.key] ?? (item.type === 'photo_row' ? THUMB_SIZE + GAP : 0);
     }
+    // Positions changed (e.g. the bar just appeared): re-check, so the bar is
+    // right before the first scroll too.
+    syncSelectBarSticky();
   }
 
   const handleScroll = useCallback((e: any) => {
@@ -1519,11 +1545,7 @@ export default function EventScreen() {
     const y = e.nativeEvent.contentOffset.y;
     setShowScrollTop(y > 300);
 
-    const newSelectBarSticky = selectBarYRef.current !== null && y >= selectBarYRef.current;
-    if (selectBarStickyRef.current !== newSelectBarSticky) {
-      selectBarStickyRef.current = newSelectBarSticky;
-      setSelectBarSticky(newSelectBarSticky);
-    }
+    syncSelectBarSticky();
 
     let next: 'main' | 'other' | null = null;
     if (otherHeaderY.current !== null && y >= otherHeaderY.current) next = 'other';
@@ -2111,18 +2133,16 @@ export default function EventScreen() {
     ]);
   }
 
+  // ⭐ Both delete buttons on this screen use the ONE shared delete question
+  // (lib/deletePrompt.ts, 2026-10-30): Move to Recycle bin / Delete
+  // permanently / Cancel. What happens AFTER the delete stays here.
   async function handleDeletePhoto(id: string) {
-    showAlert('Delete photo', 'This cannot be undone.', [
-      {
-        text: 'Delete', style: 'destructive',
-        onPress: async () => {
-          setDeletingPhoto(true);
-          // The admin / guest branch is gone: the server reads the caller
-          // from the login token and decides the role itself, so both
-          // branches had become the same call.
-          const result = await deletePhotos(slug, [id]);
-          setDeletingPhoto(false);
-          if (result.error) { showAlert('Error', result.error); return; }
+    askAndDeletePhotos({
+      slug,
+      photoIds: [id],
+      showAlert,
+      setBusy: setDeletingPhoto,
+      onDeleted: () => {
           const currentIdx = lightboxIndex;
           if (lightboxSection === 'main') {
             setPhotos(prev => {
@@ -2139,32 +2159,21 @@ export default function EventScreen() {
               return next;
             });
           }
-        },
       },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    });
   }
 
   async function handleBulkDelete() {
-    const ids = Array.from(selected);
-    showAlert('Delete photos', `Delete ${ids.length} photo${ids.length > 1 ? 's' : ''}? This cannot be undone.`, [
-      {
-        text: 'Delete', style: 'destructive',
-        onPress: async () => {
-          setDeletingBulk(true);
-          try {
-            // Same here — one call, the server decides the role.
-            const result = await deletePhotos(slug, ids);
-            if (result.error) { showAlert('Error', result.error); return; }
-            exitSelectMode(true);
-            await loadPhotos();
-          } finally {
-            setDeletingBulk(false);
-          }
-        },
+    askAndDeletePhotos({
+      slug,
+      photoIds: Array.from(selected),
+      showAlert,
+      setBusy: setDeletingBulk,
+      onDeleted: async () => {
+        exitSelectMode(true);
+        await loadPhotos();
       },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    });
   }
 
   async function getDownloadFolder(): Promise<string | null> {
@@ -3657,6 +3666,14 @@ export default function EventScreen() {
                 <Text style={styles.menuItemText}>View My Photos</Text>
               </TouchableOpacity>
             )}
+            {/* ⭐ RECYCLE BIN (2026-10-30, the user's yes) — for everyone; each
+                person sees only the photos THEY moved there, for 30 days. */}
+            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode) && { opacity: 0.4 }]} disabled={selectMode || deleteMode} onPress={() => {
+              setMenuVisible(false);
+              router.push({ pathname: '/recycle-bin', params: { slug, eventName: params.name ?? '' } });
+            }}>
+              <Text style={styles.menuItemText}>Recycle bin</Text>
+            </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>

@@ -242,7 +242,16 @@ export async function deletePhotos(slug: string, photoIds: string[], recycle = f
 // deletedBy (2026-11-01): "me" = I moved it to the bin (I can Restore / Delete
 // permanently); "organiser" / "admin" = MY upload that they moved there —
 // shown read-only. Missing (an older server) = "me".
-export type RecycleBinPhoto = { id: string; deletedAt: string; goneAt: string; takenAt: string | null; thumbUrl: string | null; displayUrl: string; deletedBy?: 'me' | 'organiser' | 'admin' };
+// uploaderName (2026-11-01): set when I deleted a photo SOMEONE ELSE uploaded.
+// handedOver / handedOverFromName: it came to my (the Organiser's) bin from an
+// Admin who was removed or deleted their account; name null = "an Admin".
+export type RecycleBinPhoto = {
+  id: string; deletedAt: string; goneAt: string; takenAt: string | null; thumbUrl: string | null; displayUrl: string;
+  deletedBy?: 'me' | 'organiser' | 'admin';
+  uploaderName?: string | null;
+  handedOver?: boolean;
+  handedOverFromName?: string | null;
+};
 export async function getRecycleBin(slug: string): Promise<{ photos?: RecycleBinPhoto[]; canRestore?: boolean; error?: string }> {
   return get(`/api/native/events/${slug}/recycle-bin`);
 }
@@ -445,14 +454,17 @@ export async function updateEventSettings(slug: string, organiserPhone: string, 
   return res.json();
 }
 
-export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string): Promise<{ photos?: { id: string; taken_at: string }[]; otherPhotos?: { id: string; taken_at: string }[]; error?: string }> {
+// ⭐ ONE CHUNK of the face search (2026-11-01): pass `after` = the previous
+// chunk's `next` until `next` is null. `total` comes on the first chunk only;
+// `failed` = photos that could not be checked even after a retry.
+export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string, after?: string | null): Promise<{ photos?: { id: string; taken_at: string }[]; otherPhotos?: { id: string; taken_at: string }[]; total?: number | null; checked?: number; failed?: number; next?: string | null; error?: string }> {
   // MUST go through authHeaders: this route requires the login token since
   // 2026-10-08. It used a bare fetch and broke the moment the server started
   // enforcing — the exact trap the token work warned about.
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/find-my-photos`, {
     method: 'POST',
     headers: await authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ selfieBase64, ...(adminPhone ? { adminPhone } : {}), ...(userMobile ? { userMobile } : {}) }),
+    body: JSON.stringify({ selfieBase64, ...(after ? { after } : {}), ...(adminPhone ? { adminPhone } : {}), ...(userMobile ? { userMobile } : {}) }),
   });
   const text = await res.text();
   try { return JSON.parse(text); } catch { return { error: 'Server returned an unexpected response. Please try again.' }; }

@@ -111,6 +111,9 @@ export default function MyPhotosScreen() {
 
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [otherPhotos, setOtherPhotos] = useState<Photo[]>([]);
+  // Face search progress (2026-11-01): the search runs in chunks; this drives
+  // "Searching… 300 of 1,200 photos · 4 found".
+  const [searchProgress, setSearchProgress] = useState<{ checked: number; total: number; found: number } | null>(null);
   const [capturing, setCapturing] = useState(false);
   const [downloadMode, setDownloadMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -688,16 +691,56 @@ export default function MyPhotosScreen() {
       const base64 = cropped.base64;
       if (!base64) { setCapturing(false); return; }
       setMode('searching');
-      const result = await findMyPhotos(slug, base64, adminPhone, userMobile);
-      if (result.error) {
-        setCameraReady(false);
-        showAlert('Error', result.error, [{ text: 'Try Again', onPress: () => setMode('camera') }]);
-        setMode('camera');
-        setCapturing(false);
-        return;
+      // ⭐ THE SEARCH RUNS IN CHUNKS (2026-11-01, the user's yes): the server
+      // checks ~150 photos per request; we ask for the next chunk until the
+      // whole event is covered (no 1,000-photo cap), showing progress.
+      // Photos that could not be checked are counted and reported — never
+      // silently treated as "not you". Nothing about the face is stored.
+      let total = totalPhotos;
+      let checked = 0;
+      let failedCount = 0;
+      let stoppedEarly = false;
+      let after: string | null = null;
+      const main: Photo[] = [];
+      const other: Photo[] = [];
+      setSearchProgress({ checked: 0, total, found: 0 });
+      do {
+        const result = await findMyPhotos(slug, base64, adminPhone, userMobile, after);
+        if (result.error) {
+          if (checked === 0) {
+            // First chunk failed (e.g. no face in the selfie): back to the camera.
+            setCameraReady(false);
+            showAlert('Error', result.error, [{ text: 'Try Again', onPress: () => setMode('camera') }]);
+            setMode('camera');
+            setCapturing(false);
+            setSearchProgress(null);
+            return;
+          }
+          // A later chunk failed: keep what was found, say the search stopped.
+          stoppedEarly = true;
+          break;
+        }
+        if (typeof result.total === 'number') total = result.total;
+        main.push(...((result.photos ?? []) as Photo[]));
+        other.push(...((result.otherPhotos ?? []) as Photo[]));
+        checked += result.checked ?? 0;
+        failedCount += result.failed ?? 0;
+        setSearchProgress({ checked, total, found: main.length + other.length });
+        after = result.next ?? null;
+      } while (after);
+      // Each chunk comes back sorted; sort the whole list oldest first.
+      const byTime = (a: Photo, b: Photo) => new Date(a.taken_at || 0).getTime() - new Date(b.taken_at || 0).getTime();
+      main.sort(byTime);
+      other.sort(byTime);
+      setSearchProgress(null);
+      if (stoppedEarly) {
+        showAlert('Search stopped part-way', `Checked ${checked} of ${total} photos. Try again to search the rest.`);
+      } else if (failedCount > 0) {
+        showAlert(
+          'Some photos could not be checked',
+          `${failedCount} photo${failedCount === 1 ? '' : 's'} could not be checked. Try again to search ${failedCount === 1 ? 'it' : 'them'}.`,
+        );
       }
-      const main = result.photos ?? [];
-      const other = result.otherPhotos ?? [];
       setPhotos(main);
       setOtherPhotos(other);
       setMode('results');
@@ -1023,7 +1066,18 @@ export default function MyPhotosScreen() {
     return (
       <View style={styles.centeredScreen}>
         <ActivityIndicator size="large" color={Colors.accent} />
-        <Text style={styles.searchingText}>Searching through {totalPhotos} photo{totalPhotos !== 1 ? 's' : ''}…</Text>
+        {searchProgress && searchProgress.total > 0 ? (
+          <>
+            <Text style={styles.searchingText}>
+              Searching… {Math.min(searchProgress.checked, searchProgress.total)} of {searchProgress.total} photo{searchProgress.total !== 1 ? 's' : ''}
+            </Text>
+            <Text style={[styles.searchingText, { marginTop: 6 }]}>
+              {searchProgress.found} found
+            </Text>
+          </>
+        ) : (
+          <Text style={styles.searchingText}>Searching through {totalPhotos} photo{totalPhotos !== 1 ? 's' : ''}…</Text>
+        )}
       </View>
     );
   }

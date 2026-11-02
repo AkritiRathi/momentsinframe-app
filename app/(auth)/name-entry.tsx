@@ -9,6 +9,8 @@ import { registerUser, lookupUsers, sendOtp, verifyOtp } from '../../lib/api';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
+import * as Linking from 'expo-linking';
+import { PRIVACY_URL, TERMS_URL } from '../../constants/config';
 
 type Step = 'phone' | 'details';
 
@@ -29,6 +31,9 @@ export default function NameEntryScreen() {
   const [isExisting, setIsExisting] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // ⭐ CONSENT (2026-11-02, the user's yes): no login until the box under the
+  // code is ticked. Starts unticked every time this screen opens.
+  const [agreed, setAgreed] = useState(false);
 
   // ⭐ RENEW MODE (2026-10-30, the user's yes): `renew=renew` from the Home
   // screen's "Renew now", `renew=expired` when the server refused the login.
@@ -87,6 +92,10 @@ export default function NameEntryScreen() {
     }
     if (otp.length !== 6) {
       showAlert('Invalid code', 'Please enter the 6-digit code sent to your WhatsApp.');
+      return;
+    }
+    if (!agreed) {
+      showAlert('Please agree to continue', 'Please tick the box to agree to the Privacy Policy and Terms of Use.');
       return;
     }
 
@@ -225,12 +234,32 @@ export default function NameEntryScreen() {
                 <TouchableOpacity onPress={handleResend} style={styles.resendRow}>
                   <Text style={styles.resendText}>Didn't receive it? Resend →</Text>
                 </TouchableOpacity>
+
+                {/* Consent — the button stays dimmed until this is ticked */}
+                <View style={styles.consentRow}>
+                  <TouchableOpacity
+                    onPress={() => setAgreed(a => !a)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: agreed }}
+                  >
+                    <View style={[styles.checkbox, agreed && styles.checkboxOn]}>
+                      {agreed && <Text style={styles.checkmark}>✓</Text>}
+                    </View>
+                  </TouchableOpacity>
+                  <Text style={styles.consentText} onPress={() => setAgreed(a => !a)}>
+                    By continuing you agree to our{' '}
+                    <Text style={styles.consentLink} onPress={() => Linking.openURL(PRIVACY_URL)}>Privacy Policy</Text>
+                    {' '}and{' '}
+                    <Text style={styles.consentLink} onPress={() => Linking.openURL(TERMS_URL)}>Terms of Use</Text>
+                  </Text>
+                </View>
               </>
             )}
 
             {/* Button — only shown after Go is pressed */}
             {!isPhoneStep && (
-              <TouchableOpacity style={styles.button} onPress={handleSubmit} disabled={submitting}>
+              <TouchableOpacity style={[styles.button, !agreed && styles.buttonDimmed]} onPress={handleSubmit} disabled={submitting}>
                 {submitting
                   ? <ActivityIndicator color={Colors.background} />
                   : <Text style={styles.buttonText}>{isExisting ? 'Enter →' : 'Get started →'}</Text>
@@ -298,6 +327,16 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   buttonText: { ...Typography.buttonText, color: Colors.background },
+  buttonDimmed: { opacity: 0.4 },
+  consentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 20 },
+  checkbox: {
+    width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, borderColor: Colors.accent,
+    alignItems: 'center', justifyContent: 'center', marginTop: 1,
+  },
+  checkboxOn: { backgroundColor: Colors.accent },
+  checkmark: { color: Colors.background, fontSize: 14, fontWeight: '800', lineHeight: 16 },
+  consentText: { flex: 1, fontSize: 13, lineHeight: 20, color: Colors.textMuted },
+  consentLink: { color: Colors.accent, fontWeight: '700', textDecorationLine: 'underline' },
   goButton: {
     backgroundColor: Colors.accent,
     borderRadius: 10,

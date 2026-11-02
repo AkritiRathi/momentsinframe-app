@@ -12,6 +12,8 @@ import { getUserProfile, clearUserProfile, UserProfile, getSessionExpiry } from 
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
+import * as Linking from 'expo-linking';
+import { PRIVACY_URL, TERMS_URL } from '../../constants/config';
 import { checkWhitelist, checkUserStatus, deleteAccount, organiserLogin, logoutUser, getOrganiserEventCount } from '../../lib/api';
 
 export default function HomeScreen() {
@@ -268,6 +270,16 @@ export default function HomeScreen() {
             <TouchableOpacity style={styles.deleteAccountBtn} onPress={handleDeleteAccountPress}>
               <Text style={styles.deleteAccountBtnText}>Delete Account</Text>
             </TouchableOpacity>
+            {/* Legal links (2026-11-02, the user's yes) — open in the browser */}
+            <View style={styles.legalRow}>
+              <TouchableOpacity onPress={() => Linking.openURL(PRIVACY_URL)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.legalLink}>Privacy Policy</Text>
+              </TouchableOpacity>
+              <Text style={styles.legalDot}>·</Text>
+              <TouchableOpacity onPress={() => Linking.openURL(TERMS_URL)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={styles.legalLink}>Terms of Use</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -487,6 +499,9 @@ const styles = StyleSheet.create({
   okBtnText: { fontSize: 15, fontWeight: '700', color: '#0F0F0F' },
   deleteAccountBtn: { marginTop: 16, alignItems: 'center', paddingVertical: 10 },
   deleteAccountBtnText: { fontSize: 13, color: '#FF4444', fontWeight: '600' },
+  legalRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 8 },
+  legalLink: { fontSize: 13, color: Colors.textMuted, fontWeight: '600', textDecorationLine: 'underline' },
+  legalDot: { fontSize: 13, color: Colors.textMuted },
   passwordInput: {
     backgroundColor: '#2A2A2A',
     borderRadius: 12,

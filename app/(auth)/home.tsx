@@ -100,14 +100,22 @@ export default function HomeScreen() {
     }
   }
 
-  async function checkOrganiserHasEvents(): Promise<number> {
+  // null = could not check. ⛔ FAILS CLOSED (2026-11-02, the user's yes): it
+  // used to `.catch(() => 0)`, so a failed request let an Organiser with
+  // events log out or delete the account.
+  async function checkOrganiserHasEvents(): Promise<number | null> {
     if (!profile?.mobile) return 0;
-    return getOrganiserEventCount(profile.mobile).catch(() => 0);
+    return getOrganiserEventCount(profile.mobile).catch(() => null);
+  }
+
+  function showCouldNotCheck() {
+    showAlert("Couldn't check your events", 'Please check your connection and try again.');
   }
 
   async function handleDeleteAccountPress() {
     setUserDetailsVisible(false);
     const eventCount = await checkOrganiserHasEvents();
+    if (eventCount === null) { showCouldNotCheck(); return; }
     if (eventCount > 0) {
       showAlert('Cannot Delete Account', `You have ${eventCount} active event${eventCount !== 1 ? 's' : ''}. Please delete all your events before deleting your account.`);
       return;
@@ -133,7 +141,20 @@ export default function HomeScreen() {
           text: 'Delete', style: 'destructive', onPress: async () => {
             const p = await getUserProfile();
             if (!p) return;
-            await deleteAccount(p.mobile);
+            // ⛔ Only sign out locally once the SERVER confirms the delete
+            // (2026-11-02). It ignored the answer, so a refused or failed
+            // delete still cleared the phone as if the account were gone.
+            let result: { success?: boolean; error?: string } | undefined;
+            try {
+              result = await deleteAccount(p.mobile);
+            } catch {
+              showAlert('Something went wrong', 'Your account was not deleted. Please try again.');
+              return;
+            }
+            if (!result?.success) {
+              showAlert('Account not deleted', result?.error ?? 'Please try again.');
+              return;
+            }
             await clearUserProfile();
             await AsyncStorage.clear();
             router.replace('/(auth)/name-entry');
@@ -217,6 +238,7 @@ export default function HomeScreen() {
               <TouchableOpacity style={styles.logoutBtn} onPress={async () => {
                 setUserDetailsVisible(false);
                 const eventCount = await checkOrganiserHasEvents();
+                if (eventCount === null) { showCouldNotCheck(); return; }
                 if (eventCount > 0) {
                   showAlert('Cannot Log Out', `You have ${eventCount} active event${eventCount !== 1 ? 's' : ''}. Please delete all your events before logging out.`);
                   return;

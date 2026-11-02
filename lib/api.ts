@@ -116,9 +116,12 @@ export async function organiserResetPassword(phone: string, newPassword: string)
   return post('/api/native/organiser/reset-password', { phone, newPassword });
 }
 
-export async function getOrganiserEventCount(phone: string): Promise<number> {
+// null = COULD NOT CHECK (the request failed or the server sent no count).
+// ⛔ Never turn that into 0 (2026-11-02): 0 lets an Organiser who still owns
+// events log out or delete the account.
+export async function getOrganiserEventCount(phone: string): Promise<number | null> {
   const result = await get(`/api/native/organiser/event-count?phone=${encodeURIComponent(phone)}`);
-  return result.count ?? 0;
+  return typeof result?.count === 'number' ? result.count : null;
 }
 
 export async function checkWhitelist(phone: string): Promise<{ whitelisted: boolean }> {

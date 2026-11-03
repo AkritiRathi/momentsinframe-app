@@ -205,6 +205,14 @@ export async function getPhotoUrls(slug: string, ids: string[], adminPhone?: str
   return post(`/api/events/${slug}/photo-urls`, { ids, ...(adminPhone ? { adminPhone } : {}) });
 }
 
+// ⏱ TEMPORARY upload timer (2026-11-02, the user's yes): one line per photo
+// to /api/upload-timing (logged by the server, nothing stored). Fire and
+// forget — never awaited by the upload, any failure is ignored. Remove once
+// the upload slowdown is understood.
+export function reportUploadTiming(line: Record<string, string | number | null>): void {
+  post('/api/upload-timing', line, 10000).catch(() => {});
+}
+
 export async function getUploadUrl(eventSlug: string, filename: string, contentType: string, uploaderMobile?: string) {
   return post('/api/upload-url', { eventSlug, filename, contentType, uploaderMobile });
 }

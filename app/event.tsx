@@ -25,7 +25,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback, memo, forwardRef } from 'react';
 import {
-  getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos,
+  getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos, reportUploadTiming,
   getPhotoDownloadUrl, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
   checkAdminStatus, findMyPhotos,
@@ -301,6 +301,20 @@ let _bgEventUserId: string | null = null;
 let _bgProgressCb: ((current: number, total: number) => void) | null = null;
 let _bgCompleteCb: ((results: UploadFileResult[], preSkipped: number) => void) | null = null;
 let _bgCancelled = false;
+// ⏱ TEMPORARY on-screen upload timer (2026-11-02, the user's yes): shown in the
+// finished summary so the user can screenshot it. Remove with the other timers.
+let _uiTimerStart = 0;   // when the user started the upload
+let _uiTimerFirst = 0;   // when the first photo actually started uploading
+function uiTimerLabel(count: number): string {
+  if (!_uiTimerStart) return '';
+  const total = (Date.now() - _uiTimerStart) / 1000;
+  const fmt = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${s.toFixed(1)} s`);
+  const first = _uiTimerFirst ? (_uiTimerFirst - _uiTimerStart) / 1000 : null;
+  _uiTimerStart = 0;
+  return ` · ⏱ ${fmt(total)} for ${count} photo${count === 1 ? '' : 's'}`
+    + (count > 0 ? ` (${(total / count).toFixed(1)} s each)` : '')
+    + (first !== null ? ` · 1st photo started after ${fmt(first)}` : '');
+}
 let _bgDeselectedIds: Set<string> = new Set();
 // ⛔ THESE TWO MUST MATCH WHAT THE REVIEW SCREEN USED.
 // collectAssetsForDate is shared by the screen and the upload that follows, so
@@ -609,10 +623,13 @@ async function backgroundUploadTask(): Promise<void> {
     return;
   }
 
-  const presignedUrls = await Promise.all(toUpload.map(async (asset, i) => {
+  // ⭐ 2026-11-02 (the user's yes): ask for every storage address at once but
+  // do NOT wait for all of them — each photo waits only for its own, so the
+  // first upload starts ~3 s sooner. Each promise catches its own error.
+  const presignedUrls = toUpload.map(async (asset, i) => {
     try { return await getUploadUrl(slug, asset.filename, getMimeType(localUris[i]), userMobile ?? undefined); }
     catch { return { error: true as const }; }
-  }));
+  });
 
   if (_bgCancelled) {
     _bgCompleteCb?.(toUpload.map((a, i) => ({ status: 'cancelled' as const, section: null, uri: localUris[i], filename: a.filename })), preSkipped);
@@ -628,12 +645,17 @@ async function backgroundUploadTask(): Promise<void> {
   const results: UploadFileResult[] = new Array(toUpload.length);
   let completed = 0;
   const CONCURRENCY = 4;
+  // ⏱ TEMPORARY upload timer (2026-11-02)
+  const timingRun = Math.random().toString(36).slice(2, 8);
+  const timingRunStart = Date.now();
 
   async function uploadOne(asset: MediaLibrary.Asset, index: number): Promise<void> {
+    const tStart = Date.now(); let tUrl: number | null = null; let tCopy: number | null = null; let tPut: number | null = null; let tSave: number | null = null;
     const filename = asset.filename;
     const uploadUri = localUris[index];
     const contentType = getMimeType(uploadUri ?? asset.uri);
-    const urlResult = presignedUrls[index];
+    const urlResult = await presignedUrls[index];
+    tUrl = Date.now(); if (!_uiTimerFirst) _uiTimerFirst = tUrl; // ⏱ timer only
     let result: UploadFileResult;
     try {
       if (urlResult.error || !uploadUri) {
@@ -646,6 +668,7 @@ async function backgroundUploadTask(): Promise<void> {
           const cacheUri = `${FileSystem.cacheDirectory}mif_upload_${Date.now()}_${filename}`;
           try {
             await FileSystem.copyAsync({ from: uploadUri!, to: cacheUri });
+            tCopy = Date.now(); // ⏱ timer only
             const iosResult = await FileSystem.uploadAsync(uploadUrl, cacheUri, {
               httpMethod: 'PUT',
               uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
@@ -664,10 +687,12 @@ async function backgroundUploadTask(): Promise<void> {
           );
           uploadOk = upRes.respInfo.status >= 200 && upRes.respInfo.status < 300;
         }
+        tPut = Date.now(); // ⏱ timer only
         if (!uploadOk) {
           result = { status: 'failed', section: null, uri: asset.uri, filename };
         } else {
           const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined, asTime(asset.modificationTime));
+          tSave = Date.now(); // ⏱ timer only
           if (proc.error) {
             result = { status: 'failed', section: null, uri: asset.uri, filename };
           } else if (proc.duplicate) {
@@ -683,6 +708,7 @@ async function backgroundUploadTask(): Promise<void> {
       result = { status: 'failed', section: null, uri: asset.uri, filename };
     }
     results[index] = result;
+    reportUploadTiming({ src: Platform.OS + '-date', run: timingRun, i: index, startMs: tStart - timingRunStart, urlMs: tUrl ? tUrl - tStart : null, copyMs: tCopy ? tCopy - (tUrl ?? tStart) : null, putMs: tPut ? tPut - (tCopy ?? tUrl ?? tStart) : null, saveMs: tSave && tPut ? tSave - tPut : null, totalMs: Date.now() - tStart, status: result.status }); // ⏱ timer only
     completed += 1;
     _bgProgressCb?.(completed, toUpload.length);
     try {
@@ -1595,6 +1621,7 @@ export default function EventScreen() {
       return;
     }
 
+    _uiTimerStart = Date.now(); _uiTimerFirst = 0; // ⏱ timer only
     bgUploadCancelledRef.current = false;
     _bgCancelled = false;
     setBgCancelRequested(false);
@@ -1753,12 +1780,14 @@ export default function EventScreen() {
       return;
     }
 
-    // Pre-fetch all presigned URLs in parallel
-    const presignedUrls = await Promise.all(assets.map(async (asset, i) => {
+    // ⭐ 2026-11-02 (the user's yes): ask for every storage address at once but
+    // do NOT wait for all of them — each photo waits only for its own, so the
+    // first upload starts ~3 s sooner. Each promise catches its own error.
+    const presignedUrls = assets.map(async (asset, i) => {
       const filename = resolvedFilenames[i];
       try { return await getUploadUrl(slug, filename, getMimeType(localUris[i]), userMobile ?? params.adminPhone ?? undefined); }
       catch { return { error: true as const }; }
-    }));
+    });
 
     if (bgUploadCancelledRef.current) {
       setBgUploading(false);
@@ -1770,12 +1799,17 @@ export default function EventScreen() {
     const CONCURRENCY = 4;
     const results: (UploadFileResult | null)[] = new Array(assets.length).fill(null);
     let completedCount = 0;
+    // ⏱ TEMPORARY upload timer (2026-11-02)
+    const timingRun = Math.random().toString(36).slice(2, 8);
+    const timingRunStart = Date.now();
 
     async function uploadOne(asset: ImagePicker.ImagePickerAsset, index: number) {
+      const tStart = Date.now(); let tUrl: number | null = null; let tCopy: number | null = null; let tPut: number | null = null; let tSave: number | null = null;
       const filename = resolvedFilenames[index];
       const uploadUri = localUris[index];
       const contentType = getMimeType(uploadUri);
-      const urlResult = presignedUrls[index];
+      const urlResult = await presignedUrls[index];
+      tUrl = Date.now(); if (!_uiTimerFirst) _uiTimerFirst = tUrl; // ⏱ timer only
       let result: UploadFileResult;
 
       if (bgUploadCancelledRef.current) {
@@ -1792,6 +1826,7 @@ export default function EventScreen() {
               const cacheUri = `${FileSystem.cacheDirectory}mif_upload_${Date.now()}_${filename}`;
               try {
                 await FileSystem.copyAsync({ from: uploadUri, to: cacheUri });
+                tCopy = Date.now(); // ⏱ timer only
                 const iosResult = await FileSystem.uploadAsync(uploadUrl, cacheUri, {
                   httpMethod: 'PUT',
                   uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
@@ -1810,10 +1845,12 @@ export default function EventScreen() {
               );
               uploadOk = upRes.respInfo.status >= 200 && upRes.respInfo.status < 300;
             }
+            tPut = Date.now(); // ⏱ timer only
             if (!uploadOk) {
               result = { status: 'failed', section: null, uri: asset.uri, filename };
             } else {
               const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined, resolvedTimes[index]);
+              tSave = Date.now(); // ⏱ timer only
               if (proc.error) {
                 result = { status: 'failed', section: null, uri: asset.uri, filename };
               } else if (proc.duplicate) {
@@ -1831,6 +1868,7 @@ export default function EventScreen() {
       }
 
       results[index] = result;
+      reportUploadTiming({ src: Platform.OS + '-pick', run: timingRun, i: index, kb: typeof asset.fileSize === 'number' ? Math.round(asset.fileSize / 1024) : null, startMs: tStart - timingRunStart, urlMs: tUrl ? tUrl - tStart : null, copyMs: tCopy ? tCopy - (tUrl ?? tStart) : null, putMs: tPut ? tPut - (tCopy ?? tUrl ?? tStart) : null, saveMs: tSave && tPut ? tSave - tPut : null, totalMs: Date.now() - tStart, status: result.status }); // ⏱ timer only
       completedCount++;
       setBgUploadProgress({ current: completedCount, total: assets.length });
     }
@@ -1863,9 +1901,10 @@ export default function EventScreen() {
     // looks like 4 silently vanished. Same wording Upload by Date uses.
     const withSkipped = (base: string) =>
       pickerPreSkipped > 0 ? `${base} · ${pickerPreSkipped} already uploaded` : base;
-    setUploadSummary(withSkipped(summarizeUploadResults(finalResults)));
+    const timerLabel = uiTimerLabel(finalResults.length); // ⏱ timer only
+    setUploadSummary(withSkipped(summarizeUploadResults(finalResults)) + timerLabel);
 
-    const summary = withSkipped(summarizeUploadResults(finalResults));
+    const summary = withSkipped(summarizeUploadResults(finalResults)) + timerLabel;
     const dupsAndUpgrades = finalResults.filter(r => r.status === 'duplicate' || r.status === 'upgraded');
     const failed = finalResults.filter(r => r.status === 'failed');
     const failedAssets = assets.filter((_, i) => results[i]?.status === 'failed');
@@ -1922,6 +1961,7 @@ export default function EventScreen() {
     // user had just switched on and ticked.
     _bgIncludeWhatsapp = includeWhatsapp;
     _bgEventName = params.name ?? '';
+    _uiTimerStart = Date.now(); _uiTimerFirst = 0; // ⏱ timer only
     _bgCancelled = false;
     bgUploadCancelledRef.current = false;
     setBgCancelRequested(false);
@@ -1964,6 +2004,7 @@ export default function EventScreen() {
         const base = summarizeUploadResults(results);
         summary = preSkipped > 0 ? `${base} · ${preSkipped} already uploaded` : base;
       }
+      summary += uiTimerLabel(results.length); // ⏱ timer only
       setUploadSummary(summary);
       const dupsAndUpgrades = results.filter(r => r.status === 'duplicate' || r.status === 'upgraded');
       const failedResults = results.filter(r => r.status === 'failed');

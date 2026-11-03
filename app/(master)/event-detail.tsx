@@ -268,17 +268,38 @@ export default function EventDetailScreen() {
   // chosen when the event is created and can never change, so there is
   // nothing to toggle. The settings route refuses the field outright.
 
-  async function handleToggleFindMyPhotos(value: boolean) {
-    const pw = await getOrganiserPassword();
-    if (!pw || !params.organiserPhone) return;
-    setSettingsUpdating(true);
-    const result = await updateEventSettings(params.slug, params.organiserPhone, pw, { findMyPhotosEnabled: value });
-    setSettingsUpdating(false);
-    if (result.error) {
-      showAlert('Error', result.error);
-    } else {
-      setFindMyPhotos(value);
-    }
+  // ⭐ FIND MY PHOTOS SWITCH (face codes step 7, decisions B7.1 + B7.2, the
+  // user's yes): the summary is shown BEFORE anything changes — the switch only
+  // moves when the Organiser taps "Turn on" / "Turn off"; Cancel saves nothing.
+  // Wording as decided 2026-11-02 (set A), minus "Guests are told about this
+  // the first time they upload" — that guest notice was dropped 2026-11-03.
+  function handleToggleFindMyPhotos(value: boolean) {
+    showAlert(
+      value ? 'Turn on Find my photos?' : 'Turn off Find my photos?',
+      value
+        ? '• Guests can find photos of themselves with a selfie.\n' +
+          '• Faces in this event\'s photos will be scanned: the photos already uploaded and every new upload.\n' +
+          '• Face data is kept until you delete the event.'
+        : 'Guests can no longer search for their photos. Face data already made is kept until you delete the event.',
+      [
+        {
+          text: value ? 'Turn on' : 'Turn off',
+          onPress: async () => {
+            const pw = await getOrganiserPassword();
+            if (!pw || !params.organiserPhone) return;
+            setSettingsUpdating(true);
+            const result = await updateEventSettings(params.slug, params.organiserPhone, pw, { findMyPhotosEnabled: value });
+            setSettingsUpdating(false);
+            if (result.error) {
+              showAlert('Error', result.error);
+            } else {
+              setFindMyPhotos(value);
+            }
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
   }
 
   // ⛔⛔ handleToggleIsClosed WAS REMOVED HERE on 2026-10-20, and with it the
@@ -749,8 +770,8 @@ export default function EventDetailScreen() {
         </View>
         <View style={styles.settingRow}>
           <View style={styles.settingInfo}>
-            <Text style={styles.settingLabel}>My Photos</Text>
-            <Text style={styles.settingDesc}>{findMyPhotos ? 'Guests can find photos of themselves using a selfie' : 'My Photos is disabled for this event'}</Text>
+            <Text style={styles.settingLabel}>Find my photos</Text>
+            <Text style={styles.settingDesc}>{findMyPhotos ? 'Guests can find photos of themselves using a selfie' : 'Guests cannot find photos of themselves using a selfie'}</Text>
           </View>
           {settingsUpdating
             ? <ActivityIndicator color={Colors.accent} />

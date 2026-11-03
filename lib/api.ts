@@ -460,7 +460,7 @@ export async function updateEventSettings(slug: string, organiserPhone: string, 
 // ⭐ ONE CHUNK of the face search (2026-11-01): pass `after` = the previous
 // chunk's `next` until `next` is null. `total` comes on the first chunk only;
 // `failed` = photos that could not be checked even after a retry.
-export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string, after?: string | null): Promise<{ photos?: { id: string; taken_at: string }[]; otherPhotos?: { id: string; taken_at: string }[]; total?: number | null; checked?: number; failed?: number; next?: string | null; error?: string }> {
+export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string, after?: string | null): Promise<{ photos?: { id: string; taken_at: string }[]; otherPhotos?: { id: string; taken_at: string }[]; total?: number | null; checked?: number; failed?: number; next?: string | null; stillPreparing?: boolean; error?: string }> {
   // MUST go through authHeaders: this route requires the login token since
   // 2026-10-08. It used a bare fetch and broke the moment the server started
   // enforcing — the exact trap the token work warned about.

@@ -16,7 +16,6 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as Sharing from 'expo-sharing';
 import * as SecureStore from 'expo-secure-store';
 import * as MediaLibrary from 'expo-media-library';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
@@ -35,7 +34,6 @@ const COLS = 3;
 const GAP = 2;
 const THUMB_SIZE = Math.floor((SCREEN_WIDTH - GAP * (COLS + 1)) / COLS);
 const JPG_LIMIT = 40;
-const PRIVACY_KEY = 'myPhotosPrivacySeen';
 
 type Photo = { id: string; taken_at: string; uploaded_by_name?: string };
 // Plan C: a row counts as "on screen" as soon as any of it shows.
@@ -111,9 +109,12 @@ export default function MyPhotosScreen() {
 
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [otherPhotos, setOtherPhotos] = useState<Photo[]>([]);
-  // Face search progress (2026-11-01): the search runs in chunks; this drives
-  // "Searching… 300 of 1,200 photos · 4 found".
+  // Face search progress: the search runs in chunks; "found" drives the
+  // "N found" line under "Searching…" (B4, face codes step 7).
   const [searchProgress, setSearchProgress] = useState<{ checked: number; total: number; found: number } | null>(null);
+  // B8 (face codes step 7): the server says when many of the event's photos
+  // are not scanned yet, so the search may take longer.
+  const [stillPreparing, setStillPreparing] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [downloadMode, setDownloadMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -644,15 +645,9 @@ export default function MyPhotosScreen() {
   // ── Init ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     async function init() {
+      // The one-time 'Your selfie is never saved' pop-up was removed here
+      // (the user: "Remove it", 2026-11-04) — the screen opens on the camera.
       if (!permission?.granted) await requestPermission();
-      const seen = await AsyncStorage.getItem(PRIVACY_KEY);
-      if (!seen) {
-        showAlert(
-          'Your selfie is never saved',
-          "Your selfie is only used to search this event's photos. It is never stored on our servers.",
-          [{ text: 'Got it', onPress: async () => { await AsyncStorage.setItem(PRIVACY_KEY, '1'); } }]
-        );
-      }
     }
     init();
   }, []);
@@ -703,6 +698,11 @@ export default function MyPhotosScreen() {
       let after: string | null = null;
       const main: Photo[] = [];
       const other: Photo[] = [];
+      // A photo can come back in two answers (rare: upgraded while the search
+      // ran) — keep each photo once.
+      const seen = new Set<string>();
+      const fresh = (list: Photo[]) => list.filter(p => !seen.has(p.id) && (seen.add(p.id), true));
+      setStillPreparing(false);
       setSearchProgress({ checked: 0, total, found: 0 });
       do {
         const result = await findMyPhotos(slug, base64, adminPhone, userMobile, after);
@@ -721,8 +721,9 @@ export default function MyPhotosScreen() {
           break;
         }
         if (typeof result.total === 'number') total = result.total;
-        main.push(...((result.photos ?? []) as Photo[]));
-        other.push(...((result.otherPhotos ?? []) as Photo[]));
+        if (result.stillPreparing) setStillPreparing(true);
+        main.push(...fresh((result.photos ?? []) as Photo[]));
+        other.push(...fresh((result.otherPhotos ?? []) as Photo[]));
         checked += result.checked ?? 0;
         failedCount += result.failed ?? 0;
         setSearchProgress({ checked, total, found: main.length + other.length });
@@ -1066,18 +1067,19 @@ export default function MyPhotosScreen() {
     return (
       <View style={styles.centeredScreen}>
         <ActivityIndicator size="large" color={Colors.accent} />
-        {searchProgress && searchProgress.total > 0 ? (
-          <>
-            <Text style={styles.searchingText}>
-              Searching… {Math.min(searchProgress.checked, searchProgress.total)} of {searchProgress.total} photo{searchProgress.total !== 1 ? 's' : ''}
-            </Text>
-            <Text style={[styles.searchingText, { marginTop: 6 }]}>
-              {searchProgress.found} found
-            </Text>
-          </>
-        ) : (
-          <Text style={styles.searchingText}>Searching through {totalPhotos} photo{totalPhotos !== 1 ? 's' : ''}…</Text>
-        )}
+        {/* B4 (face codes): "Searching…" replaces "checked X of Y" — most of
+            the event is now searched in one step, so a count would jump. */}
+        <Text style={styles.searchingText}>Searching…</Text>
+        {searchProgress && searchProgress.found > 0 ? (
+          <Text style={[styles.searchingText, { marginTop: 6 }]}>
+            {searchProgress.found} found
+          </Text>
+        ) : null}
+        {stillPreparing ? (
+          <Text style={[styles.searchingText, { marginTop: 6 }]}>
+            Still preparing this event, results may take longer
+          </Text>
+        ) : null}
       </View>
     );
   }

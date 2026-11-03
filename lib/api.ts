@@ -468,7 +468,7 @@ export async function updateEventSettings(slug: string, organiserPhone: string, 
 // ⭐ ONE CHUNK of the face search (2026-11-01): pass `after` = the previous
 // chunk's `next` until `next` is null. `total` comes on the first chunk only;
 // `failed` = photos that could not be checked even after a retry.
-export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string, after?: string | null): Promise<{ photos?: { id: string; taken_at: string }[]; otherPhotos?: { id: string; taken_at: string }[]; total?: number | null; checked?: number; failed?: number; next?: string | null; stillPreparing?: boolean; error?: string }> {
+export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string, after?: string | null): Promise<{ photos?: { id: string; taken_at: string }[]; otherPhotos?: { id: string; taken_at: string }[]; total?: number | null; checked?: number; failed?: number; next?: string | null; preparing?: number; error?: string }> {
   // MUST go through authHeaders: this route requires the login token since
   // 2026-10-08. It used a bare fetch and broke the moment the server started
   // enforcing — the exact trap the token work warned about.
@@ -479,6 +479,24 @@ export async function findMyPhotos(slug: string, selfieBase64: string, adminPhon
   });
   const text = await res.text();
   try { return JSON.parse(text); } catch { return { error: 'Server returned an unexpected response. Please try again.' }; }
+}
+
+// ⭐ B9.5 (2026-11-04, the user's yes): is Find my photos ready for this event?
+// Asked when the guest taps "View My Photos", before the camera opens.
+// ready: false + error = "getting ready" (many photos still being scanned).
+// Any failure answers ready: true — the search itself then decides.
+export async function findMyPhotosReady(slug: string): Promise<{ ready: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/find-my-photos`, {
+      method: 'POST',
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ checkOnly: true }),
+    });
+    const data = JSON.parse(await res.text());
+    return data?.ready === false ? { ready: false, error: data.error } : { ready: true };
+  } catch {
+    return { ready: true };
+  }
 }
 
 export async function deleteAccount(phone: string): Promise<{ success?: boolean; error?: string }> {

@@ -28,7 +28,7 @@ import {
   getEventPhotos, getPhotoUrls, getUploadUrl, processUpload, deletePhotos, reportUploadTiming,
   getPhotoDownloadUrl, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled, fetchServerNotifications, markServerNotificationsRead,
   deleteServerNotification, deleteAllServerNotifications, ServerNotification,
-  checkAdminStatus, findMyPhotos,
+  checkAdminStatus, findMyPhotos, findMyPhotosReady,
 } from '../lib/api';
 import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
 import { API_BASE_URL } from '../constants/config';
@@ -3694,8 +3694,15 @@ export default function EventScreen() {
               </TouchableOpacity>
             )}
             {findMyPhotosEnabled && (
-              <TouchableOpacity style={styles.menuItem} onPress={() => {
+              <TouchableOpacity style={styles.menuItem} onPress={async () => {
                 setMenuVisible(false);
+                // B9.5 (2026-11-04, the user's yes): while many photos are still
+                // being scanned, say so here — the camera does not open.
+                const readiness = await findMyPhotosReady(slug);
+                if (!readiness.ready) {
+                  showAlert('Find my photos', readiness.error ?? 'Find my photos is getting ready for this event. Please try again in a few minutes.');
+                  return;
+                }
                 router.push({ pathname: '/my-photos', params: {
                   slug,
                   adminPhone: params.adminPhone ?? '',

@@ -112,9 +112,10 @@ export default function MyPhotosScreen() {
   // Face search progress: the search runs in chunks; "found" drives the
   // "N found" line under "Searching…" (B4, face codes step 7).
   const [searchProgress, setSearchProgress] = useState<{ checked: number; total: number; found: number } | null>(null);
-  // B8 (face codes step 7): the server says when many of the event's photos
-  // are not scanned yet, so the search may take longer.
-  const [stillPreparing, setStillPreparing] = useState(false);
+  // B9 (2026-11-04, the user's yes): the search covers scanned photos only;
+  // `preparing` = photos not searched yet (still being scanned), shown on the
+  // results screen so the guest knows to search again in a few minutes.
+  const [preparing, setPreparing] = useState(0);
   const [capturing, setCapturing] = useState(false);
   const [downloadMode, setDownloadMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -702,7 +703,7 @@ export default function MyPhotosScreen() {
       // ran) — keep each photo once.
       const seen = new Set<string>();
       const fresh = (list: Photo[]) => list.filter(p => !seen.has(p.id) && (seen.add(p.id), true));
-      setStillPreparing(false);
+      setPreparing(0);
       setSearchProgress({ checked: 0, total, found: 0 });
       do {
         const result = await findMyPhotos(slug, base64, adminPhone, userMobile, after);
@@ -710,7 +711,9 @@ export default function MyPhotosScreen() {
           if (checked === 0) {
             // First chunk failed (e.g. no face in the selfie): back to the camera.
             setCameraReady(false);
-            showAlert('Error', result.error, [{ text: 'Try Again', onPress: () => setMode('camera') }]);
+            // B9.5: "getting ready" is not an error — titled as the feature.
+            const title = result.error.startsWith('Find my photos is getting ready') ? 'Find my photos' : 'Error';
+            showAlert(title, result.error, [{ text: 'Try Again', onPress: () => setMode('camera') }]);
             setMode('camera');
             setCapturing(false);
             setSearchProgress(null);
@@ -721,7 +724,7 @@ export default function MyPhotosScreen() {
           break;
         }
         if (typeof result.total === 'number') total = result.total;
-        if (result.stillPreparing) setStillPreparing(true);
+        if (typeof result.preparing === 'number') setPreparing(result.preparing);
         main.push(...fresh((result.photos ?? []) as Photo[]));
         other.push(...fresh((result.otherPhotos ?? []) as Photo[]));
         checked += result.checked ?? 0;
@@ -1075,11 +1078,6 @@ export default function MyPhotosScreen() {
             {searchProgress.found} found
           </Text>
         ) : null}
-        {stillPreparing ? (
-          <Text style={[styles.searchingText, { marginTop: 6 }]}>
-            Still preparing this event, results may take longer
-          </Text>
-        ) : null}
       </View>
     );
   }
@@ -1123,6 +1121,13 @@ export default function MyPhotosScreen() {
         </View>
         <View style={{ width: 32 }} />
       </View>
+
+      {/* B9: photos not searched yet (still being scanned). */}
+      {preparing > 0 && (
+        <Text style={[styles.searchingText, { marginHorizontal: 16, marginTop: 8 }]}>
+          {preparing} photo{preparing !== 1 ? 's are' : ' is'} still being prepared. Search again in a few minutes to include {preparing !== 1 ? 'them' : 'it'}.
+        </Text>
+      )}
 
       {totalFound === 0 ? (
         <View style={styles.emptyState}>

@@ -11,7 +11,7 @@ import { getOrganiserPassword } from '../../lib/auth';
 import { getUserProfile } from '../../lib/storage';
 import { showPermissionDeniedAlert, shouldShowDeniedAlert } from '../../lib/priming';
 import { useAppPermission } from '../../lib/permissions';
-import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, listJoinedGuestsForUser, setGuestBlocked } from '../../lib/api';
+import { extendEvent, deleteEvent, listCoadmins, addCoadmin, removeCoadmin, updateEventSettings, listAllowedGuests, addAllowedGuests, removeAllowedGuest, listJoinedGuestsForUser, setGuestBlocked, getFindMyPhotosStatus, FindMyPhotosStatus } from '../../lib/api';
 import { API_BASE_URL } from '../../constants/config';
 import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
@@ -37,6 +37,11 @@ function matchesPersonSearch(query: string, phone: string, ...names: (string | n
 
 function formatDate(iso: string) {
   return new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+// 1000 → "1,000" (the wording the user approved: "340 of 1,000 photos ready").
+function formatCount(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 function formatStorage(bytes: number): string {
@@ -70,6 +75,7 @@ export default function EventDetailScreen() {
   const [viewOnly, setViewOnly] = useState(params.view_only === 'true');
   const [isClosed, setIsClosed] = useState(params.is_closed === 'true');
   const [findMyPhotos, setFindMyPhotos] = useState(params.find_my_photos === 'true');
+  const [fmpStatus, setFmpStatus] = useState<FindMyPhotosStatus | null>(null);
   const [settingsUpdating, setSettingsUpdating] = useState(false);
   const [coadmins, setCoadmins] = useState<Coadmin[]>([]);
   const [coadminsLoading, setCoadminsLoading] = useState(true);
@@ -85,6 +91,27 @@ export default function EventDetailScreen() {
   const [gearDropPos, setGearDropPos] = useState({ top: 0, right: 0 });
 
   const [organiserDisplayName, setOrganiserDisplayName] = useState<string>('Organiser');
+
+  // ⭐ FIND MY PHOTOS PROGRESS LINE (the user's "Yes", 2026-11-04): shown only
+  // while the switch is ON ("Hidden" when off). Read when the screen comes into
+  // view and when the switch turns on; while photos are still waiting it is
+  // read again every 15 seconds, and it stops once nothing is waiting, when
+  // the switch goes off, or when the screen is left.
+  useFocusEffect(
+    useCallback(() => {
+      if (!findMyPhotos) { setFmpStatus(null); return; }
+      let stopped = false;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const read = async () => {
+        const s = await getFindMyPhotosStatus(params.slug);
+        if (stopped) return;
+        setFmpStatus(s);
+        if (s && s.waiting > 0) timer = setTimeout(read, 15000);
+      };
+      read();
+      return () => { stopped = true; if (timer) clearTimeout(timer); };
+    }, [findMyPhotos, params.slug])
+  );
 
   useEffect(() => {
     getUserProfile().then(p => {
@@ -772,6 +799,21 @@ export default function EventDetailScreen() {
           <View style={styles.settingInfo}>
             <Text style={styles.settingLabel}>Find my photos</Text>
             <Text style={styles.settingDesc}>{findMyPhotos ? 'Guests can find photos of themselves using a selfie' : 'Guests cannot find photos of themselves using a selfie'}</Text>
+            {findMyPhotos && fmpStatus && fmpStatus.total > 0 && (
+              <>
+                {fmpStatus.waiting > 0 && (
+                  <Text style={styles.fmpStatus}>{`Preparing: ${formatCount(fmpStatus.ready)} of ${formatCount(fmpStatus.total)} photos ready`}</Text>
+                )}
+                {fmpStatus.waiting === 0 && fmpStatus.failed === 0 && (
+                  <Text style={styles.fmpStatus}>All photos ready</Text>
+                )}
+                {fmpStatus.failed > 0 && (
+                  <Text style={styles.fmpStatus}>{fmpStatus.failed === 1
+                    ? '1 photo could not be prepared and won\'t appear in searches'
+                    : `${formatCount(fmpStatus.failed)} photos could not be prepared and won't appear in searches`}</Text>
+                )}
+              </>
+            )}
           </View>
           {settingsUpdating
             ? <ActivityIndicator color={Colors.accent} />
@@ -1386,6 +1428,7 @@ const styles = StyleSheet.create({
   settingInfo: { flex: 1, marginRight: 12 },
   settingLabel: { fontSize: 14, fontWeight: '700', color: Colors.white },
   settingDesc: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  fmpStatus: { fontSize: 12, color: Colors.textMuted, marginTop: 4 },
   settingLocked: { fontSize: 11, color: '#555', marginTop: 4, fontStyle: 'italic' },
   coadminRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

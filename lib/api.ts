@@ -499,6 +499,21 @@ export async function findMyPhotosReady(slug: string): Promise<{ ready: boolean;
   }
 }
 
+// ⭐ The Organiser's progress line in Manage Event (the user's "Yes",
+// 2026-11-04): how many of the event's photos Find my photos has prepared.
+// Counts only. Any failure answers null — the screen then shows no line
+// (never a wrong number).
+export type FindMyPhotosStatus = { enabled: boolean; ready: number; waiting: number; failed: number; total: number };
+export async function getFindMyPhotosStatus(slug: string): Promise<FindMyPhotosStatus | null> {
+  try {
+    const data = await get(`/api/native/events/${slug}/find-my-photos-status`);
+    return typeof data?.ready === 'number' && typeof data?.waiting === 'number' && typeof data?.failed === 'number'
+      ? data as FindMyPhotosStatus : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function deleteAccount(phone: string): Promise<{ success?: boolean; error?: string }> {
   return del('/api/native/users/delete', { phone });
 }

@@ -22,6 +22,7 @@ try { PhotoSaver = require('photo-saver').default; } catch {}
 import { findMyPhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
 import { buildDownloadFilename } from '../lib/downloadFilename';
 import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
+import PhotoViewer from '../components/PhotoViewer';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
@@ -173,21 +174,11 @@ export default function MyPhotosScreen() {
   const accumulatedHeights = useRef<Record<string, number>>({});
   const prevSelectedSize = useRef(0);
 
-  // Lightbox zoom shared values
-  const scale = useSharedValue(1);
-  const savedScale = useSharedValue(1);
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
-  const savedTranslateX = useSharedValue(0);
-  const savedTranslateY = useSharedValue(0);
-  // Swipe down to close. The axis is locked on the first ~10px and kept for the
-  // rest of the gesture: a gesture's rules must never change under a finger that
-  // is already down. 0 = undecided, 1 = horizontal, 2 = vertical.
-  const dragAxis = useSharedValue(0);
-  // A worklet cannot read React state, so the busy flag is mirrored here. This
-  // screen spells it differently from the other two: lightboxBusy is a STRING
-  // ('download' | 'share' | null), and there is no delete path here at all.
-  const lbBusySV = useSharedValue(0);
+  // ⭐ The lightbox's swipe / zoom / swipe-down gestures moved to the ONE shared
+  // viewer, components/PhotoViewer.tsx (2026-11-05, the user's "Yes" — memory
+  // project_download_progress_ui, UNIVERSAL VIEWER). Same rules (protected
+  // item 5): direction locked once (dragAxis), 50 px sideways, zoom gating,
+  // swipe-down 100 px / flick, blocked while busy, reset on every photo change.
   const listDataRef = useRef<ListItem[]>([]);
   // Needed to bring the grid to the photo the lightbox closed on.
   const listRef = useRef<FlashListRef<ListItem>>(null);
@@ -400,25 +391,6 @@ export default function MyPhotosScreen() {
     dragModeRef.current = null;
   }, []);
 
-  // Reset zoom whenever the lightbox photo changes, and when it opens or closes
-  // -- a swipe-down close leaves translateY part-way down the screen, so without
-  // lightboxVisible here the next photo would open already offset.
-  useEffect(() => {
-    scale.value = 1;
-    savedScale.value = 1;
-    translateX.value = 0;
-    translateY.value = 0;
-    savedTranslateX.value = 0;
-    savedTranslateY.value = 0;
-    dragAxis.value = 0;
-  }, [lightboxIndex, lightboxVisible]);
-
-  // Mirror the busy flag into a shared value the gesture worklet can read.
-  // Swipe-down is blocked while a download or share is in flight -- the opposite
-  // of the header's x, which is deliberately usable then.
-  useEffect(() => {
-    lbBusySV.value = lightboxBusy ? 1 : 0;
-  }, [lightboxBusy]);
 
   function navigateLightbox(dir: number) {
     setLightboxIndex(prev => {
@@ -427,96 +399,6 @@ export default function MyPhotosScreen() {
       return next;
     });
   }
-
-  const pinchGesture = Gesture.Pinch()
-    .onUpdate((e) => {
-      scale.value = Math.max(1, Math.min(savedScale.value * e.scale, 5));
-    })
-    .onEnd(() => {
-      savedScale.value = scale.value;
-      if (scale.value < 1.05) {
-        scale.value = withSpring(1);
-        savedScale.value = 1;
-        translateX.value = withSpring(0);
-        translateY.value = withSpring(0);
-        savedTranslateX.value = 0;
-        savedTranslateY.value = 0;
-      }
-    });
-
-  const lbPanGesture = Gesture.Pan()
-    .onBegin(() => {
-      dragAxis.value = 0;
-    })
-    .onUpdate((e) => {
-      if (savedScale.value > 1) {
-        translateX.value = savedTranslateX.value + e.translationX;
-        translateY.value = savedTranslateY.value + e.translationY;
-        return;
-      }
-      // Not zoomed. Decide the axis ONCE, on the first real movement, and keep
-      // it for the rest of the gesture. Deciding it per frame would let a drag
-      // change meaning under a finger already down -- the bug that broke
-      // hold-and-drag on both platforms before.
-      if (dragAxis.value === 0 && (Math.abs(e.translationX) > 10 || Math.abs(e.translationY) > 10)) {
-        dragAxis.value = Math.abs(e.translationY) > Math.abs(e.translationX) ? 2 : 1;
-      }
-      if (dragAxis.value === 2 && e.translationY > 0 && lbBusySV.value === 0) {
-        translateY.value = e.translationY;
-      }
-    })
-    .onEnd((e) => {
-      if (savedScale.value > 1) {
-        savedTranslateX.value = translateX.value;
-        savedTranslateY.value = translateY.value;
-        return;
-      }
-      if (dragAxis.value === 2) {
-        // 100px of travel, or a fast flick. The flick is what stops the longer
-        // distance punishing anyone in a hurry; 50px is kept for sideways,
-        // where a wrong swipe costs nothing and there is no flick option.
-        if (lbBusySV.value === 0 && (e.translationY > 100 || (e.translationY > 20 && e.velocityY > 800))) {
-          runOnJS(setLightboxVisible)(false);
-          return;
-        }
-        translateY.value = withSpring(0);
-        return;
-      }
-      if (Math.abs(e.translationX) > 50 && Math.abs(e.translationX) > Math.abs(e.translationY)) {
-        if (e.translationX < 0) runOnJS(navigateLightbox)(1);
-        else runOnJS(navigateLightbox)(-1);
-      }
-    });
-
-  const doubleTapGesture = Gesture.Tap()
-    .numberOfTaps(2)
-    .maxDuration(250)
-    .onEnd(() => {
-      if (savedScale.value > 1) {
-        scale.value = withSpring(1);
-        savedScale.value = 1;
-        translateX.value = withSpring(0);
-        translateY.value = withSpring(0);
-        savedTranslateX.value = 0;
-        savedTranslateY.value = 0;
-      } else {
-        scale.value = withSpring(2.5);
-        savedScale.value = 2.5;
-      }
-    });
-
-  const zoomGesture = Gesture.Simultaneous(doubleTapGesture, lbPanGesture, pinchGesture);
-
-  const zoomStyle = useAnimatedStyle(() => ({
-    // Fade as the photo is dragged away, so the gesture shows its own progress
-    // and can be abandoned. Never while zoomed -- translateY is panning then.
-    opacity: savedScale.value > 1 ? 1 : Math.max(0.35, 1 - Math.max(0, translateY.value) / 400),
-    transform: [
-      { translateX: translateX.value },
-      { translateY: translateY.value },
-      { scale: scale.value },
-    ],
-  }));
 
   const dragGesture = useMemo(() => Gesture.Pan()
     .enabled(downloadMode)
@@ -1286,24 +1168,16 @@ export default function MyPhotosScreen() {
             </TouchableOpacity>
           </View>
           <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
-            <GestureDetector gesture={zoomGesture}>
-              <Animated.View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }, zoomStyle]}>
-                {lightboxImageUrl
-                  ? <Image source={{ uri: lightboxImageUrl }} style={styles.lbImg} resizeMode="contain" />
-                  : <ActivityIndicator color={Colors.accent} />
-                }
-              </Animated.View>
-            </GestureDetector>
-            {lightboxIndex > 0 && (
-              <TouchableOpacity style={[styles.lbArrow, { left: 0 }]} onPress={() => setLightboxIndex(i => i - 1)}>
-                <Text style={styles.lbArrowText}>‹</Text>
-              </TouchableOpacity>
-            )}
-            {lightboxIndex < totalFound - 1 && (
-              <TouchableOpacity style={[styles.lbArrow, { right: 0 }]} onPress={() => setLightboxIndex(i => i + 1)}>
-                <Text style={styles.lbArrowText}>›</Text>
-              </TouchableOpacity>
-            )}
+            <PhotoViewer
+              items={allIds}
+              index={lightboxIndex}
+              getKey={id => id}
+              getUri={id => photoUrls[id]?.displayUrl ?? photoUrls[id]?.url ?? null}
+              onIndexChange={setLightboxIndex}
+              onClose={() => setLightboxVisible(false)}
+              busy={!!lightboxBusy}
+            />
+            {/* ‹ › arrows: drawn by the shared PhotoViewer (2026-11-05). */}
           </View>
           <View style={[styles.lbFooter, { paddingBottom: insets.bottom + 12 }]}>
             {currentLbPhoto?.uploaded_by_name ? (

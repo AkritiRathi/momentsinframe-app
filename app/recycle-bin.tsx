@@ -5,7 +5,9 @@ import {
 } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Colors } from '../constants/colors';
+import PhotoViewer from '../components/PhotoViewer';
 import { useAlert } from '../lib/useAlert';
 import { getRecycleBin, recycleBinRestore, recycleBinDeletePermanently, RecycleBinPhoto } from '../lib/api';
 import { markGalleryRestored } from '../lib/galleryRefresh';
@@ -20,8 +22,12 @@ import { markGalleryRestored } from '../lib/galleryRefresh';
 // - Delete permanently always asks first.
 // - Restore can be refused: after the event expired (only the Organiser may
 //   restore), or for a photo that is already back in the event.
-// The full-screen view is this screen's OWN simple pager — it does not touch
-// any existing screen's lightbox or gestures (protected items 5 and 15).
+// The full-screen view uses the ONE shared photo viewer (components/
+// PhotoViewer.tsx, 2026-11-05, the user's "Yes"): slides with the finger,
+// neighbours already loaded, full-size photo, zoom and swipe-down to close.
+// Until 2026-11-05 it was this screen's own simple pager — the approved plan
+// (2026-10-27) had said to copy the event screen's lightbox, which the pager
+// did not (no zoom, no swipe-down): memory project_recently_deleted.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const COLS = 3;
@@ -47,7 +53,6 @@ export default function RecycleBinScreen() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
-  const pagerRef = useRef<FlatList<RecycleBinPhoto>>(null);
 
   const screenW = Dimensions.get('window').width;
   const cell = Math.floor(screenW / COLS);
@@ -76,18 +81,11 @@ export default function RecycleBinScreen() {
   useEffect(() => { load(); }, [load]);
 
   // ⛔ After a photo leaves the full-screen view (Delete permanently or
-  // Restore), scroll the swipe row to the photo now shown (the user,
-  // 2026-11-01: it went BLANK). removeFromList keeps the same position — the
-  // next photo — or the previous one when the last was removed; the row only
-  // scrolls by itself when it opens, so without this it pointed past the end.
+  // Restore) the view shows the photo now at the same position — the next one
+  // — or the previous one when the last was removed (the user, 2026-11-01: it
+  // once went BLANK). removeFromList keeps that index; the shared viewer draws
+  // whatever photo is at its index, so no extra scrolling is needed any more.
   // An empty bin closes the view and shows "Your Recycle bin is empty".
-  useEffect(() => {
-    if (viewerIndex === null) return;
-    requestAnimationFrame(() => {
-      pagerRef.current?.scrollToOffset({ offset: viewerIndex * screenW, animated: false });
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [photos.length]);
 
   const removeFromList = (ids: string[]) => {
     const gone = new Set(ids);
@@ -333,7 +331,7 @@ export default function RecycleBinScreen() {
           only. The alert is drawn inside this Modal too, or it would sit
           behind it. */}
       <Modal visible={viewerIndex !== null} animationType="fade" onRequestClose={() => setViewerIndex(null)}>
-        <View style={{ flex: 1, backgroundColor: '#000' }}>
+        <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#000' }}>
           <View style={[styles.viewerHeader, { paddingTop: insets.top + 12 }]}>
             <Text style={styles.viewerCounter}>
               {viewerIndex !== null ? `${viewerIndex + 1} / ${photos.length}` : ''}
@@ -342,22 +340,15 @@ export default function RecycleBinScreen() {
               <Text style={styles.close}>×</Text>
             </TouchableOpacity>
           </View>
-          {viewerIndex !== null && (
-            <FlatList
-              ref={pagerRef}
-              data={photos}
-              keyExtractor={p => p.id}
-              horizontal
-              pagingEnabled
-              showsHorizontalScrollIndicator={false}
-              initialScrollIndex={viewerIndex}
-              getItemLayout={(_, i) => ({ length: screenW, offset: screenW * i, index: i })}
-              onMomentumScrollEnd={e => setViewerIndex(Math.round(e.nativeEvent.contentOffset.x / screenW))}
-              renderItem={({ item }) => (
-                <View style={{ width: screenW, flex: 1, justifyContent: 'center' }}>
-                  <Image source={{ uri: item.displayUrl }} style={{ width: screenW, height: '100%' }} resizeMode="contain" />
-                </View>
-              )}
+          {viewerIndex !== null && photos.length > 0 && (
+            <PhotoViewer
+              items={photos}
+              index={Math.min(viewerIndex, photos.length - 1)}
+              getKey={p => p.id}
+              getUri={p => p.displayUrl}
+              onIndexChange={setViewerIndex}
+              onClose={() => setViewerIndex(null)}
+              busy={busy}
             />
           )}
           {current && (
@@ -394,7 +385,7 @@ export default function RecycleBinScreen() {
             </View>
           )}
           {viewerIndex !== null && alertOverlay}
-        </View>
+        </GestureHandlerRootView>
       </Modal>
 
       {viewerIndex === null && alertOverlay}

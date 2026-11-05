@@ -40,21 +40,25 @@ export default function JoinEventScreen() {
   const [scannerVisible, setScannerVisible] = useState(false);
   const [scanned, setScanned] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  // The server check of "Your events" failed (no connection, timeout, server
+  // error), so the list shown is only what this phone saved. Said on screen
+  // with a Try again (2026-11-05, the user: "Yes for both") — before, it failed
+  // silently, which for an INVITED guest looked exactly like not being invited.
+  // project_events_list_errors.md. An expired login is not this: it already
+  // goes to the code screen (lib/api.ts handleUnauthorised).
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const [retryingRefresh, setRetryingRefresh] = useState(false);
 
-  useEffect(() => {
-    async function load() {
-      // Show cached events immediately — no server wait
-      setJoinedEvents(await getJoinedEvents());
-      // Pre-fill last used event code
-      const lastCode = await getLastEventCode();
-      if (lastCode) setCode(lastCode);
-      // Refresh from server in background.
-      // The cache above only knows events opened ON THIS DEVICE, so a new
-      // phone, or an event someone made you co-admin of, would never show.
-      // This call asks the server for everything the number belongs to.
-      try {
-        const mine = await listMyEvents();
-        if (Array.isArray(mine?.events)) {
+  // Asks the server for every event this number belongs to and updates the
+  // saved list. Returns false if the check could not be done.
+  async function refreshFromServer(): Promise<boolean> {
+    let ok = true;
+    // The cache only knows events opened ON THIS DEVICE, so a new phone, or an
+    // event someone made you co-admin of, would never show. This call asks the
+    // server for everything the number belongs to.
+    try {
+      const mine = await listMyEvents();
+      if (Array.isArray(mine?.events)) {
           // ⛔ ONE batched write, never a write per event. Concurrent
           // read-modify-writes lost events: the server returned two and one
           // survived, which is how an INVITED event could never appear.
@@ -75,9 +79,12 @@ export default function JoinEventScreen() {
           const live = new Set(mine.events.map((ev: any) => ev.slug));
           const cached = await getJoinedEvents();
           await removeJoinedEvents(cached.filter(e => !live.has(e.slug)).map(e => e.slug));
+        } else {
+          // An error answer (e.g. a server error). A 401 never gets here as a
+          // silent failure: it already sent the user to the code screen.
+          ok = false;
         }
-        // A 401 (no valid token) leaves the cached list alone.
-      } catch { /* offline — show whatever is cached */ }
+      } catch { ok = false; /* offline or timed out — the saved list stands */ }
 
       const profile = await getUserProfile();
       const pw = await getOrganiserPassword();
@@ -100,11 +107,33 @@ export default function JoinEventScreen() {
             const cached = await getJoinedEvents();
             await removeJoinedEvents(cached.filter(e => e.isOrganiser && !serverSlugs.has(e.slug)).map(e => e.slug));
           }
-        } catch { /* offline — show whatever is cached */ }
+        } catch { ok = false; /* offline or timed out — the saved list stands */ }
       }
       setJoinedEvents(await getJoinedEvents());
+      return ok;
+  }
+
+  async function handleRetryRefresh() {
+    if (retryingRefresh) return;
+    setRetryingRefresh(true);
+    const ok = await refreshFromServer();
+    setRefreshFailed(!ok);
+    setRetryingRefresh(false);
+  }
+
+  useEffect(() => {
+    async function load() {
+      // Show cached events immediately — no server wait
+      setJoinedEvents(await getJoinedEvents());
+      // Pre-fill last used event code
+      const lastCode = await getLastEventCode();
+      if (lastCode) setCode(lastCode);
+      // Refresh from server in background.
+      const ok = await refreshFromServer();
+      setRefreshFailed(!ok);
     }
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function handleCodeChange(value: string) {
@@ -449,6 +478,19 @@ export default function JoinEventScreen() {
             : visibleEvents.length > 0 && <Text style={styles.eventArrow}>›</Text>
           }
         </TouchableOpacity>
+        {/* One line, "Try again" as the last words (the user, 2026-11-05:
+            "Can we just say 'Couldn't check for new events' Try again?"). */}
+        {refreshFailed && (
+          <Text style={styles.refreshHint}>
+            Couldn't check for new events.{' '}
+            <Text
+              style={[styles.refreshRetry, retryingRefresh && { color: Colors.textMuted }]}
+              onPress={handleRetryRefresh}
+            >
+              Try again
+            </Text>
+          </Text>
+        )}
 
         <Text style={[styles.sectionLabel, { marginTop: 20 }]}>JOIN A NEW EVENT</Text>
         <Text style={styles.label}>EVENT CODE</Text>
@@ -532,6 +574,8 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   currentEventText: { fontSize: 15, fontWeight: '600', color: Colors.white },
+  refreshHint: { fontSize: 12, color: Colors.textMuted, marginTop: 8 },
+  refreshRetry: { fontSize: 12, fontWeight: '700', color: Colors.accent },
 
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
   eventsSheet: {

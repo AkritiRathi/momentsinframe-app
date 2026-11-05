@@ -120,7 +120,11 @@ export async function organiserResetPassword(phone: string, newPassword: string)
 // ⛔ Never turn that into 0 (2026-11-02): 0 lets an Organiser who still owns
 // events log out or delete the account.
 export async function getOrganiserEventCount(phone: string): Promise<number | null> {
-  const result = await get(`/api/native/organiser/event-count?phone=${encodeURIComponent(phone)}`);
+  // No ?phone= in the address (2026-11-05): the server reads the number from
+  // the login token only, and an address with the number ends up in request
+  // logs. `phone` is kept so the callers do not change.
+  void phone;
+  const result = await get('/api/native/organiser/event-count');
   return typeof result?.count === 'number' ? result.count : null;
 }
 
@@ -129,7 +133,9 @@ export async function checkWhitelist(phone: string): Promise<{ whitelisted: bool
 }
 
 export async function checkUserStatus(phone: string): Promise<{ active: boolean }> {
-  return get(`/api/native/users/status?phone=${encodeURIComponent(phone)}`);
+  // No ?phone= in the address (2026-11-05) — same reason as the event count.
+  void phone;
+  return get('/api/native/users/status');
 }
 
 export async function listWhitelist(phone: string, password: string): Promise<{ phones?: { phone: string; added_at: string }[]; error?: string }> {

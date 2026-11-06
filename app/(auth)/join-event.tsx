@@ -226,6 +226,10 @@ export default function JoinEventScreen() {
 
   async function handleRejoin(entry: JoinedEventEntry) {
     setRejoining(entry.slug);
+    // ⭐ 2026-11-07 (the user's "Yes for both"): opening an event from
+    // "Your events" also makes it the LAST event, so the Event Code box
+    // shows its code (and name) next time — same as joining by code.
+    if (entry.joinCode) saveLastEventCode(entry.joinCode).catch(() => {});
     try {
       const profile = await getUserProfile();
       let isAdmin = entry.isOrganiser ?? false;
@@ -423,6 +427,9 @@ export default function JoinEventScreen() {
   const visibleEvents = joinedEvents
     .filter(e => !isExpired(e.expiresAt) || e.isOrganiser || e.role === 'coadmin')
     .sort((a, b) => roleOrder(a) - roleOrder(b));
+  // The event whose code is in the box, if it is one of "Your events" —
+  // its name shows above the box (2026-11-07). Not a hook.
+  const codeEvent = code.length === 6 ? visibleEvents.find(e => e.joinCode === code) : undefined;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -493,7 +500,8 @@ export default function JoinEventScreen() {
         )}
 
         <Text style={[styles.sectionLabel, { marginTop: 20 }]}>JOIN A NEW EVENT</Text>
-        <Text style={styles.label}>EVENT CODE</Text>
+        <Text style={[styles.label, codeEvent && { marginBottom: 6 }]}>EVENT CODE</Text>
+        {codeEvent && <Text style={styles.codeEventName} numberOfLines={1}>{codeEvent.name}</Text>}
         <TextInput
           style={styles.codeInput}
           value={code}
@@ -635,6 +643,7 @@ const styles = StyleSheet.create({
   },
   expiredBadgeText: { fontSize: 11, fontWeight: '700', color: '#c0392b' },
   label: { fontSize: 11, fontWeight: '700', letterSpacing: 1.2, color: Colors.accent, marginBottom: 12 },
+  codeEventName: { fontSize: 15, fontWeight: '600', color: Colors.accent, textAlign: 'center', marginBottom: 10 },
   codeInput: {
     backgroundColor: Colors.card,
     borderWidth: 1.5,

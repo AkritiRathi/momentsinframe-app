@@ -1,5 +1,5 @@
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput, Platform, Dimensions,
+  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput, Platform, Dimensions, LayoutAnimation,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
@@ -90,9 +90,14 @@ export default function EventDetailScreen() {
   const [inviteOffList, setInviteOffList] = useState<{ name: string; mobile: string }[] | null>(null);
   const [blockingPhone, setBlockingPhone] = useState<string | null>(null);
 
-  const gearRef = useRef<TouchableOpacity>(null);
-  const [gearMenuVisible, setGearMenuVisible] = useState(false);
-  const [gearDropPos, setGearDropPos] = useState({ top: 0, right: 0 });
+  // ⭐ EVENT SETTINGS PAGE (2026-11-06, the user's design): the four switches
+  // live on their own page, opened from an 'Event Settings ›' row. It is a
+  // second view of THIS screen (not a Modal), so the confirmations and the
+  // panels keep showing over it. Tapping a name (or its ⓘ) opens a short
+  // explanation under it; one open at a time. The ⚙️ gear (its only item was
+  // Manage Guests) is gone — Manage Guests is a row on the page now.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [openInfo, setOpenInfo] = useState<string | null>(null);
 
   const [organiserDisplayName, setOrganiserDisplayName] = useState<string>('Organiser');
 
@@ -188,11 +193,12 @@ export default function EventDetailScreen() {
   useFocusEffect(
     useCallback(() => {
       const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (settingsOpen) { setSettingsOpen(false); setOpenInfo(null); return true; }
         router.replace('/(master)/dashboard');
         return true;
       });
       return () => sub.remove();
-    }, [router])
+    }, [router, settingsOpen])
   );
 
   const loadAllowedGuests = useCallback(async () => {
@@ -298,6 +304,18 @@ export default function EventDetailScreen() {
   // ⭐ VIEW ONLY AND INVITE ONLY ARE SWITCHES AGAIN (2026-11-06, the user's
   // decision; 2026-10-20 → 2026-11-06 they were chosen at creation only).
   // Each asks first; nothing changes until the Organiser confirms.
+  // The four explanations — wording approved by the user 2026-11-06 ("4. Yes").
+  const SETTING_INFO = {
+    delete: "Guests can delete the photos they uploaded themselves, never anyone else's. You can delete any photo. Admins can delete guests' photos. While View only is on, guests can't delete anything.",
+    invite: "Only people on your Allowed Guests list can open this event. New people can't join with the code unless you add them. When you turn it on, you choose to keep everyone already in or start fresh. Turn it off and anyone with the code can join again.",
+    view: "Guests can only view and download photos. They can't upload or delete. You and your Admins can still upload.",
+    fmp: "Guests can take a selfie to find the photos they're in. Faces in this event's photos are scanned, both the ones already uploaded and every new upload. Face data is kept until you delete the event. Works in the app only.",
+  };
+  function toggleInfo(key: string) {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setOpenInfo(prev => (prev === key ? null : key));
+  }
+
   async function saveSettings(settings: { isClosed?: boolean; closeMode?: 'keep' | 'fresh'; viewOnly?: boolean }) {
     const pw = await getOrganiserPassword();
     if (!pw || !params.organiserPhone) return false;
@@ -778,23 +796,129 @@ export default function EventDetailScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll}>
+        {settingsOpen ? (
+        <>
+        <View style={styles.pageHeader}>
+          <TouchableOpacity onPress={() => { setSettingsOpen(false); setOpenInfo(null); }}>
+            <Text style={styles.back}>←</Text>
+          </TouchableOpacity>
+          <Text style={styles.pageTitle}>Event Settings</Text>
+        </View>
+        <Text style={styles.eventName}>{params.name}</Text>
+        <View style={styles.settingRow}>
+          <View style={styles.settingInfo}>
+            <TouchableOpacity onPress={() => toggleInfo('delete')} activeOpacity={0.7}>
+              <Text style={styles.settingLabel}>Allow guests to delete photos <Text style={styles.infoIcon}>ⓘ</Text></Text>
+            </TouchableOpacity>
+            {openInfo === 'delete' && <Text style={styles.settingInfoText}>{SETTING_INFO.delete}</Text>}
+            <Text style={styles.settingDesc}>{allowGuestDelete && !viewOnly ? 'Guests can delete their own uploaded photos' : 'Guests cannot delete photos'}</Text>
+          </View>
+          {settingsUpdating
+            ? <ActivityIndicator color={Colors.accent} />
+            : <Switch
+                value={viewOnly ? false : allowGuestDelete}
+                onValueChange={viewOnly ? undefined : handleToggleGuestDelete}
+                disabled={viewOnly}
+                trackColor={{ false: '#333', true: Colors.accent }}
+                thumbColor={Colors.white}
+              />
+          }
+        </View>
+        <View style={[styles.settingRow, styles.settingCardColumn]}>
+          <View style={styles.settingTopRow}>
+            <View style={styles.settingInfo}>
+              <TouchableOpacity onPress={() => toggleInfo('invite')} activeOpacity={0.7}>
+                <Text style={styles.settingLabel}>Invite only event <Text style={styles.infoIcon}>ⓘ</Text></Text>
+              </TouchableOpacity>
+              {openInfo === 'invite' && <Text style={styles.settingInfoText}>{SETTING_INFO.invite}</Text>}
+              <Text style={styles.settingDesc}>
+                {isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
+              </Text>
+            </View>
+            {settingsUpdating
+              ? <ActivityIndicator color={Colors.accent} />
+              : <Switch
+                  value={isClosed}
+                  onValueChange={handleToggleInviteOnly}
+                  trackColor={{ false: '#333', true: Colors.accent }}
+                  thumbColor={Colors.white}
+                />
+            }
+          </View>
+          {/* 2026-11-07 (the user): a full-width row under a divider —
+              "Allowed Guests (n)" in gold, (0) when empty, and a gold ›. */}
+          {isClosed && (
+            <TouchableOpacity style={styles.allowedRow} onPress={() => { loadAllowedGuests(); setShowGuestsPanel(true); }}>
+              <Text style={styles.allowedRowText}>Allowed Guests ({allowedGuests.length})</Text>
+              <Text style={[styles.navRowArrow, { color: Colors.accent }]}>›</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <View style={styles.settingRow}>
+          <View style={styles.settingInfo}>
+            <TouchableOpacity onPress={() => toggleInfo('view')} activeOpacity={0.7}>
+              <Text style={styles.settingLabel}>View only event <Text style={styles.infoIcon}>ⓘ</Text></Text>
+            </TouchableOpacity>
+            {openInfo === 'view' && <Text style={styles.settingInfoText}>{SETTING_INFO.view}</Text>}
+            {/* ⚠ This line used to be STATIC — it read "Guests can only view and
+                download photos" even when the setting was OFF, describing a
+                state that was not active. Fixed 2026-10-20. */}
+            <Text style={styles.settingDesc}>
+              {viewOnly ? 'Guests can only view and download photos' : 'Guests can upload, view and download photos'}
+            </Text>
+          </View>
+          {settingsUpdating
+            ? <ActivityIndicator color={Colors.accent} />
+            : <Switch
+                value={viewOnly}
+                onValueChange={handleToggleViewOnly}
+                trackColor={{ false: '#333', true: Colors.accent }}
+                thumbColor={Colors.white}
+              />
+          }
+        </View>
+        <View style={styles.settingRow}>
+          <View style={styles.settingInfo}>
+            <TouchableOpacity onPress={() => toggleInfo('fmp')} activeOpacity={0.7}>
+              <Text style={styles.settingLabel}>Find my photos <Text style={styles.infoIcon}>ⓘ</Text></Text>
+            </TouchableOpacity>
+            {openInfo === 'fmp' && <Text style={styles.settingInfoText}>{SETTING_INFO.fmp}</Text>}
+            <Text style={styles.settingDesc}>{findMyPhotos ? 'Guests can find photos of themselves using a selfie' : 'Guests cannot find photos of themselves using a selfie'}</Text>
+            {findMyPhotos && fmpStatus && fmpStatus.total > 0 && (
+              <>
+                {fmpStatus.waiting > 0 && (
+                  <Text style={styles.fmpStatus}>{`Preparing: ${formatCount(fmpStatus.ready)} of ${formatCount(fmpStatus.total)} photos ready`}</Text>
+                )}
+                {fmpStatus.waiting === 0 && fmpStatus.failed === 0 && (
+                  <Text style={styles.fmpStatus}>All photos ready</Text>
+                )}
+                {fmpStatus.failed > 0 && (
+                  <Text style={styles.fmpStatus}>{fmpStatus.failed === 1
+                    ? '1 photo could not be prepared and won\'t appear in searches'
+                    : `${formatCount(fmpStatus.failed)} photos could not be prepared and won't appear in searches`}</Text>
+                )}
+              </>
+            )}
+          </View>
+          {settingsUpdating
+            ? <ActivityIndicator color={Colors.accent} />
+            : <Switch
+                value={findMyPhotos}
+                onValueChange={handleToggleFindMyPhotos}
+                trackColor={{ false: '#333', true: Colors.accent }}
+                thumbColor={Colors.white}
+              />
+          }
+        </View>
+
+        </>
+        ) : (
+        <>
         <View style={styles.pageHeader}>
           <TouchableOpacity onPress={() => router.back()}>
             <Text style={styles.back}>←</Text>
           </TouchableOpacity>
           <Text style={styles.pageTitle}>Manage Event</Text>
-          <TouchableOpacity
-            ref={gearRef}
-            style={styles.headerGear}
-            onPress={() => {
-              gearRef.current?.measure((_x, _y, width, height, pageX, pageY) => {
-                setGearDropPos({ top: pageY + height + 4, right: Dimensions.get('window').width - pageX - width });
-                setGearMenuVisible(true);
-              });
-            }}
-          >
-            <Text style={styles.headerGearIcon}>⚙️</Text>
-          </TouchableOpacity>
         </View>
 
         <Text style={styles.eventName}>{params.name}</Text>
@@ -835,97 +959,19 @@ export default function EventDetailScreen() {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionLabel}>SETTINGS</Text>
-        <View style={styles.settingRow}>
-          <View style={styles.settingInfo}>
-            <Text style={styles.settingLabel}>Allow guests to delete photos</Text>
-            <Text style={styles.settingDesc}>{allowGuestDelete && !viewOnly ? 'Guests can delete their own uploaded photos' : 'Guests cannot delete photos'}</Text>
-          </View>
-          {settingsUpdating
-            ? <ActivityIndicator color={Colors.accent} />
-            : <Switch
-                value={viewOnly ? false : allowGuestDelete}
-                onValueChange={viewOnly ? undefined : handleToggleGuestDelete}
-                disabled={viewOnly}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-          }
-        </View>
-        <View style={styles.settingRow}>
-          <View style={styles.settingInfo}>
-            <Text style={styles.settingLabel}>Invite only event</Text>
-            <Text style={styles.settingDesc}>
-              {isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
-            </Text>
-            {isClosed && (
-              <TouchableOpacity onPress={() => { loadAllowedGuests(); setShowGuestsPanel(true); }}>
-                <Text style={styles.manageGuestsInline}>
-                  Allowed Guests{allowedGuests.length > 0 ? ` (${allowedGuests.length})` : ''} →
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          {settingsUpdating
-            ? <ActivityIndicator color={Colors.accent} />
-            : <Switch
-                value={isClosed}
-                onValueChange={handleToggleInviteOnly}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-          }
-        </View>
-        <View style={styles.settingRow}>
-          <View style={styles.settingInfo}>
-            <Text style={styles.settingLabel}>View only event</Text>
-            {/* ⚠ This line used to be STATIC — it read "Guests can only view and
-                download photos" even when the setting was OFF, describing a
-                state that was not active. Fixed 2026-10-20. */}
-            <Text style={styles.settingDesc}>
-              {viewOnly ? 'Guests can only view and download photos' : 'Guests can upload, view and download photos'}
-            </Text>
-          </View>
-          {settingsUpdating
-            ? <ActivityIndicator color={Colors.accent} />
-            : <Switch
-                value={viewOnly}
-                onValueChange={handleToggleViewOnly}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-          }
-        </View>
-        <View style={styles.settingRow}>
-          <View style={styles.settingInfo}>
-            <Text style={styles.settingLabel}>Find my photos</Text>
-            <Text style={styles.settingDesc}>{findMyPhotos ? 'Guests can find photos of themselves using a selfie' : 'Guests cannot find photos of themselves using a selfie'}</Text>
-            {findMyPhotos && fmpStatus && fmpStatus.total > 0 && (
-              <>
-                {fmpStatus.waiting > 0 && (
-                  <Text style={styles.fmpStatus}>{`Preparing: ${formatCount(fmpStatus.ready)} of ${formatCount(fmpStatus.total)} photos ready`}</Text>
-                )}
-                {fmpStatus.waiting === 0 && fmpStatus.failed === 0 && (
-                  <Text style={styles.fmpStatus}>All photos ready</Text>
-                )}
-                {fmpStatus.failed > 0 && (
-                  <Text style={styles.fmpStatus}>{fmpStatus.failed === 1
-                    ? '1 photo could not be prepared and won\'t appear in searches'
-                    : `${formatCount(fmpStatus.failed)} photos could not be prepared and won't appear in searches`}</Text>
-                )}
-              </>
-            )}
-          </View>
-          {settingsUpdating
-            ? <ActivityIndicator color={Colors.accent} />
-            : <Switch
-                value={findMyPhotos}
-                onValueChange={handleToggleFindMyPhotos}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-          }
-        </View>
+        <TouchableOpacity style={[styles.navRow, { marginTop: 16 }]} onPress={() => { setOpenInfo(null); setSettingsOpen(true); }}>
+          <Text style={styles.navRowText}>Event Settings</Text>
+          <Text style={styles.navRowArrow}>›</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navRow} onPress={() => {
+          // ONE Manage Guests for the whole app (2026-10-23): the same screen
+          // the Event screen's ⋮ menu opens. (Until 2026-11-06 it was the only
+          // item in a ⚙️ gear menu at the top right.)
+          router.push({ pathname: '/manage-guests', params: { slug: params.slug, adminPhone: params.organiserPhone ?? '', viewerRole: 'organiser', userMobile: params.organiserPhone ?? '', eventName: params.name ?? '' } });
+        }}>
+          <Text style={styles.navRowText}>Manage Guests</Text>
+          <Text style={styles.navRowArrow}>›</Text>
+        </TouchableOpacity>
 
         <View style={styles.divider} />
 
@@ -955,6 +1001,8 @@ export default function EventDetailScreen() {
           <Text style={styles.openBtnText}>Open Event</Text>
         </TouchableOpacity>
         </View>
+        </>
+        )}
       </ScrollView>
 
       {deleteLoading && (
@@ -1497,25 +1545,6 @@ export default function EventDetailScreen() {
 
       {alertOverlay}
 
-      {/* Gear dropdown */}
-      {gearMenuVisible && (
-        <Modal transparent animationType="fade" onRequestClose={() => setGearMenuVisible(false)}>
-          <TouchableOpacity style={styles.dropBackdrop} activeOpacity={1} onPress={() => setGearMenuVisible(false)}>
-            <View style={[styles.dropdown, { position: 'absolute', top: gearDropPos.top, right: gearDropPos.right }]}>
-              <TouchableOpacity style={styles.dropRow} onPress={() => {
-                // ONE Manage Guests for the whole app (2026-10-23): the same
-                // screen the Event screen's ⋮ menu opens. This file used to
-                // carry its own copy as a panel, and the two kept drifting.
-                setGearMenuVisible(false);
-                router.push({ pathname: '/manage-guests', params: { slug: params.slug, adminPhone: params.organiserPhone ?? '', viewerRole: 'organiser', userMobile: params.organiserPhone ?? '', eventName: params.name ?? '' } });
-              }}>
-                <Text style={styles.dropText}>Manage Guests</Text>
-              </TouchableOpacity>
-            </View>
-          </TouchableOpacity>
-        </Modal>
-      )}
-
       {Platform.OS === 'ios' && (
         <Modal transparent animationType="fade" visible={showExtendPicker} onRequestClose={() => setShowExtendPicker(false)}>
           <View style={styles.iosPickerOverlay}>
@@ -1573,6 +1602,16 @@ const styles = StyleSheet.create({
   settingInfo: { flex: 1, marginRight: 12 },
   settingLabel: { fontSize: 14, fontWeight: '700', color: Colors.white },
   settingDesc: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
+  infoIcon: { fontSize: 13, fontWeight: '400', color: Colors.textMuted },
+  settingInfoText: { fontSize: 13, color: '#BBB', lineHeight: 19, marginTop: 6, marginBottom: 4, textAlign: 'justify' },
+  navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1A1A1A', borderWidth: 0.5, borderColor: '#2A2A2A', borderRadius: 8, paddingVertical: 14, paddingHorizontal: 12, marginBottom: 4 },
+  navRowText: { fontSize: 15, fontWeight: '700', color: Colors.white },
+  navRowArrow: { fontSize: 22, color: Colors.textMuted },
+  settingCardColumn: { flexDirection: 'column', alignItems: 'stretch' },
+  settingTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  allowedRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 0.5, borderTopColor: '#333', marginTop: 12, paddingTop: 10 },
+  allowedRowText: { fontSize: 14, fontWeight: '700', color: Colors.accent },
+  allowedRowCount: { fontSize: 14, color: Colors.textMuted },
   fmpStatus: { fontSize: 12, color: Colors.textMuted, marginTop: 4 },
   settingLocked: { fontSize: 11, color: '#555', marginTop: 4, fontStyle: 'italic' },
   coadminRow: {

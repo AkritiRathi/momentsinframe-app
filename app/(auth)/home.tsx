@@ -519,9 +519,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   okBtnText: { fontSize: 15, fontWeight: '700', color: '#0F0F0F' },
-  deleteAccountBtn: { marginTop: 16, alignItems: 'center', paddingVertical: 10 },
-  deleteAccountBtnText: { fontSize: 13, color: '#FF4444', fontWeight: '600' },
-  legalRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 8 },
+  // The app's destructive button look (2026-11-07, the user's yes): dark fill,
+  // red outline, bold red text — same as Delete Event and "Start fresh".
+  deleteAccountBtn: { marginTop: 12, alignItems: 'center', paddingVertical: 14, backgroundColor: '#2A2A2A', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(229,57,53,0.6)' },
+  deleteAccountBtnText: { fontSize: 15, color: Colors.danger, fontWeight: '700' },
+  legalRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 16 },
   legalLink: { fontSize: 13, color: Colors.textMuted, fontWeight: '600', textDecorationLine: 'underline' },
   legalDot: { fontSize: 13, color: Colors.textMuted },
   passwordInput: {

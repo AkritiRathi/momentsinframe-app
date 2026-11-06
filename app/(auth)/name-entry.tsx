@@ -249,9 +249,9 @@ export default function NameEntryScreen() {
                   </TouchableOpacity>
                   <Text style={styles.consentText} onPress={() => setAgreed(a => !a)}>
                     By continuing you agree to our{' '}
-                    <Text style={styles.consentLink} onPress={() => Linking.openURL(PRIVACY_URL)}>Privacy Policy</Text>
+                    <Text style={styles.consentLink} onPress={() => router.push({ pathname: '/(auth)/legal', params: { doc: 'privacy' } })}>Privacy Policy</Text>
                     {' '}and{' '}
-                    <Text style={styles.consentLink} onPress={() => Linking.openURL(TERMS_URL)}>Terms of Use</Text>
+                    <Text style={styles.consentLink} onPress={() => router.push({ pathname: '/(auth)/legal', params: { doc: 'terms' } })}>Terms of Use</Text>
                   </Text>
                 </View>
               </>

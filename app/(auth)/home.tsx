@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  ActivityIndicator, Dimensions, TextInput,
+  ActivityIndicator, Dimensions, TextInput, LayoutAnimation, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -22,6 +22,10 @@ export default function HomeScreen() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [isWhitelisted, setIsWhitelisted] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
+  // Privacy & Terms slide-open row: closed whenever Home is opened afresh.
+  const [privacyOpen, setPrivacyOpen] = useState(false);
+  // The same › as the other rows, turned down (closed) / up (open), animated.
+  const privacyArrow = useRef(new Animated.Value(0)).current;
   const [userDetailsVisible, setUserDetailsVisible] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [dropPos, setDropPos] = useState({ top: 0, right: 0 });
@@ -383,15 +387,30 @@ export default function HomeScreen() {
           <Text style={styles.navRowText}>Your Details</Text>
           <Text style={styles.navRowArrow}>›</Text>
         </TouchableOpacity>
-        <Text style={[styles.sectionLabel, { marginTop: 20, marginBottom: 8 }]}>Privacy & Terms</Text>
-        <TouchableOpacity style={styles.navRow} onPress={() => Linking.openURL(PRIVACY_URL)}>
-          <Text style={styles.navRowText}>Privacy Policy</Text>
-          <Text style={styles.navRowArrow}>›</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navRow} onPress={() => Linking.openURL(TERMS_URL)}>
-          <Text style={styles.navRowText}>Terms of Use</Text>
-          <Text style={styles.navRowArrow}>›</Text>
-        </TouchableOpacity>
+        {/* Privacy & Terms slides open like the Event Settings explanations
+            (2026-11-07, the user's design); both open the in-app page. */}
+        <View style={styles.navRowGroup}>
+          <TouchableOpacity style={styles.navRowInner} onPress={() => {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            Animated.timing(privacyArrow, { toValue: privacyOpen ? 0 : 1, duration: 200, useNativeDriver: true }).start();
+            setPrivacyOpen(o => !o);
+          }}>
+            <Text style={styles.navRowText}>Privacy & Terms</Text>
+            <Animated.Text style={[styles.navRowArrow, { transform: [{ rotate: privacyArrow.interpolate({ inputRange: [0, 1], outputRange: ['90deg', '-90deg'] }) }] }]}>›</Animated.Text>
+          </TouchableOpacity>
+          {privacyOpen && (
+            <>
+              <TouchableOpacity style={styles.subRow} onPress={() => router.push({ pathname: '/(auth)/legal', params: { doc: 'privacy' } })}>
+                <Text style={styles.subRowText}>Privacy Policy</Text>
+                <Text style={styles.navRowArrow}>›</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.subRow} onPress={() => router.push({ pathname: '/(auth)/legal', params: { doc: 'terms' } })}>
+                <Text style={styles.subRowText}>Terms of Use</Text>
+                <Text style={styles.navRowArrow}>›</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
       </View>
 
       {alertOverlay}
@@ -529,6 +548,11 @@ const styles = StyleSheet.create({
   navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1A1A1A', borderWidth: 0.5, borderColor: '#2A2A2A', borderRadius: 8, paddingVertical: 14, paddingHorizontal: 12, marginBottom: 8 },
   navRowText: { fontSize: 15, fontWeight: '700', color: Colors.white },
   navRowArrow: { fontSize: 22, color: Colors.textMuted },
+  navRowArrowSmall: { fontSize: 18, color: Colors.textMuted },
+  navRowGroup: { backgroundColor: '#1A1A1A', borderWidth: 0.5, borderColor: '#2A2A2A', borderRadius: 8, marginBottom: 8, overflow: 'hidden' },
+  navRowInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 12 },
+  subRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 0.5, borderTopColor: '#333', paddingVertical: 12, paddingLeft: 24, paddingRight: 12 },
+  subRowText: { fontSize: 14, fontWeight: '600', color: Colors.white },
   legalRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 16 },
   legalLink: { fontSize: 13, color: Colors.textMuted, fontWeight: '600', textDecorationLine: 'underline' },
   legalDot: { fontSize: 13, color: Colors.textMuted },

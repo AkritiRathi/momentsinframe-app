@@ -87,7 +87,9 @@ export default function RootLayout() {
       const inEvent = segments[0] === 'event';
 
       if (!profileExists) {
-        if (currentScreen !== 'name-entry') {
+        // 'legal' = the in-app Privacy Policy / Terms of Use page (2026-11-07):
+        // opened from the sign-in screen's consent line, before any profile exists.
+        if (currentScreen !== 'name-entry' && currentScreen !== 'legal') {
           router.replace('/(auth)/name-entry');
         }
         return;

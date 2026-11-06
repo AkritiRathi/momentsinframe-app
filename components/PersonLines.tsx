@@ -6,7 +6,8 @@ import { Colors } from '../constants/colors';
 // Manage Guests"). Three lines, always in this order:
 //   1. the name they signed in with (bold) · N photos
 //   2. the name saved in THIS phone's contacts, or "Number not in contacts"
-//   3. their number, then "· BLOCKED" when blocked
+//   3. their number, then "· BLOCKED" when blocked (or "· REMOVED", same place
+//      and style, when taken off Allowed Guests — 2026-11-06; not dimmed)
 // Used by Manage Guests, Allowed Guests, the Admins panel and the Add Admin
 // picker, so the lists cannot describe the same person differently again
 // (Allowed Guests and the Admins panel had lines 1 and 2 swapped).
@@ -19,12 +20,14 @@ type Props = {
   /** Leave out to show no photo count. */
   photoCount?: number | null;
   blocked?: boolean;
+  /** Taken off Allowed Guests (invite-only event). BLOCKED wins if both. */
+  removed?: boolean;
   /** Optional overrides, for a list with its own sizes (the Add Admin picker). */
   nameStyle?: StyleProp<TextStyle>;
   subStyle?: StyleProp<TextStyle>;
 };
 
-export function PersonLines({ name, contactName, phone, photoCount, blocked, nameStyle, subStyle }: Props) {
+export function PersonLines({ name, contactName, phone, photoCount, blocked, removed, nameStyle, subStyle }: Props) {
   const nameText = <Text style={[styles.name, nameStyle, blocked && styles.blocked]}>{name}</Text>;
   return (
     <>
@@ -38,6 +41,7 @@ export function PersonLines({ name, contactName, phone, photoCount, blocked, nam
       <View style={styles.line}>
         <Text style={[styles.sub, subStyle, blocked && styles.blocked]}>{phone}</Text>
         {blocked && <Text style={[styles.badge, { marginLeft: 6 }]}>· BLOCKED</Text>}
+        {!blocked && removed && <Text style={[styles.badge, { marginLeft: 6 }]}>· REMOVED</Text>}
       </View>
     </>
   );

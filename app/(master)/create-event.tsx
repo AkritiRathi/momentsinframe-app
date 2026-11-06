@@ -1,5 +1,5 @@
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, Switch,
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
   KeyboardAvoidingView, Platform, ScrollView, Modal, Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -36,19 +36,11 @@ export default function CreateEventScreen() {
   const [showPicker, setShowPicker] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // ⛔ INVITE-ONLY AND VIEW-ONLY ARE CHOSEN HERE AND NEVER AGAIN (2026-10-20).
-  // The user's reason: an organiser who opens an event, lets guests join and
-  // upload, then makes it private and removes everyone is treating them
-  // unfairly. Freezing the choice removes that whole class — and with it the
-  // bulk "remove all guests" purge. The settings route refuses both fields,
-  // so this screen is the only way either is ever set.
-  const [isClosed, setIsClosed] = useState(false);
-  const [viewOnly, setViewOnly] = useState(false);
+  // ⭐ Invite only and View only are NOT chosen here any more (2026-11-06,
+  // the user's decision): every new event starts open with uploads allowed,
+  // and both are on/off switches in Manage Event.
 
-  // The two-step password + confirm, same shape as Delete Event. It guards
-  // CREATE, not the toggles: nothing is permanent until the event exists, so
-  // a password to flip a switch you can still flip back would be ceremony
-  // without protection.
+  // The two-step password + confirm, same shape as Delete Event; it guards CREATE.
   const [createStep, setCreateStep] = useState<null | 'password' | 'confirm'>(null);
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
@@ -58,67 +50,6 @@ export default function CreateEventScreen() {
   today.setHours(0, 0, 0, 0);
   const tomorrow = new Date(today);
   tomorrow.setDate(tomorrow.getDate() + 1);
-
-  // Only switching a toggle ON needs explaining. Switching it back off before
-  // the event exists costs nothing, so it is silent.
-  function handleInviteOnly(next: boolean) {
-    if (!next) { setIsClosed(false); return; }
-    showAlert(
-      'Make this invite-only?',
-      [
-        '• Guests who are not on your list will not be able to join with the code',
-        '• You will have to add each person’s mobile number yourself before they can join',
-        '• You can add or remove people any time, before or during the event',
-        '',
-        'This cannot be changed after the event is created.',
-      ].join('\n'),
-      [{ text: 'Yes, invite only', onPress: () => setIsClosed(true) }, { text: 'Cancel', style: 'cancel' }],
-    );
-  }
-
-  function handleViewOnly(next: boolean) {
-    if (!next) { setViewOnly(false); return; }
-    showAlert(
-      'Make this a view only event?',
-      [
-        '• Guests can only view and download photos uploaded to this event',
-        '• Only you and your Admins can add photos',
-        '• Guests cannot delete anything',
-        '',
-        'This cannot be changed after the event is created.',
-      ].join('\n'),
-      [{ text: 'Yes, view only', onPress: () => setViewOnly(true) }, { text: 'Cancel', style: 'cancel' }],
-    );
-  }
-
-  // Listed on BOTH final screens, and listed even when nothing was touched —
-  // leaving a toggle alone is just as permanent as switching it on, and an
-  // organiser who is never told that is the gap this closes.
-  // ⭐ Wording approved 2026-10-30: each point names the switch and what was
-  // chosen. Deleting is NOT fixed at creation (Manage Event can change it; on by
-  // default in the database), so it is listed but kept out of the "cannot be
-  // changed" line. Never shown for view-only — guests can never delete there.
-  const settingsSummary = [
-    isClosed
-      ? 'Invite-only: On — only people you add can join'
-      : 'Invite-only: Off — anyone with the event code can join',
-    viewOnly
-      ? 'View-only: On — guests can only view and download photos'
-      : 'View-only: Off — guests can view, download and upload photos',
-    ...(viewOnly ? [] : ['Guests can delete the photos they uploaded (if allowed by you in Manage Event)']),
-  ];
-  // Each point as the dot + its text in its own column, so a wrapped line sits
-  // under the first word — the same look as the app's bulleted messages.
-  const settingsSummaryView = (
-    <View style={styles.modalBulletBlock}>
-      {settingsSummary.map((line, i) => (
-        <View key={i} style={styles.modalBulletRow}>
-          <Text style={styles.modalBullets}>•</Text>
-          <Text style={[styles.modalBullets, styles.modalBulletText]}>{line}</Text>
-        </View>
-      ))}
-    </View>
-  );
 
   function handleCreate() {
     if (!name.trim()) {
@@ -164,7 +95,7 @@ export default function CreateEventScreen() {
         return;
       }
 
-      const result = await createEvent(profile.mobile, organiserPassword, name.trim(), toAPIFormat(expiryDate!), isClosed, viewOnly);
+      const result = await createEvent(profile.mobile, organiserPassword, name.trim(), toAPIFormat(expiryDate!));
       if (result.error) {
         showAlert('Error', result.error);
         return;
@@ -261,39 +192,6 @@ export default function CreateEventScreen() {
               </Modal>
             )}
 
-            <Text style={styles.label}>SETTINGS</Text>
-            <Text style={styles.hint}>These cannot be changed after the event is created.</Text>
-
-            <View style={styles.toggleCard}>
-              <View style={styles.toggleInfo}>
-                <Text style={styles.toggleLabel}>Invite only event</Text>
-                <Text style={styles.toggleDesc}>
-                  {isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
-                </Text>
-              </View>
-              <Switch
-                value={isClosed}
-                onValueChange={handleInviteOnly}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-            </View>
-
-            <View style={styles.toggleCard}>
-              <View style={styles.toggleInfo}>
-                <Text style={styles.toggleLabel}>View only event</Text>
-                <Text style={styles.toggleDesc}>
-                  {viewOnly ? 'Guests can only view and download photos' : 'Guests can upload, view and download photos'}
-                </Text>
-              </View>
-              <Switch
-                value={viewOnly}
-                onValueChange={handleViewOnly}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-            </View>
-
             <View style={styles.noteCard}>
               <Text style={styles.noteIcon}>ℹ️</Text>
               <Text style={styles.noteText}>An event code will be auto-generated. Share it with guests so they can join.</Text>
@@ -307,19 +205,14 @@ export default function CreateEventScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-      {/* ⛔ Step 1 — the password, in the same two-step shape as Delete Event
-          and for the same reason: this is the moment the choice becomes
-          permanent. The toggles themselves are not password-gated, because
-          nothing is locked until the event exists. */}
+      {/* Step 1 — the password, in the same two-step shape as Delete Event. */}
       <Modal visible={createStep === 'password'} transparent animationType="fade" onRequestClose={() => setCreateStep(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Verify your password</Text>
             <Text style={styles.modalWarning}>
-              You are about to create <Text style={styles.modalStrong}>{name.trim()}</Text> with these settings:
+              You are about to create <Text style={styles.modalStrong}>{name.trim()}</Text>.
             </Text>
-            {settingsSummaryView}
-            <Text style={styles.modalWarning}>Invite-only and View-only cannot be changed later.</Text>
             <TextInput
               style={styles.modalInput}
               value={password}
@@ -346,16 +239,11 @@ export default function CreateEventScreen() {
         </View>
       </Modal>
 
-      {/* Step 2 — the choices listed again, in full, so no event is ever
-          created without them having been put in front of the organiser. */}
+      {/* Step 2 — a last confirm before the event is created. */}
       <Modal visible={createStep === 'confirm'} transparent animationType="fade" onRequestClose={() => setCreateStep(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Create “{name.trim()}”?</Text>
-            {settingsSummaryView}
-            <Text style={styles.modalWarning}>
-              Invite-only and View-only cannot be changed after the event is created.
-            </Text>
             <View style={styles.modalButtons}>
               <TouchableOpacity style={styles.modalCancel} onPress={() => setCreateStep(null)}>
                 <Text style={styles.modalCancelText}>Cancel</Text>

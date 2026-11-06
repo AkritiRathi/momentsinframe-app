@@ -171,8 +171,10 @@ export async function listMyEvents() {
 // ⛔ isClosed and viewOnly can ONLY be set here, at creation. The settings
 // route REFUSES both: an event is invite-only or view-only from the moment
 // it is created and never changes (the user's decision, 2026-10-20).
-export async function createEvent(organiserPhone: string, organiserPassword: string, name: string, expiresAt: string, isClosed?: boolean, viewOnly?: boolean) {
-  return post('/api/native/events', { organiserPhone, organiserPassword, name, expiresAt, isClosed, viewOnly });
+// Every new event starts open with uploads allowed (2026-11-06); Invite only
+// and View only are switches in Manage Event.
+export async function createEvent(organiserPhone: string, organiserPassword: string, name: string, expiresAt: string) {
+  return post('/api/native/events', { organiserPhone, organiserPassword, name, expiresAt });
 }
 
 export async function extendEvent(slug: string, organiserPhone: string, organiserPassword: string, newExpiresAt: string) {
@@ -445,7 +447,7 @@ export async function setGuestBlocked(slug: string, mobile: string, isBlocked: b
   return res.json();
 }
 
-export async function listJoinedGuestsForUser(slug: string, userPhone: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean; photo_count: number; role: 'organiser' | 'coadmin' | 'user' }[]; owner_phone?: string; total_photo_count?: number; error?: string }> {
+export async function listJoinedGuestsForUser(slug: string, userPhone: string): Promise<{ guests?: { name: string; mobile: string; is_blocked: boolean; is_removed?: boolean; photo_count: number; role: 'organiser' | 'coadmin' | 'user' }[]; owner_phone?: string; is_closed?: boolean; total_photo_count?: number; error?: string }> {
   return get(`/api/native/events/${slug}/joined-guests`, { 'x-user-phone': userPhone });
 }
 
@@ -462,7 +464,7 @@ export async function joinEvent(joinCode: string, phone?: string) {
   return post('/api/native/events/join', { joinCode, phone });
 }
 
-export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean; viewOnly?: boolean; findMyPhotosEnabled?: boolean }) {
+export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean; closeMode?: 'keep' | 'fresh'; viewOnly?: boolean; findMyPhotosEnabled?: boolean }) {
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/settings`, {
     method: 'PATCH',
     headers: await authHeaders({ 'Content-Type': 'application/json' }),

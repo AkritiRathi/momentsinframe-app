@@ -34,6 +34,7 @@ type Guest = {
   name: string;
   mobile: string;
   is_blocked: boolean;
+  is_removed?: boolean;
   photo_count?: number;
   role: 'organiser' | 'coadmin' | 'user';
 };
@@ -63,6 +64,8 @@ export default function ManageGuestsScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [togglingGuest, setTogglingGuest] = useState<string | null>(null);
+  // REMOVED badge (2026-11-06): shown only while the event is invite-only.
+  const [eventClosed, setEventClosed] = useState(false);
   const [contactMap, setContactMap] = useState<Record<string, string>>({});
   const [search, setSearch] = useState('');
 
@@ -100,6 +103,7 @@ export default function ManageGuestsScreen() {
           }
         }
         setGuests(allGuests);
+        setEventClosed(result.is_closed === true);
         setTotalPhotos(result.total_photo_count ?? null);
         try {
           const { status } = await Contacts.getPermissionsAsync();
@@ -199,7 +203,7 @@ export default function ManageGuestsScreen() {
               <TouchableOpacity key={guest.mobile} style={[styles.row, guest.is_blocked && styles.blockedRow]} activeOpacity={0.7}
                 onPress={() => router.push({ pathname: '/guest-uploads', params: { slug: params.slug, adminPhone: params.userMobile || params.adminPhone || '', viewerRole: params.viewerRole, guestMobile: guest.mobile, guestName: guest.name || guest.mobile, guestRole: guest.role, guestContactName: contactMap[guest.mobile] ?? '', eventName: params.eventName ?? '' } })}>
                 <View style={styles.guestInfo}>
-                  <PersonLines name={appName} contactName={contactName} phone={guest.mobile} photoCount={guest.photo_count ?? 0} blocked={guest.is_blocked} />
+                  <PersonLines name={appName} contactName={contactName} phone={guest.mobile} photoCount={guest.photo_count ?? 0} blocked={guest.is_blocked} removed={eventClosed && guest.is_removed === true} />
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   {guest.role === 'coadmin' && <Text style={styles.coadminBadge}>Admin</Text>}

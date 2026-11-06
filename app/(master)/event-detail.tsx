@@ -85,6 +85,10 @@ export default function EventDetailScreen() {
   const [allowedGuestsLoading, setAllowedGuestsLoading] = useState(false);
   const [addingGuest, setAddingGuest] = useState(false);
   const [showGuestsPanel, setShowGuestsPanel] = useState(false);
+  // Turning Invite only OFF while some people are marked REMOVED: they are
+  // listed (each with a Block button) before the event opens (2026-11-06).
+  const [inviteOffList, setInviteOffList] = useState<{ name: string; mobile: string }[] | null>(null);
+  const [blockingPhone, setBlockingPhone] = useState<string | null>(null);
 
   const gearRef = useRef<TouchableOpacity>(null);
   const [gearMenuVisible, setGearMenuVisible] = useState(false);
@@ -119,7 +123,7 @@ export default function EventDetailScreen() {
     });
   }, []);
 
-  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; photo_count?: number; role?: 'organiser' | 'coadmin' | 'user' };
+  type JoinedGuest = { name: string; mobile: string; is_blocked: boolean; is_removed?: boolean; photo_count?: number; role?: 'organiser' | 'coadmin' | 'user' };
   // `joinedGuests` still feeds the + Admins panel (its picker and BLOCKED
   // badges) and Allowed Guests. Manage Guests itself is app/manage-guests.tsx.
   const [joinedGuests, setJoinedGuests] = useState<JoinedGuest[]>([]);
@@ -291,9 +295,102 @@ export default function EventDetailScreen() {
     }
   }
 
-  // ⛔ handleToggleViewOnly WAS REMOVED HERE on 2026-10-20. View-only is
-  // chosen when the event is created and can never change, so there is
-  // nothing to toggle. The settings route refuses the field outright.
+  // ⭐ VIEW ONLY AND INVITE ONLY ARE SWITCHES AGAIN (2026-11-06, the user's
+  // decision; 2026-10-20 → 2026-11-06 they were chosen at creation only).
+  // Each asks first; nothing changes until the Organiser confirms.
+  async function saveSettings(settings: { isClosed?: boolean; closeMode?: 'keep' | 'fresh'; viewOnly?: boolean }) {
+    const pw = await getOrganiserPassword();
+    if (!pw || !params.organiserPhone) return false;
+    setSettingsUpdating(true);
+    const result = await updateEventSettings(params.slug, params.organiserPhone, pw, settings);
+    setSettingsUpdating(false);
+    if (result.error) { showAlert('Error', result.error); return false; }
+    return true;
+  }
+
+  function handleToggleViewOnly(value: boolean) {
+    showAlert(
+      value ? 'Turn on View only?' : 'Turn off View only?',
+      value ? 'Guests will no longer be able to upload or delete photos.' : 'Guests will be able to upload photos again.',
+      [
+        { text: value ? 'Turn on' : 'Turn off', onPress: async () => { if (await saveSettings({ viewOnly: value })) setViewOnly(value); } },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }
+
+  // The people already in who are not blocked and not already REMOVED.
+  async function readGuestsIn(): Promise<{ name: string; mobile: string; is_blocked: boolean; is_removed?: boolean; role?: string }[] | null> {
+    if (!params.organiserPhone) return null;
+    try {
+      const res = await listJoinedGuestsForUser(params.slug, params.organiserPhone);
+      if (!res.guests) { showAlert('Error', res.error ?? 'Could not load the guest list. Please try again.'); return null; }
+      return res.guests.filter(g => g.role === 'user' && g.mobile !== params.organiserPhone);
+    } catch {
+      showAlert('Error', 'Could not load the guest list. Please try again.');
+      return null;
+    }
+  }
+
+  async function turnInviteOnlyOn(closeMode?: 'keep' | 'fresh') {
+    if (!(await saveSettings(closeMode ? { isClosed: true, closeMode } : { isClosed: true }))) return;
+    setIsClosed(true);
+    loadJoinedGuests();
+    await loadAllowedGuests();
+    setShowGuestsPanel(true);
+  }
+
+  async function handleToggleInviteOnly(value: boolean) {
+    const guests = await readGuestsIn();
+    if (!guests) return;
+    if (value) {
+      const inNow = guests.filter(g => !g.is_blocked && !g.is_removed);
+      // Nobody joined yet → it simply turns on.
+      if (inNow.length === 0) { await turnInviteOnlyOn(); return; }
+      showAlert(
+        'Turn on Invite only?',
+        `${inNow.length} ${inNow.length === 1 ? 'person is' : 'people are'} already in this event.\n\n` +
+          '• Keep everyone: they stay in and are added to Allowed Guests.\n\n' +
+          '• Start fresh: they lose access and are shown as Removed in Manage Guests. You can add anyone back.',
+        [
+          { text: 'Keep everyone', onPress: () => turnInviteOnlyOn('keep') },
+          { text: 'Start fresh', style: 'destructive', onPress: () => turnInviteOnlyOn('fresh') },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+      return;
+    }
+    const removed = guests.filter(g => g.is_removed && !g.is_blocked).map(g => ({ name: guestContactMap[g.mobile] || g.name, mobile: g.mobile }));
+    if (removed.length > 0) { setInviteOffList(removed); return; }
+    showAlert(
+      'Turn off Invite only?',
+      'Anyone with the event code will be able to join. Your Allowed Guests list is kept.',
+      [
+        { text: 'Turn off', onPress: async () => { if (await saveSettings({ isClosed: false })) setIsClosed(false); } },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }
+
+  async function blockFromInviteOffList(mobile: string) {
+    const pw = await getOrganiserPassword();
+    if (!pw || !params.organiserPhone) return;
+    setBlockingPhone(mobile);
+    try {
+      const res = await setGuestBlocked(params.slug, mobile, true, params.organiserPhone, pw);
+      // Close the list first: an alert cannot show over an open Modal.
+      if (res.error) { setInviteOffList(null); showAlert('Error', res.error); return; }
+      setInviteOffList(prev => (prev ?? []).filter(p => p.mobile !== mobile));
+      loadJoinedGuests();
+    } finally {
+      setBlockingPhone(null);
+    }
+  }
+
+  async function confirmInviteOff() {
+    setInviteOffList(null);
+    if (await saveSettings({ isClosed: false })) setIsClosed(false);
+  }
 
   // ⭐ FIND MY PHOTOS SWITCH (face codes step 7, decisions B7.1 + B7.2, the
   // user's yes): the summary is shown BEFORE anything changes — the switch only
@@ -329,6 +426,9 @@ export default function EventDetailScreen() {
     );
   }
 
+  // ⭐ 2026-11-06: Invite only is a switch again — handleToggleInviteOnly above.
+  // "Start fresh" now MARKS people Removed instead of deleting anything, which
+  // answers the reason below. History, kept as written:
   // ⛔⛔ handleToggleIsClosed WAS REMOVED HERE on 2026-10-20, and with it the
   // "Close this event? → Remove all guests?" chain and the reopen branch.
   //
@@ -758,7 +858,6 @@ export default function EventDetailScreen() {
             <Text style={styles.settingDesc}>
               {isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
             </Text>
-            <Text style={styles.settingLocked}>Chosen when the event was created</Text>
             {isClosed && (
               <TouchableOpacity onPress={() => { loadAllowedGuests(); setShowGuestsPanel(true); }}>
                 <Text style={styles.manageGuestsInline}>
@@ -767,15 +866,15 @@ export default function EventDetailScreen() {
               </TouchableOpacity>
             )}
           </View>
-          {/* ⛔ Frozen. Shown, not hidden: the organiser must still be able to
-              see what kind of event this is, and a hidden control reads as a
-              missing feature to the next person who opens this file. */}
-          <Switch
-            value={isClosed}
-            disabled
-            trackColor={{ false: '#333', true: Colors.accent }}
-            thumbColor={Colors.white}
-          />
+          {settingsUpdating
+            ? <ActivityIndicator color={Colors.accent} />
+            : <Switch
+                value={isClosed}
+                onValueChange={handleToggleInviteOnly}
+                trackColor={{ false: '#333', true: Colors.accent }}
+                thumbColor={Colors.white}
+              />
+          }
         </View>
         <View style={styles.settingRow}>
           <View style={styles.settingInfo}>
@@ -786,14 +885,16 @@ export default function EventDetailScreen() {
             <Text style={styles.settingDesc}>
               {viewOnly ? 'Guests can only view and download photos' : 'Guests can upload, view and download photos'}
             </Text>
-            <Text style={styles.settingLocked}>Chosen when the event was created</Text>
           </View>
-          <Switch
-            value={viewOnly}
-            disabled
-            trackColor={{ false: '#333', true: Colors.accent }}
-            thumbColor={Colors.white}
-          />
+          {settingsUpdating
+            ? <ActivityIndicator color={Colors.accent} />
+            : <Switch
+                value={viewOnly}
+                onValueChange={handleToggleViewOnly}
+                trackColor={{ false: '#333', true: Colors.accent }}
+                thumbColor={Colors.white}
+              />
+          }
         </View>
         <View style={styles.settingRow}>
           <View style={styles.settingInfo}>
@@ -861,6 +962,50 @@ export default function EventDetailScreen() {
           <View style={styles.deletingOverlay}>
             <ActivityIndicator size="large" color={Colors.accent} />
             <Text style={styles.deletingText}>Deleting event...</Text>
+          </View>
+        </Modal>
+      )}
+
+      {/* Turning Invite only OFF with people marked Removed (2026-11-06):
+          list them, each with a Block button, before the event opens. Mounted
+          only while open, like the panels below. */}
+      {inviteOffList && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setInviteOffList(null)}>
+          <View style={styles.deletingOverlay}>
+            <View style={styles.deleteModal}>
+              <Text style={styles.deleteModalTitle}>Turn off Invite only?</Text>
+              <Text style={styles.deleteModalWarning}>
+                {inviteOffList.length > 0
+                  ? 'These people were removed from Allowed Guests and will be able to get in again:'
+                  : 'Anyone with the event code will be able to join. Your Allowed Guests list is kept.'}
+              </Text>
+              <ScrollView style={{ maxHeight: 260 }}>
+                {inviteOffList.map(p => (
+                  <View key={p.mobile} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 8 }}>
+                    <View style={{ flex: 1, marginRight: 12 }}>
+                      <Text style={{ color: Colors.white, fontSize: 14, fontWeight: '600' }}>{p.name}</Text>
+                      <Text style={{ color: Colors.textMuted, fontSize: 12 }}>+91 {p.mobile}</Text>
+                    </View>
+                    {blockingPhone === p.mobile
+                      ? <ActivityIndicator color={Colors.accent} />
+                      : <TouchableOpacity style={styles.removeBtn} disabled={!!blockingPhone} onPress={() => blockFromInviteOffList(p.mobile)}>
+                          <Text style={styles.removeBtnText}>Block</Text>
+                        </TouchableOpacity>}
+                  </View>
+                ))}
+              </ScrollView>
+              {inviteOffList.length > 0 && (
+                <Text style={[styles.deleteModalWarning, { marginTop: 8 }]}>Block anyone you want to keep out.</Text>
+              )}
+              <View style={styles.deleteModalButtons}>
+                <TouchableOpacity style={styles.deleteModalCancel} onPress={() => setInviteOffList(null)}>
+                  <Text style={styles.deleteModalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.deleteModalConfirm} disabled={!!blockingPhone} onPress={confirmInviteOff}>
+                  <Text style={styles.deleteModalConfirmText}>Turn off</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </Modal>
       )}

@@ -172,7 +172,6 @@ export default function MyPhotosScreen() {
   const flatListContainerRef = useRef<any>(null);
   const scrollOffsetRef = useRef(0);
   const accumulatedHeights = useRef<Record<string, number>>({});
-  const prevSelectedSize = useRef(0);
 
   // ⭐ The lightbox's swipe / zoom / swipe-down gestures moved to the ONE shared
   // viewer, components/PhotoViewer.tsx (2026-11-05, the user's "Yes" — memory
@@ -408,17 +407,6 @@ export default function MyPhotosScreen() {
     .onFinalize(() => { 'worklet'; runOnJS(onDragEnd)(); })
   , [downloadMode, onDragStart, onDragUpdate, onDragEnd]);
 
-  useEffect(() => {
-    if (downloadMode && prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
-      showAlert(
-        'Downloading as ZIP',
-        `You've selected more than ${JPG_LIMIT} photos. When you tap Download, all selected photos will be bundled into a ZIP file — not downloaded as individual JPGs.\n\nTo download as individual JPGs instead, select ${JPG_LIMIT} or fewer photos.`,
-        [{ text: 'Got it' }]
-      );
-    }
-    prevSelectedSize.current = selected.size;
-  }, [selected.size, downloadMode]);
-
   async function handleLightboxDownload() {
     const id = allIds[lightboxIndex];
     if (!id) return;
@@ -652,16 +640,47 @@ export default function MyPhotosScreen() {
   async function handleDownload() {
     const ids = [...selected];
     if (ids.length === 0) return;
-    if (ids.length > JPG_LIMIT) {
-      showAlert(`Download ${ids.length} photos as ZIP`, `You've selected more than ${JPG_LIMIT} photos. They will be downloaded as a ZIP file.`, [
-        { text: 'Download', onPress: () => doDownloadZip(ids) },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
-      return;
-    }
+    // ⭐ Always a choice (2026-11-07) — same as the Event screen. Above
+    // JPG_LIMIT, JPG asks once more; more than one ZIP → Save as ZIP asks
+    // once more, naming how many.
+    const zipCount = Math.ceil(ids.length / 50);
     showAlert('How would you like to download?', undefined, [
-      { text: 'Save as JPG', onPress: () => doDownloadJpgs(ids) },
-      { text: 'Save as ZIP', onPress: () => doDownloadZip(ids) },
+      {
+        text: 'Save as JPG',
+        onPress: () => {
+          if (ids.length > JPG_LIMIT) {
+            showAlert(
+              `Save ${ids.length} photos one by one?`,
+              `Saving more than ${JPG_LIMIT} photos as JPG can take a while. Keep this screen open until it finishes. A ZIP may be quicker for large downloads.`,
+              [
+                { text: 'Save as JPG', onPress: () => doDownloadJpgs(ids) },
+                { text: 'Cancel', style: 'cancel' },
+              ],
+              undefined, false, true
+            );
+            return;
+          }
+          doDownloadJpgs(ids);
+        },
+      },
+      {
+        text: 'Save as ZIP',
+        onPress: () => {
+          if (zipCount > 1) {
+            showAlert(
+              `Save as ${zipCount} ZIP files?`,
+              `A ZIP holds up to 50 photos, so your ${ids.length} photos will be saved as ${zipCount} ZIP files.`,
+              [
+                { text: 'Save as ZIP', onPress: () => doDownloadZip(ids) },
+                { text: 'Cancel', style: 'cancel' },
+              ],
+              undefined, false, true
+            );
+            return;
+          }
+          doDownloadZip(ids);
+        },
+      },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }

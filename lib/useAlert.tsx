@@ -14,6 +14,7 @@ type AlertConfig = {
   detail?: string;
   buttons: AlertButton[];
   rowButtons?: boolean;
+  justify?: boolean;
 };
 
 export function useAlert() {
@@ -25,8 +26,10 @@ export function useAlert() {
     return () => sub.remove();
   }, [config]);
 
-  function showAlert(title: string, message?: string, buttons: AlertButton[] = [{ text: 'OK' }], detail?: string, rowButtons?: boolean) {
-    setConfig({ title, message, detail, buttons, rowButtons });
+  // `justify` (2026-11-07, the user's yes): justified message text — used
+  // only by the download pop-ups; every other pop-up stays left-aligned.
+  function showAlert(title: string, message?: string, buttons: AlertButton[] = [{ text: 'OK' }], detail?: string, rowButtons?: boolean, justify?: boolean) {
+    setConfig({ title, message, detail, buttons, rowButtons, justify });
   }
 
   const alertOverlay = config ? (() => {
@@ -81,7 +84,7 @@ export function useAlert() {
                 )}
               </View>
             ) : (
-              <Text style={alertStyles.message}>{config.message}</Text>
+              <Text style={[alertStyles.message, config.justify && alertStyles.messageJustify]}>{config.message}</Text>
             )
           ) : null}
           {config.detail ? (
@@ -120,6 +123,7 @@ export const alertStyles = StyleSheet.create({
   card: { width: '100%', backgroundColor: '#1c1c1e', borderRadius: 16, padding: 24, borderWidth: 0.5, borderColor: '#333' },
   title: { fontSize: 18, fontWeight: '600', color: Colors.white, textAlign: 'center', marginBottom: 8 },
   message: { fontSize: 15, color: Colors.textMuted, lineHeight: 21, textAlign: 'left', marginBottom: 16 },
+  messageJustify: { textAlign: 'justify' },
   // Bulleted messages: the block keeps the message's bottom gap; its lines do not.
   messageBlock: { marginBottom: 16 },
   messageLine: { marginBottom: 0 },

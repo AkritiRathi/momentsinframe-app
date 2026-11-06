@@ -63,9 +63,11 @@ const THUMB_SIZE = (SCREEN_WIDTH - GAP * 2) / 3;
 // a dialog that lies. guest-uploads.tsx and my-photos.tsx already declare
 // JPG_LIMIT once at module level; this brings event.tsx in line with them.
 //
-// Above this many photos a download is bundled as a ZIP instead of being saved
-// as individual JPGs. Keep it in step with the same constant on the other two
-// download screens.
+// ⭐ Since 2026-11-07 (the user: "No limit for jpg download. Let the user
+// decide. We can show a warning") JPG or ZIP is ALWAYS the person's choice.
+// Above this many photos, choosing JPG shows a warning first — nothing is
+// forced. Keep it in step with the same constant on the other two download
+// screens and the website.
 const JPG_LIMIT = 40;
 // How many photos a guest may choose in one upload batch.
 //
@@ -76,16 +78,14 @@ const JPG_LIMIT = 40;
 // `dcc49fc` while naming the constant. It misled a later session into
 // assuming the cap could not be changed.
 //
-// ⚠ WHY 40? Nothing records a reason. The bare `selectionLimit: 40`
-// predates the constant, and 40 is most likely borrowed from JPG_LIMIT
-// above — an unrelated DOWNLOAD threshold that happens to share the value.
-// ⛔ So it is liftable, but do NOT simply raise it: what 40 was protecting
-// is unknown. Plausible candidates are memory on older phones holding many
-// full-size images, the upload worker pool of 4, and function timeouts.
-// Measure on a real device before changing it.
-// ⚠ The WEBSITE tells guests "up to 100 photos at a time". If both numbers
-// are arbitrary they disagree for no reason — and the app is the master.
-const UPLOAD_BATCH_LIMIT = 40;
+// ⭐ 40 → 100 on 2026-11-07 (the user: "I want to increase the upload limit to
+// 100 on the mobile app"). The old 40 had no recorded reason (most likely
+// borrowed from JPG_LIMIT). ⚠ This screen asks for EVERY storage address of
+// the batch at the start and each lasts one hour, so the whole batch must
+// finish inside that hour — 100 normal photos do on ordinary mobile data.
+// Upload limits differ per platform on purpose: the website allows 40 in a
+// phone's browser and no limit on a laptop (onealbum-trial src/lib/device.ts).
+const UPLOAD_BATCH_LIMIT = 100;
 
 // ⛔ THE ALREADY-UPLOADED CHECK — NAME + "LAST CHANGED" TIME (2026-10-29, the
 // user's yes). It used to match the FILE NAME only, so an edit that kept its
@@ -216,7 +216,7 @@ function daysUntil(iso: string): number {
 
 import { buildDownloadFilename } from '../lib/downloadFilename';
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther, hideMyUploads, newCount }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther, hideMyUploads, newCount, uploading }: {
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -232,6 +232,7 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   showMyUploadsOnOther?: boolean;
   hideMyUploads?: boolean;
   newCount?: number;
+  uploading?: boolean;
 }) {
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
@@ -257,8 +258,8 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
           </View>
           {(isMain || showMyUploadsOnOther) && !hideMyUploads && (
             <TouchableOpacity
-              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode) && { opacity: 0.35 }]}
-              disabled={selectMode || deleteMode}
+              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode || uploading) && { opacity: 0.35 }]}
+              disabled={selectMode || deleteMode || uploading}
               onPress={onMyUploadsToggle}
             >
               <Text style={[styles.myUploadsPillText, myUploadsFilter && styles.myUploadsPillTextActive]}>
@@ -998,7 +999,6 @@ export default function EventScreen() {
   }, [bgUploading, downloadingBulk]);
   const [downloadingPhoto, setDownloadingPhoto] = useState(false);
   const [sharingPhoto, setSharingPhoto] = useState(false);
-  const prevSelectedSize = useRef(0);
 
   const lightboxPhotosRef = useRef<Photo[]>([]);
 
@@ -1119,17 +1119,6 @@ export default function EventScreen() {
     });
     return () => sub.remove();
   }, [selectMode, deleteMode, bgUploading, isAlertVisible]));
-
-  useEffect(() => {
-    if (selectMode && !deleteMode && prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
-      showAlert(
-        'Downloading as ZIP',
-        `You've selected more than ${JPG_LIMIT} photos. When you tap Download, all selected photos will be bundled into a ZIP file — not downloaded as individual JPGs.\n\nTo download as individual JPGs instead, select ${JPG_LIMIT} or fewer photos.`,
-        [{ text: 'Got it' }]
-      );
-    }
-    prevSelectedSize.current = selected.size;
-  }, [selected.size, selectMode, deleteMode]);
 
   // Light role check for the moments a promotion/demotion is likely to be
   // noticed: the app returning to the foreground and the bell being opened
@@ -1476,8 +1465,8 @@ export default function EventScreen() {
 
       if (pickResult.canceled || !pickResult.assets?.length) return;
       assets = pickResult.assets;
-      if (source === 'gallery' && assets.length === 40) {
-        showAlert('40-photo limit reached', 'Upload these first, then upload more if needed.');
+      if (source === 'gallery' && assets.length === UPLOAD_BATCH_LIMIT) {
+        showAlert(`${UPLOAD_BATCH_LIMIT}-photo limit reached`, 'Upload these first, then upload more if needed.');
       }
 
       const shouldUpload = await new Promise<boolean>(resolve =>
@@ -2445,29 +2434,52 @@ export default function EventScreen() {
     const folderPath = await getDownloadFolder();
     if (Platform.OS === 'android' && !folderPath && mode === 'downloads') return;
 
-    if (ids.length > JPG_LIMIT) {
-      showAlert(
-        `Download ${ids.length} photos as ZIP`,
-        `${Math.ceil(ids.length / 50)} ZIP file${Math.ceil(ids.length / 50) > 1 ? 's' : ''} will be saved to your Downloads folder.`,
-        [
-          { text: 'Download', onPress: () => downloadAsZip(ids) },
-          { text: 'Cancel', style: 'cancel' },
-        ]
-      );
-      return;
-    }
-
+    // ⭐ Always a choice (2026-11-07). Above JPG_LIMIT, JPG asks once more.
+    // More than one ZIP → Save as ZIP asks once more, naming how many.
+    const zipCount = Math.ceil(ids.length / 50);
     showAlert(
       `Download ${ids.length} photo${ids.length > 1 ? 's' : ''}`,
       'How would you like to download?',
       [
         {
           text: 'Save as JPG',
-          onPress: async () => { await saveAsJpgs(ids, folderPath, mode); },
+          onPress: () => {
+            if (ids.length > JPG_LIMIT) {
+              showAlert(
+                `Save ${ids.length} photos one by one?`,
+                `Saving more than ${JPG_LIMIT} photos as JPG can take a while. Keep this screen open until it finishes. A ZIP may be quicker for large downloads.`,
+                [
+                  { text: 'Save as JPG', onPress: async () => { await saveAsJpgs(ids, folderPath, mode); } },
+                  { text: 'Cancel', style: 'cancel' },
+                ],
+                undefined, false, true
+              );
+              return;
+            }
+            saveAsJpgs(ids, folderPath, mode);
+          },
         },
-        { text: 'Save as ZIP', onPress: () => downloadAsZip(ids) },
+        {
+          text: 'Save as ZIP',
+          onPress: () => {
+            if (zipCount > 1) {
+              showAlert(
+                `Save as ${zipCount} ZIP files?`,
+                `A ZIP holds up to 50 photos, so your ${ids.length} photos will be saved as ${zipCount} ZIP files.`,
+                [
+                  { text: 'Save as ZIP', onPress: () => downloadAsZip(ids) },
+                  { text: 'Cancel', style: 'cancel' },
+                ],
+                undefined, false, true
+              );
+              return;
+            }
+            downloadAsZip(ids);
+          },
+        },
         { text: 'Cancel', style: 'cancel' },
-      ]
+      ],
+      undefined, false, true
     );
   }
 
@@ -2817,7 +2829,8 @@ export default function EventScreen() {
                   <Text style={styles.adminGearIcon}>🔔</Text>
                   {hasUnread && <View style={styles.notifDot} />}
                 </TouchableOpacity>
-                <TouchableOpacity ref={menuBtnRef} style={[styles.menuBtn, myUploadsFilter && { opacity: 0.35 }]} disabled={myUploadsFilter} onPress={() => {
+                {/* ⋮ off while My Uploads, select / delete mode or an upload is on (2026-11-07, the user's "Yes"). */}
+                <TouchableOpacity ref={menuBtnRef} style={[styles.menuBtn, (myUploadsFilter || selectMode || deleteMode || bgUploading) && { opacity: 0.35 }]} disabled={myUploadsFilter || selectMode || deleteMode || bgUploading} onPress={() => {
                   menuBtnRef.current?.measure((_x: number, _y: number, width: number, height: number, pageX: number, pageY: number) => {
                     setMenuBtnLayout({ top: pageY + height, right: SCREEN_WIDTH - pageX - width });
                     setMenuVisible(true);
@@ -2958,6 +2971,7 @@ export default function EventScreen() {
                 : (deleteMode && myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone && !coadminPhones.has(p.uploaded_by_mobile)) : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
               selectMode={selectMode}
               deleteMode={deleteMode}
+              uploading={bgUploading}
               selected={selected}
               onGroupToggle={selectGroup}
               isCoadmin={isCoadmin}
@@ -3516,6 +3530,7 @@ export default function EventScreen() {
                 : (deleteMode && myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && !isAdmin && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : deleteMode && isCoadmin ? otherPhotos.filter(p => p.uploaded_by_mobile !== ownerPhone && !coadminPhones.has(p.uploaded_by_mobile)) : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos)}
               selectMode={selectMode}
               deleteMode={deleteMode}
+              uploading={bgUploading}
               selected={selected}
               onGroupToggle={selectGroup}
               isCoadmin={isCoadmin}

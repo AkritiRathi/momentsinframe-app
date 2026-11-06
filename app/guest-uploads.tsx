@@ -175,7 +175,6 @@ export default function GuestUploadsScreen() {
   const zipAbortRef = useRef<AbortController | null>(null);
   const zipTaskRef = useRef<{ cancelAsync: () => Promise<void> } | null>(null);
   const [sharingPhoto, setSharingPhoto] = useState(false);
-  const prevSelectedSize = useRef(0);
 
   // This screen had NO keep-awake at all until 2026-10-10, while event.tsx and
   // my-photos.tsx both had it — so the phone could sleep part-way through a
@@ -214,19 +213,6 @@ export default function GuestUploadsScreen() {
   // project_download_progress_ui, UNIVERSAL VIEWER). Same rules (protected
   // item 5): direction locked once (dragAxis), 50 px sideways, zoom gating,
   // swipe-down 100 px / flick, blocked while busy, reset on every photo change.
-
-  // JPG limit warning
-  useEffect(() => {
-    if (mode !== 'download') { prevSelectedSize.current = selected.size; return; }
-    if (prevSelectedSize.current <= JPG_LIMIT && selected.size > JPG_LIMIT) {
-      showAlert(
-        'Downloading as ZIP',
-        `You've selected more than ${JPG_LIMIT} photos. When you tap Download, all selected photos will be bundled into a ZIP file — not downloaded as individual JPGs.\n\nTo download as individual JPGs instead, select ${JPG_LIMIT} or fewer photos.`,
-        [{ text: 'Got it' }]
-      );
-    }
-    prevSelectedSize.current = selected.size;
-  }, [selected.size, mode]);
 
   // Fetch on mount
   useEffect(() => {
@@ -658,24 +644,50 @@ export default function GuestUploadsScreen() {
     const ids = [...selected];
     if (ids.length === 0) return;
 
-    if (ids.length > JPG_LIMIT) {
-      showAlert(
-        `Download ${ids.length} photos as ZIP`,
-        `${Math.ceil(ids.length / 50)} ZIP file${Math.ceil(ids.length / 50) > 1 ? 's' : ''} will be saved to your Downloads folder.`,
-        [
-          { text: 'Download', onPress: () => doDownloadZip(ids) },
-          { text: 'Cancel', style: 'cancel' },
-        ]
-      );
-      return;
-    }
-
+    // ⭐ Always a choice (2026-11-07) — same as the Event screen. Above
+    // JPG_LIMIT, JPG asks once more; more than one ZIP → Save as ZIP asks
+    // once more, naming how many.
+    const zipCount = Math.ceil(ids.length / 50);
     showAlert(
       'How would you like to download?',
       undefined,
       [
-        { text: 'Save as JPG', onPress: () => doDownloadJpgs(ids) },
-        { text: 'Save as ZIP', onPress: () => doDownloadZip(ids) },
+        {
+          text: 'Save as JPG',
+          onPress: () => {
+            if (ids.length > JPG_LIMIT) {
+              showAlert(
+                `Save ${ids.length} photos one by one?`,
+                `Saving more than ${JPG_LIMIT} photos as JPG can take a while. Keep this screen open until it finishes. A ZIP may be quicker for large downloads.`,
+                [
+                  { text: 'Save as JPG', onPress: () => doDownloadJpgs(ids) },
+                  { text: 'Cancel', style: 'cancel' },
+                ],
+                undefined, false, true
+              );
+              return;
+            }
+            doDownloadJpgs(ids);
+          },
+        },
+        {
+          text: 'Save as ZIP',
+          onPress: () => {
+            if (zipCount > 1) {
+              showAlert(
+                `Save as ${zipCount} ZIP files?`,
+                `A ZIP holds up to 50 photos, so your ${ids.length} photos will be saved as ${zipCount} ZIP files.`,
+                [
+                  { text: 'Save as ZIP', onPress: () => doDownloadZip(ids) },
+                  { text: 'Cancel', style: 'cancel' },
+                ],
+                undefined, false, true
+              );
+              return;
+            }
+            doDownloadZip(ids);
+          },
+        },
         { text: 'Cancel', style: 'cancel' },
       ]
     );

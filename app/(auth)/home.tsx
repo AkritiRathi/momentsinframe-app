@@ -292,16 +292,8 @@ export default function HomeScreen() {
             <TouchableOpacity style={styles.deleteAccountBtn} onPress={handleDeleteAccountPress}>
               <Text style={styles.deleteAccountBtnText}>Delete Account</Text>
             </TouchableOpacity>
-            {/* Legal links (2026-11-02, the user's yes) — open in the browser */}
-            <View style={styles.legalRow}>
-              <TouchableOpacity onPress={() => Linking.openURL(PRIVACY_URL)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Text style={styles.legalLink}>Privacy Policy</Text>
-              </TouchableOpacity>
-              <Text style={styles.legalDot}>·</Text>
-              <TouchableOpacity onPress={() => Linking.openURL(TERMS_URL)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Text style={styles.legalLink}>Terms of Use</Text>
-              </TouchableOpacity>
-            </View>
+            {/* The Privacy and Terms links moved to the Home page itself
+                (2026-11-07, the user's yes) — shown once, under "Privacy & Terms". */}
           </View>
         </TouchableOpacity>
       </Modal>
@@ -322,15 +314,8 @@ export default function HomeScreen() {
               </View>
               {checkingUpdate && <ActivityIndicator size="small" color={Colors.accent} />}
             </TouchableOpacity>
-            <View style={styles.settingsDivider} />
-            <TouchableOpacity style={styles.settingsRow} onPress={() => {
-              setSettingsVisible(false);
-              setTimeout(() => setUserDetailsVisible(true), 300);
-            }}>
-              <View style={styles.settingsRowBody}>
-                <Text style={styles.settingsRowLabel}>See user details</Text>
-              </View>
-            </TouchableOpacity>
+            {/* "See user details" moved to the page as "Your Details ›"
+                (2026-11-07, the user's yes); the gear keeps Check for Updates. */}
           </View>
         </TouchableOpacity>
       </Modal>
@@ -365,7 +350,7 @@ export default function HomeScreen() {
       </View>
 
       <View style={styles.body}>
-        <Text style={styles.sectionLabel}>WHAT WOULD YOU LIKE TO DO?</Text>
+        <Text style={styles.sectionLabel}>What would you like to do?</Text>
 
         <TouchableOpacity style={styles.cardPrimary} onPress={() => router.push('/(auth)/join-event')}>
           <View style={[styles.iconWrap, styles.iconPrimary]}>
@@ -390,6 +375,23 @@ export default function HomeScreen() {
           <Text style={styles.arrowLight}>›</Text>
         </TouchableOpacity>
         )}
+
+        {/* 2026-11-07 (the user's design, like Manage Event): rows under a
+            divider instead of items hidden in the ⚙️ menu. */}
+        <View style={styles.homeDivider} />
+        <TouchableOpacity style={styles.navRow} onPress={() => setUserDetailsVisible(true)}>
+          <Text style={styles.navRowText}>Your Details</Text>
+          <Text style={styles.navRowArrow}>›</Text>
+        </TouchableOpacity>
+        <Text style={[styles.sectionLabel, { marginTop: 20, marginBottom: 8 }]}>Privacy & Terms</Text>
+        <TouchableOpacity style={styles.navRow} onPress={() => Linking.openURL(PRIVACY_URL)}>
+          <Text style={styles.navRowText}>Privacy Policy</Text>
+          <Text style={styles.navRowArrow}>›</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.navRow} onPress={() => Linking.openURL(TERMS_URL)}>
+          <Text style={styles.navRowText}>Terms of Use</Text>
+          <Text style={styles.navRowArrow}>›</Text>
+        </TouchableOpacity>
       </View>
 
       {alertOverlay}
@@ -523,6 +525,10 @@ const styles = StyleSheet.create({
   // red outline, bold red text — same as Delete Event and "Start fresh".
   deleteAccountBtn: { marginTop: 12, alignItems: 'center', paddingVertical: 14, backgroundColor: '#2A2A2A', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(229,57,53,0.6)' },
   deleteAccountBtnText: { fontSize: 15, color: Colors.danger, fontWeight: '700' },
+  homeDivider: { height: 0.5, backgroundColor: '#333', marginTop: 20, marginBottom: 16 },
+  navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1A1A1A', borderWidth: 0.5, borderColor: '#2A2A2A', borderRadius: 8, paddingVertical: 14, paddingHorizontal: 12, marginBottom: 8 },
+  navRowText: { fontSize: 15, fontWeight: '700', color: Colors.white },
+  navRowArrow: { fontSize: 22, color: Colors.textMuted },
   legalRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 16 },
   legalLink: { fontSize: 13, color: Colors.textMuted, fontWeight: '600', textDecorationLine: 'underline' },
   legalDot: { fontSize: 13, color: Colors.textMuted },

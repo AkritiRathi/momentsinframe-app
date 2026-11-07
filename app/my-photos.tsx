@@ -17,8 +17,10 @@ import * as Sharing from 'expo-sharing';
 import * as SecureStore from 'expo-secure-store';
 import * as MediaLibrary from 'expo-media-library';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
-let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
-try { PhotoSaver = require('photo-saver').default; } catch {}
+// ⏸ DEAD 2026-11-08 — review after 2027-01-08; delete ONLY after the user confirms
+// (project_prelaunch_tidyup.md). Unused since the iPhone save chain moved to lib/photoSave.ts.
+// let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
+// try { PhotoSaver = require('photo-saver').default; } catch {}
 import { findMyPhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
 import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
 import PhotoLightbox from '../components/PhotoLightbox';

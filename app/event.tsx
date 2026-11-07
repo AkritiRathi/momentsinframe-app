@@ -18,9 +18,11 @@ import Animated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 let BackgroundUpload: { startService: (t: string, d: string) => Promise<void>; updateService: (t: string, d: string, p: number, m: number) => Promise<void>; stopService: () => Promise<void>; isRunning: () => boolean } | null = null;
 try { BackgroundUpload = require('background-upload').default; } catch {}
-let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
-let PhotoSaverError: string = 'not attempted';
-try { PhotoSaver = require('photo-saver').default; PhotoSaverError = 'ok'; } catch (e: any) { PhotoSaverError = String(e?.message ?? e); }
+// ⏸ DEAD 2026-11-08 — review after 2027-01-08; delete ONLY after the user confirms
+// (project_prelaunch_tidyup.md). Unused since the iPhone save chain moved to lib/photoSave.ts.
+// let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
+// let PhotoSaverError: string = 'not attempted';
+// try { PhotoSaver = require('photo-saver').default; PhotoSaverError = 'ok'; } catch (e: any) { PhotoSaverError = String(e?.message ?? e); }
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useEffect, useRef, useState, useMemo, useCallback, memo, forwardRef } from 'react';

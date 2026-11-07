@@ -31,7 +31,8 @@ import {
   checkAdminStatus, findMyPhotos, findMyPhotosReady,
 } from '../lib/api';
 import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
-import PhotoViewer from '../components/PhotoViewer';
+import PhotoLightbox from '../components/PhotoLightbox';
+import { savePhotoToPhone, sharePhoto, androidFolderName } from '../lib/photoSave';
 import { API_BASE_URL } from '../constants/config';
 import {
   getUserProfile, getEventUserId,
@@ -102,6 +103,12 @@ type UploadedIndex = Map<string, Set<number | null>>;
 const storedName = (name: string) => name.replace(/\.[^.]+$/, '.jpg');
 const asTime = (t: unknown): number | null =>
   typeof t === 'number' && Number.isFinite(t) && t > 0 ? Math.round(t) : null;
+// The date the photo has ON THE PHONE (2026-11-08, the user's "Yes"): iPhone =
+// when it was added to the library; Android = date taken, else last changed
+// (WhatsApp photos often have no date taken). The server shows Other Photos by
+// it — display only, never part of duplicate detection.
+const phoneDateOf = (a: { creationTime?: unknown; modificationTime?: unknown } | null | undefined): number | null =>
+  asTime(a?.creationTime) ?? asTime(a?.modificationTime);
 function indexMyUploads(photos: Photo[], userMobile: string | null | undefined): UploadedIndex {
   const index: UploadedIndex = new Map();
   if (!userMobile) return index;
@@ -137,6 +144,9 @@ type Photo = {
   uploaded_by_name: string | null;
   uploaded_by_mobile: string | null;
   uploaded_at: string | null;
+  // The ONE download name, made by the server (2026-11-08). Missing → that
+  // photo's download fails and can be retried; never a made-up name.
+  download_name?: string | null;
 };
 
 type ListItem =
@@ -214,7 +224,6 @@ function daysUntil(iso: string): number {
   return istDayNumber(new Date(iso).getTime()) - istDayNumber(Date.now());
 }
 
-import { buildDownloadFilename } from '../lib/downloadFilename';
 
 function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther, hideMyUploads, newCount, uploading }: {
   section: 'main' | 'other';
@@ -693,7 +702,7 @@ async function backgroundUploadTask(): Promise<void> {
         if (!uploadOk) {
           result = { status: 'failed', section: null, uri: asset.uri, filename };
         } else {
-          const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined, asTime(asset.modificationTime));
+          const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined, asTime(asset.modificationTime), phoneDateOf(asset));
           tSave = Date.now(); // ⏱ timer only
           if (proc.error) {
             result = { status: 'failed', section: null, uri: asset.uri, filename };
@@ -1510,11 +1519,13 @@ export default function EventScreen() {
       let uri = asset.uri;
       let filename: string | undefined;
       let modifiedAt: number | null = null;   // the phone's "last changed" time (2026-10-29)
+      let phoneAt: number | null = null;      // the phone's own date for the photo (2026-11-08)
       if (asset.assetId) {
         try {
           const info = await MediaLibrary.getAssetInfoAsync(asset.assetId);
           if (info?.filename) filename = info.filename;
           modifiedAt = asTime(info?.modificationTime);
+          phoneAt = phoneDateOf(info);
           // iOS: only file:// is usable — ph:// cannot be read by FileSystem,
           // and the file:// localUri is the original and preserves EXIF.
           // Android: any localUri it returns is fine.
@@ -1563,6 +1574,7 @@ export default function EventScreen() {
             if (sameShape && info.filename && !/^\d+\.[A-Za-z0-9]+$/.test(info.filename)) {
               filename = info.filename;
               modifiedAt = asTime(info.modificationTime);
+              phoneAt = phoneDateOf(info);
             }
           } catch {}
         }
@@ -1571,7 +1583,7 @@ export default function EventScreen() {
       // cache copy is already known-good and keeps its EXIF on Android, so
       // swapping it in would buy nothing and risk uploading the wrong photo.
 
-      return { uri, filename, modifiedAt };
+      return { uri, filename, modifiedAt, phoneAt };
     }));
     const localUris = resolved.map(r => r.uri);
 
@@ -1600,6 +1612,9 @@ export default function EventScreen() {
     // ⛔ FOURTH index-aligned array (2026-10-29): rebuilt below together with
     // assets, localUris and resolvedFilenames — never on its own.
     let resolvedTimes: (number | null)[] = resolved.map(r => r?.modifiedAt ?? null);
+    // ⛔ FIFTH index-aligned array (2026-11-08): the phone's own date — rebuilt
+    // together with the four above, never on its own.
+    let resolvedPhoneDates: (number | null)[] = resolved.map(r => r?.phoneAt ?? null);
 
     // Skip photos this user has already uploaded to this event, the same way
     // Upload by Date does. Without this, re-picking a photo from the gallery
@@ -1628,6 +1643,7 @@ export default function EventScreen() {
             assets = assets.filter((_, i) => keep[i]);
             resolvedFilenames = resolvedFilenames.filter((_, i) => keep[i]);
             resolvedTimes = resolvedTimes.filter((_, i) => keep[i]);
+            resolvedPhoneDates = resolvedPhoneDates.filter((_, i) => keep[i]);
             localUris.length = 0;
             localUris.push(...keptUris);
           }
@@ -1715,7 +1731,7 @@ export default function EventScreen() {
             if (!uploadOk) {
               result = { status: 'failed', section: null, uri: asset.uri, filename };
             } else {
-              const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined, resolvedTimes[index]);
+              const proc = await processUpload(slug, stagingKey, filename, eventUserId ?? undefined, resolvedTimes[index], resolvedPhoneDates[index]);
               tSave = Date.now(); // ⏱ timer only
               if (proc.error) {
                 result = { status: 'failed', section: null, uri: asset.uri, filename };
@@ -2101,43 +2117,8 @@ export default function EventScreen() {
     return 'downloads';
   }
 
-  async function saveFileToDownloads(filename: string, url: string, mimeType: string, folderPath: string | null, mode: 'downloads' | 'gallery', notify = false, dateTakenMs?: number): Promise<void> {
-    if (Platform.OS === 'android') {
-      const folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`) ?? params.name;
-      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-      const dlResult = await FileSystem.downloadAsync(url, cacheUri);
-      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-      const localPath = dlResult.uri.replace('file://', '');
-      await MediaStore.saveToDownloads(localPath, filename, folderName, mimeType, dateTakenMs);
-      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-    } else {
-      // iOS: save to Photos using resource-based API to preserve EXIF
-      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-      const dlResult = await FileSystem.downloadAsync(url, cacheUri);
-      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-      if (PhotoSaver) {
-        // ⛔ iPhone: ALWAYS 0 (2026-10-26, the user's yes — "all screens the same").
-        // A non-zero date makes PhotoSaver rebuild the JPEG to write the date in,
-        // which RE-ENCODES it (measured: 7.6 MB → 5.6 MB). The file already
-        // carries its date — camera EXIF, or the server's stamp on Other Photos.
-        const result = await PhotoSaver.saveToPhotos(cacheUri, 0, params.name);
-        if (result === 'limited_access') {
-          const alreadyShown = await SecureStore.getItemAsync('mif_limited_access_shown');
-          if (!alreadyShown) {
-            await SecureStore.setItemAsync('mif_limited_access_shown', '1');
-            Alert.alert(
-              'Photo Saved',
-              'To organise photos into your event album, allow Full Access in Settings → Privacy & Security → Photos → MomentsInFrame.',
-              [{ text: 'OK' }]
-            );
-          }
-        }
-      } else {
-        await MediaLibrary.saveToLibraryAsync(cacheUri);
-      }
-      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-    }
-  }
+  // The single-photo save (iPhone + Android chain) lives in lib/photoSave.ts
+  // since 2026-11-08 — moved there unchanged, shared by all screens.
 
   // createDownloadResumable instead of downloadAsync purely for the progress
   // callback — same result, but it reports bytes as they arrive so the dialog
@@ -2189,29 +2170,22 @@ export default function EventScreen() {
   }
 
   async function handleDownloadPhoto(id: string) {
+    // ⭐ One save step for every screen (lib/photoSave.ts, 2026-11-08) — the
+    // iPhone / Android chain moved there unchanged. Name from the server.
     const photo = [...photos, ...otherPhotos].find(p => p.id === id);
-    const mode = await ensureStorageMode();
-    if (!mode) return;
-    const folderPath = await getDownloadFolder();
-    if (Platform.OS === 'android' && !folderPath && mode === 'downloads') return;
-
     showAlert('Download photo', 'Save this photo to your Downloads folder?', [
       {
         text: 'Download', onPress: async () => {
           setDownloadingPhoto(true);
           try {
-            const rawName = photo?.original_filename ?? `photo_${id}.jpg`;
-            const rawExt = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
-            const ext = (rawExt === 'heic' || rawExt === 'heif') ? 'jpg' : rawExt;
-            const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
-            const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
-            const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
-            const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
-            await saveFileToDownloads(filename, downloadUrl, 'image/jpeg', folderPath, mode, true, dateTakenMs);
-            const folderName = folderPath?.split('/').pop() ?? params.name;
-            showAlert('Done', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : `Photo saved to Downloads/${folderName}.`);
-          } catch (e: any) {
-            showAlert('Error', e?.message ?? 'Could not download photo.');
+            await savePhotoToPhone({
+              photoId: id, fileName: photo?.download_name, eventSlug: slug, eventName: params.name, idPhone,
+              dateTakenMs: photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined,
+            });
+            const folderName = Platform.OS === 'android' ? await androidFolderName(slug, params.name) : '';
+            showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : `Photo saved to Downloads/${folderName}.`);
+          } catch (e) {
+            showAlert('Download failed', isPhotoGoneError(e) ? 'This photo is no longer in the event.' : "This photo couldn't be downloaded. Please try again.");
           } finally {
             setDownloadingPhoto(false);
           }
@@ -2222,29 +2196,14 @@ export default function EventScreen() {
   }
 
   async function handleSharePhoto(id: string) {
+    // ⭐ One share step (lib/photoSave.ts, 2026-11-08): always the date-stamped
+    // file — this screen used to share the plain stored file.
     const photo = [...photos, ...otherPhotos].find(p => p.id === id);
     setSharingPhoto(true);
     try {
-      const { url, filename, error } = await getPhotoDownloadUrl(id, idPhone ?? undefined);
-      if (error || !url) throw new Error(error ?? 'Could not get photo URL');
-      const rawExt = (photo?.original_filename ?? filename ?? 'photo.jpg').split('.').pop()?.toLowerCase() ?? 'jpg';
-      const ext = (rawExt === 'heic' || rawExt === 'heif') ? 'jpg' : rawExt;
-      const localFilename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
-      const localUri = `${FileSystem.cacheDirectory}${localFilename}`;
-      const dlResult = await FileSystem.downloadAsync(url, localUri);
-      if (dlResult.status !== 200) throw new Error('Download failed');
-      // Closing the lightbox while the photo was being fetched means the share
-      // was abandoned. Throw the file away rather than pushing a share sheet in
-      // front of someone who has already left the screen — which is exactly
-      // what it used to do. The website does the same thing (Lightbox.tsx).
-      if (!lightboxVisibleRef.current) {
-        await FileSystem.deleteAsync(localUri, { idempotent: true });
-        return;
-      }
-      await Sharing.shareAsync(localUri, { mimeType: 'image/jpeg', dialogTitle: 'Share photo' });
-      await FileSystem.deleteAsync(localUri, { idempotent: true });
-    } catch (e: any) {
-      showAlert('Error', e?.message ?? 'Could not share photo.');
+      await sharePhoto({ photoId: id, fileName: photo?.download_name, idPhone, stillOpen: () => lightboxVisibleRef.current });
+    } catch (e) {
+      showAlert('Share failed', isPhotoGoneError(e) ? 'This photo is no longer in the event.' : "This photo couldn't be shared. Please try again.");
     } finally {
       setSharingPhoto(false);
     }
@@ -2272,14 +2231,11 @@ export default function EventScreen() {
         const id = chunkIds[j];
         try {
           const photo = allPhotos.find(p => p.id === id);
-          const rawName = photo?.original_filename ?? `photo_${id}.jpg`;
-          const rawExt = rawName.split('.').pop()?.toLowerCase() ?? 'jpg';
-          const ext = (rawExt === 'heic' || rawExt === 'heif') ? 'jpg' : rawExt;
-          const filename = buildDownloadFilename(id, photo?.taken_at ?? null, ext);
-          const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
-          const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
-          const dateTakenMs = photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined;
-          await saveFileToDownloads(filename, downloadUrl, 'image/jpeg', folderPath, mode, false, dateTakenMs);
+          // ⭐ The one save step (lib/photoSave.ts); no name → counted as failed.
+          await savePhotoToPhone({
+            photoId: id, fileName: photo?.download_name, eventSlug: slug, eventName: params.name, idPhone,
+            dateTakenMs: photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined,
+          });
           saved++;
         } catch (e) { (isPhotoGoneError(e) ? goneIds : failedIds).push(id); }
         completed++;
@@ -3085,15 +3041,6 @@ export default function EventScreen() {
   // at insets.top + 12 and every chip in that row is now exactly 31 tall, so
   // the row's top IS the button's top. The header's copy is made invisible
   // while busy rather than removed, so the row does not reshuffle underneath.
-  const lbCoverClose = (
-    <TouchableOpacity
-      style={[styles.lbBtn, styles.lbClose, styles.lbCloseOnCover, { top: insets.top + 12 }]}
-      onPress={() => setLightboxVisible(false)}
-      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-    >
-      <Text style={styles.lbCloseText}>×</Text>
-    </TouchableOpacity>
-  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -3382,90 +3329,30 @@ export default function EventScreen() {
         </View>
       )}
 
-      {/* Lightbox */}
-      <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
-        <GestureHandlerRootView style={styles.lightboxInner}>
-            <View style={[styles.lbHeader, { paddingTop: insets.top + 12 }]}>
-              <Text style={styles.lbCounter}>{lightboxIndex + 1} / {lightboxPhotos.length}</Text>
-              <View style={styles.lbActions}>
-                {canDelete && (
+      {/* Full-screen photo — the ONE shared piece (components/PhotoLightbox.tsx,
+          2026-11-08). Delete shows only when this photo may be deleted. */}
+      <PhotoLightbox
+        visible={lightboxVisible}
+        onClose={() => setLightboxVisible(false)}
+        items={lightboxPhotos}
+        index={lightboxIndex}
+        onIndexChange={setLightboxIndex}
+        getKey={p => p.id}
+        getUri={p => photoUrls[p.id]?.displayUrl ?? photoUrls[p.id]?.url ?? null}
+        onLoadingChange={l => { imageLoadingRef.current = l; setImageLoading(l); }}
+        busy={deletingPhoto ? 'delete' : downloadingPhoto ? 'download' : sharingPhoto ? 'share' : null}
+        actions={{
+          canDelete: !!(canDelete && (
                   (isAdmin && !(userRole === 'coadmin' && (currentPhoto?.uploaded_by_mobile === ownerPhone || coadminPhones.has(currentPhoto?.uploaded_by_mobile ?? '')))) ||
                   (!isAdmin && currentPhoto != null && userPhotoIds.has(currentPhoto.id))
-                ) && (
-                  <TouchableOpacity style={[styles.lbBtn, styles.lbBtnDanger]} onPress={() => currentPhoto && handleDeletePhoto(currentPhoto.id)}>
-                    <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && requestAppPermission('gallery', () => handleDownloadPhoto(currentPhoto.id), userMobile ?? params.adminPhone ?? null)}>
-                  <Text style={styles.lbBtnText}>Download</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.lbBtn} onPress={() => currentPhoto && handleSharePhoto(currentPhoto.id)}>
-                  <Text style={styles.lbBtnText}>Share</Text>
-                </TouchableOpacity>
-              </View>
-              {/* Close. A normal item in the row, NOT positioned by hand: the
-                  same centring that lines up the buttons lines this up too, on
-                  every device. It floated at a fixed distance from the top
-                  until 2026-10-10 and sat a couple of pixels high on Android,
-                  because button height follows font metrics and those differ
-                  per platform. */}
-              <TouchableOpacity
-                style={[styles.lbBtn, styles.lbClose, (downloadingPhoto || sharingPhoto) && { opacity: 0 }]}
-                onPress={() => setLightboxVisible(false)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Text style={styles.lbCloseText}>×</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
-              <PhotoViewer
-                items={lightboxPhotos}
-                index={lightboxIndex}
-                getKey={p => p.id}
-                getUri={p => photoUrls[p.id]?.displayUrl ?? photoUrls[p.id]?.url ?? null}
-                onIndexChange={setLightboxIndex}
-                onClose={() => setLightboxVisible(false)}
-                busy={downloadingPhoto || sharingPhoto || deletingPhoto}
-                onLoadingChange={l => { imageLoadingRef.current = l; setImageLoading(l); }}
-              />
-              {deletingPhoto && (
-                <View style={styles.lbDeletingOverlay}>
-                  <ActivityIndicator size="large" color={Colors.accent} />
-                  <Text style={styles.lbDeletingText}>Deleting...</Text>
-                </View>
-              )}
-              {/* ‹ › arrows: drawn by the shared PhotoViewer (2026-11-05). */}
-            </View>
-            <View style={[styles.lbFooter, { paddingBottom: insets.bottom + 12 }]}>
-              {currentPhoto?.uploaded_by_name && (
-                <Text style={styles.lbFooterLine1}>Uploaded by {currentPhoto.uploaded_by_name}</Text>
-              )}
-              {currentPhoto?.taken_at && (
-                <Text style={styles.lbFooterLine2}>
-                  {'Taken on '}{new Date(currentPhoto.taken_at).toLocaleString('en-IN', {
-                    day: '2-digit', month: 'short', year: 'numeric',
-                    hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
-                  })}
-                </Text>
-              )}
-            </View>
-        {downloadingPhoto && (
-          <View style={styles.lbDownloadOverlay}>
-            <ActivityIndicator color={Colors.white} size="large" />
-            <Text style={styles.lbDownloadText}>Downloading…</Text>
-            {lbCoverClose}
-          </View>
-        )}
-        {sharingPhoto && (
-          <View style={styles.lbDownloadOverlay}>
-            <ActivityIndicator color={Colors.white} size="large" />
-            <Text style={styles.lbDownloadText}>Preparing…</Text>
-            {lbCoverClose}
-          </View>
-        )}
-        {alertOverlay}
-        </GestureHandlerRootView>
-      </Modal>
+                )),
+          onDelete: () => { if (currentPhoto) handleDeletePhoto(currentPhoto.id); },
+          onDownload: () => { if (currentPhoto) { const id = currentPhoto.id; requestAppPermission('gallery', () => handleDownloadPhoto(id), userMobile ?? params.adminPhone ?? null); } },
+          onShare: () => { if (currentPhoto) handleSharePhoto(currentPhoto.id); },
+        }}
+        caption={{ uploadedBy: currentPhoto?.uploaded_by_name, takenAt: currentPhoto?.taken_at }}
+        overlays={<>{lightboxVisible && primingOverlay}{alertOverlay}</>}
+      />
 
       <View
         style={{ flex: 1 }}
@@ -3986,7 +3873,8 @@ export default function EventScreen() {
         </GestureHandlerRootView>
       </Modal>
 
-      {primingOverlay}
+      {/* Inside the full-screen photo while it is open (a Modal cannot show over it). */}
+      {!lightboxVisible && primingOverlay}
 
     </SafeAreaView>
   );

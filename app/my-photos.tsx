@@ -20,9 +20,10 @@ const MediaStore = Platform.OS === 'android' ? require('media-store').default : 
 let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 try { PhotoSaver = require('photo-saver').default; } catch {}
 import { findMyPhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
-import { buildDownloadFilename } from '../lib/downloadFilename';
 import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
-import PhotoViewer from '../components/PhotoViewer';
+import PhotoLightbox from '../components/PhotoLightbox';
+import { savePhotoToPhone, sharePhoto, androidFolderName } from '../lib/photoSave';
+import { useAppPermission } from '../lib/permissions';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
@@ -36,7 +37,8 @@ const GAP = 2;
 const THUMB_SIZE = Math.floor((SCREEN_WIDTH - GAP * (COLS + 1)) / COLS);
 const JPG_LIMIT = 40;
 
-type Photo = { id: string; taken_at: string; uploaded_by_name?: string };
+// download_name: the ONE download name from the server (2026-11-08); missing → that photo's download fails.
+type Photo = { id: string; taken_at: string; uploaded_by_name?: string; download_name?: string | null };
 // Plan C: a row counts as "on screen" as soon as any of it shows.
 const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 1, minimumViewTime: 100 };
 type Mode = 'camera' | 'searching' | 'results';
@@ -102,6 +104,8 @@ export default function MyPhotosScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showAlert, alertOverlay } = useAlert();
+  // Photo permission before a full-screen Download, as on the Event screen (2026-11-08).
+  const { requestAppPermission, primingOverlay } = useAppPermission();
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView>(null);
   const [cameraReady, setCameraReady] = useState(false);
@@ -417,34 +421,15 @@ export default function MyPhotosScreen() {
           setLightboxBusy('download');
           try {
             const photo = [...photos, ...otherPhotos].find(p => p.id === id);
-            const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
-            const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
-            const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
-            const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-            const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
-            if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-            if (Platform.OS === 'android') {
-              let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${slug}`);
-              if (!folderName) {
-                folderName = eventName;
-                await SecureStore.setItemAsync(`downloads_folder_name_${slug}`, folderName);
-              }
-              const localPath = dlResult.uri.replace('file://', '');
-              // ⛔ Android: the photo's REAL date (2026-10-26, the user's yes — "all screens
-              // the same"). It only labels the gallery entry (DATE_TAKEN); the file is copied
-              // byte-for-byte. 0 here wrote DATE_TAKEN = 1970. Same as event.tsx.
-              await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined);
-            } else {
-              if (PhotoSaver) {
-                await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);
-              } else {
-                await MediaLibrary.saveToLibraryAsync(cacheUri);
-              }
-            }
-            await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-            showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : 'Photo saved to Downloads.');
-          } catch (e: any) {
-            showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
+            // ⭐ The one save step (lib/photoSave.ts, 2026-11-08); name from the server.
+            await savePhotoToPhone({
+              photoId: id, fileName: photo?.download_name, eventSlug: slug, eventName, idPhone,
+              dateTakenMs: photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined,
+            });
+            const folderName = Platform.OS === 'android' ? await androidFolderName(slug, eventName) : '';
+            showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : `Photo saved to Downloads/${folderName}.`);
+          } catch (e) {
+            showAlert('Download failed', isPhotoGoneError(e) ? 'This photo is no longer in the event.' : "This photo couldn't be downloaded. Please try again.");
           } finally {
             setLightboxBusy(null);
             setActionLoading(false);
@@ -462,22 +447,10 @@ export default function MyPhotosScreen() {
     setLightboxBusy('share');
     try {
       const photo = [...photos, ...otherPhotos].find(p => p.id === id);
-      const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
-      const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
-      const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
-      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-      const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
-      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-      // Lightbox closed while fetching = the share was abandoned. Discard the
-      // file instead of opening a sheet over a screen they have left.
-      if (!lightboxVisibleRef.current) {
-        await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-        return;
-      }
-      await Sharing.shareAsync(cacheUri, { mimeType: 'image/jpeg', dialogTitle: 'Share Photo' });
-      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-    } catch (e: any) {
-      showAlert('Error', `Share failed: ${e?.message ?? 'unknown error'}`);
+      // ⭐ The one share step (lib/photoSave.ts): the date-stamped file.
+      await sharePhoto({ photoId: id, fileName: photo?.download_name, idPhone, stillOpen: () => lightboxVisibleRef.current });
+    } catch (e) {
+      showAlert('Share failed', isPhotoGoneError(e) ? 'This photo is no longer in the event.' : "This photo couldn't be shared. Please try again.");
     } finally {
       setLightboxBusy(null);
       setActionLoading(false);
@@ -735,26 +708,11 @@ export default function MyPhotosScreen() {
         setDownloadProgress({ current: done, total: ids.length });
         try {
           const photo = [...photos, ...otherPhotos].find(p => p.id === id);
-          const filename = buildDownloadFilename(id, photo?.taken_at ?? null, 'jpg');
-          const adminParam = idPhone ? `?adminPhone=${encodeURIComponent(idPhone)}` : '';
-          const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
-          const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-          const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
-          if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-          if (Platform.OS === 'android') {
-            const localPath = dlResult.uri.replace('file://', '');
-            // ⛔ Android: the photo's REAL date (2026-10-26, the user's yes — "all screens
-            // the same"). It only labels the gallery entry (DATE_TAKEN); the file is copied
-            // byte-for-byte. 0 here wrote DATE_TAKEN = 1970. Same as event.tsx.
-            await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined);
-          } else {
-            if (PhotoSaver) {
-              await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);
-            } else {
-              await MediaLibrary.saveToLibraryAsync(cacheUri);
-            }
-          }
-          await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+          // ⭐ The one save step (lib/photoSave.ts); no name → counted as failed.
+          await savePhotoToPhone({
+            photoId: id, fileName: photo?.download_name, eventSlug: slug, eventName, idPhone,
+            dateTakenMs: photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined,
+          });
           saved++;
         // ⛔ This used to be a bare `catch {}` — a photo could vanish from a
         // download and the alert still read "N photos saved". Nothing was
@@ -994,15 +952,6 @@ export default function MyPhotosScreen() {
   // The close button drawn ON the busy cover, so it stays tappable while the
   // cover is up. A child of the topmost view receives taps by definition —
   // see the longer note in event.tsx for why that matters.
-  const lbCoverClose = (
-    <TouchableOpacity
-      style={[styles.lbBtn, styles.lbClose, styles.lbCloseOnCover, { top: insets.top + 12 }]}
-      onPress={() => setLightboxVisible(false)}
-      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-    >
-      <Text style={styles.lbCloseText}>×</Text>
-    </TouchableOpacity>
-  );
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }}>
@@ -1163,69 +1112,26 @@ export default function MyPhotosScreen() {
         </>
       )}
 
-      {/* Lightbox */}
-      <Modal visible={lightboxVisible} animationType="fade" onRequestClose={() => setLightboxVisible(false)}>
-        <GestureHandlerRootView style={styles.lightboxInner}>
-          <View style={[styles.lbHeader, { paddingTop: insets.top + 12 }]}>
-            <Text style={styles.lbCounter}>{lightboxIndex + 1} / {totalFound}</Text>
-            <View style={styles.lbActions}>
-              <TouchableOpacity style={styles.lbBtn} onPress={handleLightboxDownload} disabled={actionLoading}>
-                <Text style={styles.lbBtnText}>Download</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.lbBtn} onPress={handleLightboxShare} disabled={actionLoading}>
-                <Text style={styles.lbBtnText}>Share</Text>
-              </TouchableOpacity>
-            </View>
-            {/* Close — a normal item in the row, so the same centring that
-                lines up the buttons lines this up too. See event.tsx. */}
-            <TouchableOpacity
-              style={[styles.lbBtn, styles.lbClose, !!lightboxBusy && { opacity: 0 }]}
-              onPress={() => setLightboxVisible(false)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={styles.lbCloseText}>×</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
-            <PhotoViewer
-              items={allIds}
-              index={lightboxIndex}
-              getKey={id => id}
-              getUri={id => photoUrls[id]?.displayUrl ?? photoUrls[id]?.url ?? null}
-              onIndexChange={setLightboxIndex}
-              onClose={() => setLightboxVisible(false)}
-              busy={!!lightboxBusy}
-            />
-            {/* ‹ › arrows: drawn by the shared PhotoViewer (2026-11-05). */}
-          </View>
-          <View style={[styles.lbFooter, { paddingBottom: insets.bottom + 12 }]}>
-            {currentLbPhoto?.uploaded_by_name ? (
-              <Text style={styles.lbFooterLine1}>Uploaded by {currentLbPhoto.uploaded_by_name}</Text>
-            ) : null}
-            {currentLbPhoto?.taken_at && (
-              <Text style={styles.lbFooterLine2}>
-                {'Taken on '}{new Date(currentLbPhoto.taken_at).toLocaleString('en-IN', {
-                  day: '2-digit', month: 'short', year: 'numeric',
-                  hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
-                })}
-              </Text>
-            )}
-          </View>
-          {/* Same overlay the Event screen shows for a single photo
-              (lbDownloadOverlay). Without it a tap on Download or Share looked
-              like nothing had happened. */}
-          {lightboxBusy && (
-            <View style={styles.lbDownloadOverlay}>
-              <ActivityIndicator color={Colors.white} size="large" />
-              <Text style={styles.lbDownloadText}>
-                {lightboxBusy === 'share' ? 'Preparing…' : 'Downloading…'}
-              </Text>
-              {lbCoverClose}
-            </View>
-          )}
-          {alertOverlay}
-        </GestureHandlerRootView>
-      </Modal>
+      {/* Full-screen photo — the ONE shared piece (components/PhotoLightbox.tsx,
+          2026-11-08). No Delete here — decided: Find My Photos never deletes. */}
+      <PhotoLightbox
+        visible={lightboxVisible}
+        onClose={() => setLightboxVisible(false)}
+        items={allIds}
+        index={lightboxIndex}
+        onIndexChange={setLightboxIndex}
+        getKey={id => id}
+        getUri={id => photoUrls[id]?.displayUrl ?? photoUrls[id]?.url ?? null}
+        busy={lightboxBusy ?? null}
+        actions={{
+          canDelete: false,
+          onDelete: () => {},
+          onDownload: () => requestAppPermission('gallery', handleLightboxDownload, idPhone ?? null),
+          onShare: handleLightboxShare,
+        }}
+        caption={{ uploadedBy: currentLbPhoto?.uploaded_by_name, takenAt: currentLbPhoto?.taken_at }}
+        overlays={<>{lightboxVisible && primingOverlay}{alertOverlay}</>}
+      />
 
       {downloadingBulk && (
         <View style={styles.uploadOverlay}>

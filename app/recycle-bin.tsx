@@ -7,7 +7,7 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Colors } from '../constants/colors';
-import PhotoViewer from '../components/PhotoViewer';
+import PhotoLightbox, { type LightboxBusy } from '../components/PhotoLightbox';
 import { useAlert } from '../lib/useAlert';
 import { getRecycleBin, recycleBinRestore, recycleBinDeletePermanently, RecycleBinPhoto } from '../lib/api';
 import { markGalleryRestored } from '../lib/galleryRefresh';
@@ -52,6 +52,8 @@ export default function RecycleBinScreen() {
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  // Which action is running, for the full-screen cover ('Restoring…' / 'Deleting...') — 2026-11-08.
+  const [busyKind, setBusyKind] = useState<LightboxBusy>(null);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
 
   const screenW = Dimensions.get('window').width;
@@ -104,6 +106,7 @@ export default function RecycleBinScreen() {
       return;
     }
     setBusy(true);
+    setBusyKind('restore');
     try {
       const result = await recycleBinRestore(slug, ids);
       const restored = result?.restored ?? [];
@@ -127,6 +130,7 @@ export default function RecycleBinScreen() {
       showAlert('Something went wrong', 'Please try again.');
     } finally {
       setBusy(false);
+      setBusyKind(null);
     }
   }
 
@@ -139,6 +143,7 @@ export default function RecycleBinScreen() {
         {
           text: 'Delete permanently', style: 'destructive', onPress: async () => {
             setBusy(true);
+            setBusyKind('delete');
             try {
               const result = await recycleBinDeletePermanently(slug, ids);
               if (result?.error) { showAlert('Error', result.error); return; }
@@ -148,6 +153,7 @@ export default function RecycleBinScreen() {
               showAlert('Something went wrong', 'Please try again.');
             } finally {
               setBusy(false);
+              setBusyKind(null);
             }
           },
         },
@@ -327,31 +333,20 @@ export default function RecycleBinScreen() {
         </View>
       )}
 
-      {/* Full-screen view: swipe between photos; Restore / Delete permanently
-          only. The alert is drawn inside this Modal too, or it would sit
-          behind it. */}
-      <Modal visible={viewerIndex !== null} animationType="fade" onRequestClose={() => setViewerIndex(null)}>
-        <GestureHandlerRootView style={{ flex: 1, backgroundColor: '#000' }}>
-          <View style={[styles.viewerHeader, { paddingTop: insets.top + 12 }]}>
-            <Text style={styles.viewerCounter}>
-              {viewerIndex !== null ? `${viewerIndex + 1} / ${photos.length}` : ''}
-            </Text>
-            <TouchableOpacity onPress={() => setViewerIndex(null)}>
-              <Text style={styles.close}>×</Text>
-            </TouchableOpacity>
-          </View>
-          {viewerIndex !== null && photos.length > 0 && (
-            <PhotoViewer
-              items={photos}
-              index={Math.min(viewerIndex, photos.length - 1)}
-              getKey={p => p.id}
-              getUri={p => p.displayUrl}
-              onIndexChange={setViewerIndex}
-              onClose={() => setViewerIndex(null)}
-              busy={busy}
-            />
-          )}
-          {current && (
+      {/* Full-screen photo — the ONE shared piece (components/PhotoLightbox.tsx,
+          2026-11-08): the same top bar as the other screens, no top buttons;
+          the bin's own two lines + Restore / Delete permanently below
+          (decided 2026-11-01). Alerts drawn inside it so they are not hidden. */}
+      <PhotoLightbox
+        visible={viewerIndex !== null}
+        onClose={() => setViewerIndex(null)}
+        items={photos}
+        index={viewerIndex ?? 0}
+        onIndexChange={setViewerIndex}
+        getKey={p => p.id}
+        getUri={p => p.displayUrl}
+        busy={busy ? (busyKind ?? 'delete') : null}
+        footer={current ? (
             <View style={[styles.viewerBar, { paddingBottom: 16 + insets.bottom }]}>
               {/* Always two lines (the top one may be blank) — one height for
                   every photo, so the photo does not move when swiping. */}
@@ -383,10 +378,10 @@ export default function RecycleBinScreen() {
                 </TouchableOpacity>
               </View>
             </View>
-          )}
-          {viewerIndex !== null && alertOverlay}
-        </GestureHandlerRootView>
-      </Modal>
+          
+        ) : <View />}
+        overlays={viewerIndex !== null ? alertOverlay : null}
+      />
 
       {viewerIndex === null && alertOverlay}
     </View>

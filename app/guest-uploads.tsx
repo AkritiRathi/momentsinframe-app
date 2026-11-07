@@ -23,8 +23,9 @@ let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName
 try { PhotoSaver = require('photo-saver').default; } catch {}
 import { getEventPhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
 import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
-import PhotoViewer from '../components/PhotoViewer';
-import { buildDownloadFilename } from '../lib/downloadFilename';
+import PhotoLightbox from '../components/PhotoLightbox';
+import { savePhotoToPhone, sharePhoto, androidFolderName } from '../lib/photoSave';
+import { useAppPermission } from '../lib/permissions';
 import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
@@ -43,6 +44,11 @@ type GuestPhotoItem = {
   id: string;
   takenAt: string;
   date: string;
+  // From the server's photo list (2026-11-08): the ONE download name (missing →
+  // that photo's download fails) and the photo's own uploader name ('Unknown
+  // User' only when that account was deleted — set by the server).
+  downloadName: string | null;
+  uploadedByName: string | null;
   // Which gallery it belongs to. ⛔ The array itself stays FLAT and in display
   // order (main first, then other) because `photos[lightboxIndex]` is indexed
   // POSITIONALLY throughout this file. Splitting it into two arrays would
@@ -120,6 +126,8 @@ export default function GuestUploadsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showAlert, alertOverlay } = useAlert();
+  // Photo permission before a full-screen Download, as on the Event screen (2026-11-08).
+  const { requestAppPermission, primingOverlay } = useAppPermission();
 
   const eventSlug = params.slug;
   const eventName = params.eventName || eventSlug;
@@ -232,7 +240,7 @@ export default function GuestUploadsScreen() {
       // ⚠ These two were MERGED into one list until 2026-10-17, so this screen
       // showed every photo under "Photo Gallery" while the Event and My Photos
       // screens separated them. Kept apart now, main first.
-      type Row = { id: string; taken_at: string; uploaded_by_mobile: string | null; thumbnail_path?: string | null };
+      type Row = { id: string; taken_at: string; uploaded_by_mobile: string | null; thumbnail_path?: string | null; download_name?: string | null; uploaded_by_name?: string | null };
       const byDate = (a: Row, b: Row) =>
         new Date(a.taken_at).getTime() - new Date(b.taken_at).getTime();
       const forGuest = (rows: Row[]) =>
@@ -257,6 +265,8 @@ export default function GuestUploadsScreen() {
         id: p.id,
         takenAt: p.taken_at,
         date: formatDate(p.taken_at),
+        downloadName: p.download_name ?? null,
+        uploadedByName: p.uploaded_by_name ?? null,
         isOther: otherIds.has(p.id),
       }));
       setPhotos(items);
@@ -560,34 +570,15 @@ export default function GuestUploadsScreen() {
         text: 'Download', onPress: async () => {
           setDownloadingPhoto(true);
           try {
-            const filename = buildDownloadFilename(photo.id, photo.takenAt ?? null, 'jpg');
-            const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
-            const downloadUrl = `${API_BASE_URL}/api/native/photos/${photo.id}/download${adminParam}`;
-            const dateTakenMs = photo.takenAt ? new Date(photo.takenAt).getTime() : 0;
-            const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-            const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
-            if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-            if (Platform.OS === 'android') {
-              let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`);
-              if (!folderName) {
-                folderName = eventName;
-                await SecureStore.setItemAsync(`downloads_folder_name_${eventSlug}`, folderName);
-              }
-              const localPath = dlResult.uri.replace('file://', '');
-              await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', dateTakenMs);
-            } else {
-              if (PhotoSaver) {
-                // ⛔ iPhone: ALWAYS 0 — a date makes PhotoSaver re-encode the JPEG
-                // (2026-10-26, the user's yes). See event.tsx saveFileToDownloads.
-                await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);
-              } else {
-                await MediaLibrary.saveToLibraryAsync(cacheUri);
-              }
-            }
-            await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-            showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : 'Photo saved to Downloads.');
-          } catch (e: any) {
-            showAlert('Error', `Download failed: ${e?.message ?? 'unknown error'}`);
+            // ⭐ The one save step (lib/photoSave.ts, 2026-11-08); name from the server.
+            await savePhotoToPhone({
+              photoId: photo.id, fileName: photo.downloadName, eventSlug, eventName, idPhone: adminPhone,
+              dateTakenMs: photo.takenAt ? new Date(photo.takenAt).getTime() : undefined,
+            });
+            const folderName = Platform.OS === 'android' ? await androidFolderName(eventSlug, eventName) : '';
+            showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : `Photo saved to Downloads/${folderName}.`);
+          } catch (e) {
+            showAlert('Download failed', isPhotoGoneError(e) ? 'This photo is no longer in the event.' : "This photo couldn't be downloaded. Please try again.");
           } finally {
             setDownloadingPhoto(false);
           }
@@ -602,22 +593,10 @@ export default function GuestUploadsScreen() {
     if (!photo) return;
     setSharingPhoto(true);
     try {
-      const filename = buildDownloadFilename(photo.id, photo.takenAt ?? null, 'jpg');
-      const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
-      const downloadUrl = `${API_BASE_URL}/api/native/photos/${photo.id}/download${adminParam}`;
-      const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-      const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
-      if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-      // Lightbox closed while fetching = the share was abandoned. Discard the
-      // file instead of opening a sheet over a screen they have left.
-      if (!lightboxVisibleRef.current) {
-        await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-        return;
-      }
-      await Sharing.shareAsync(cacheUri, { mimeType: 'image/jpeg', dialogTitle: 'Share Photo' });
-      await FileSystem.deleteAsync(cacheUri, { idempotent: true });
-    } catch (e: any) {
-      showAlert('Error', `Share failed: ${e?.message ?? 'unknown error'}`);
+      // ⭐ The one share step (lib/photoSave.ts): the date-stamped file.
+      await sharePhoto({ photoId: photo.id, fileName: photo.downloadName, idPhone: adminPhone, stillOpen: () => lightboxVisibleRef.current });
+    } catch (e) {
+      showAlert('Share failed', isPhotoGoneError(e) ? 'This photo is no longer in the event.' : "This photo couldn't be shared. Please try again.");
     } finally {
       setSharingPhoto(false);
     }
@@ -793,26 +772,11 @@ export default function GuestUploadsScreen() {
         if (downloadCancelledRef.current) break;
         try {
           const photo = photos.find(p => p.id === id);
-          const filename = buildDownloadFilename(id, photo?.takenAt ?? null, 'jpg');
-          const adminParam = adminPhone ? `?adminPhone=${encodeURIComponent(adminPhone)}` : '';
-          const downloadUrl = `${API_BASE_URL}/api/native/photos/${id}/download${adminParam}`;
-          const dateTakenMs = photo?.takenAt ? new Date(photo.takenAt).getTime() : 0;
-          const cacheUri = `${FileSystem.cacheDirectory}${filename}`;
-          const dlResult = await FileSystem.downloadAsync(downloadUrl, cacheUri);
-          if (dlResult.status !== 200) throw new Error(`HTTP ${dlResult.status}`);
-          if (Platform.OS === 'android') {
-            const localPath = dlResult.uri.replace('file://', '');
-            await MediaStore.saveToDownloads(localPath, filename, folderName, 'image/jpeg', dateTakenMs);
-          } else {
-            if (PhotoSaver) {
-              // ⛔ iPhone: ALWAYS 0 — a date makes PhotoSaver re-encode the JPEG
-              // (2026-10-26, the user's yes). See event.tsx saveFileToDownloads.
-              await PhotoSaver.saveToPhotos(cacheUri, 0, eventName);
-            } else {
-              await MediaLibrary.saveToLibraryAsync(cacheUri);
-            }
-          }
-          await FileSystem.deleteAsync(cacheUri, { idempotent: true });
+          // ⭐ The one save step (lib/photoSave.ts); no name → counted as failed.
+          await savePhotoToPhone({
+            photoId: id, fileName: photo?.downloadName, eventSlug, eventName, idPhone: adminPhone,
+            dateTakenMs: photo?.takenAt ? new Date(photo.takenAt).getTime() : undefined,
+          });
           saved++;
         } catch (e) { (isPhotoGoneError(e) ? goneIds : failedIds).push(id); }
         done++;
@@ -1039,15 +1003,6 @@ export default function GuestUploadsScreen() {
   // The close button drawn ON the busy cover, so it stays tappable while the
   // cover is up. A child of the topmost view receives taps by definition —
   // see the longer note in event.tsx for why that matters.
-  const lbCoverClose = (
-    <TouchableOpacity
-      style={[styles.lbBtn, styles.lbClose, styles.lbCloseOnCover, { top: insets.top + 12 }]}
-      onPress={() => setLightboxVisible(false)}
-      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-    >
-      <Text style={styles.lbCloseText}>×</Text>
-    </TouchableOpacity>
-  );
 
   return (
     <>
@@ -1205,88 +1160,27 @@ export default function GuestUploadsScreen() {
         {alertOverlay}
       </GestureHandlerRootView>
 
-      <Modal
+      {/* Full-screen photo — the ONE shared piece (components/PhotoLightbox.tsx,
+          2026-11-08). Delete follows the Event screen: shown only when allowed. */}
+      <PhotoLightbox
         visible={lightboxVisible}
-        animationType="fade"
-        onRequestClose={() => setLightboxVisible(false)}
-      >
-        <GestureHandlerRootView style={styles.lightboxInner}>
-          <View style={[styles.lbHeader, { paddingTop: insets.top + 12 }]}>
-            <Text style={styles.lbCounter}>{lightboxIndex + 1} / {photos.length}</Text>
-            <View style={styles.lbActions}>
-              {showDeleteBtn && (
-                <TouchableOpacity
-                  style={[styles.lbBtn, styles.lbBtnDanger, adminDeleteClosed && { opacity: 0.4 }]}
-                  disabled={adminDeleteClosed}
-                  onPress={() => { const p = photos[lightboxIndex]; if (p) handleLightboxDelete(p.id); }}
-                >
-                  <Text style={[styles.lbBtnText, { color: Colors.danger }]}>Delete</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={styles.lbBtn} onPress={handleLightboxDownload} disabled={downloadingPhoto || sharingPhoto}>
-                <Text style={styles.lbBtnText}>Download</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.lbBtn} onPress={handleLightboxShare} disabled={downloadingPhoto || sharingPhoto}>
-                <Text style={styles.lbBtnText}>Share</Text>
-              </TouchableOpacity>
-            </View>
-            {/* Close — a normal item in the row, so the same centring that
-                lines up the buttons lines this up too. See event.tsx. */}
-            <TouchableOpacity
-              style={[styles.lbBtn, styles.lbClose, (downloadingPhoto || sharingPhoto) && { opacity: 0 }]}
-              onPress={() => setLightboxVisible(false)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={styles.lbCloseText}>×</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={[styles.lbImgWrap, { overflow: 'hidden' }]}>
-            <PhotoViewer
-              items={photos}
-              index={lightboxIndex}
-              getKey={p => p.id}
-              getUri={p => photoUrls[p.id]?.displayUrl ?? photoUrls[p.id]?.thumbUrl ?? null}
-              onIndexChange={setLightboxIndex}
-              onClose={() => setLightboxVisible(false)}
-              busy={downloadingPhoto || sharingPhoto || deletingPhoto}
-              onLoadingChange={l => { imageLoadingRef.current = l; setImageLoading(l); }}
-            />
-            {deletingPhoto && (
-              <View style={styles.lbDeletingOverlay}>
-                <ActivityIndicator size="large" color={Colors.accent} />
-                <Text style={styles.lbDeletingText}>Deleting...</Text>
-              </View>
-            )}
-            {/* ‹ › arrows: drawn by the shared PhotoViewer (2026-11-05). */}
-          </View>
-          <View style={[styles.lbFooter, { paddingBottom: insets.bottom + 12 }]}>
-            <Text style={styles.lbFooterLine1}>Uploaded by {guest.name || 'Unknown User'}</Text>
-            {photos[lightboxIndex]?.takenAt && (
-              <Text style={styles.lbFooterLine2}>
-                {'Taken on '}{new Date(photos[lightboxIndex].takenAt).toLocaleString('en-IN', {
-                  day: '2-digit', month: 'short', year: 'numeric',
-                  hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata',
-                })}
-              </Text>
-            )}
-          </View>
-          {downloadingPhoto && (
-            <View style={styles.lbDownloadOverlay}>
-              <ActivityIndicator color={Colors.white} size="large" />
-              <Text style={styles.lbDownloadText}>Downloading…</Text>
-              {lbCoverClose}
-            </View>
-          )}
-          {sharingPhoto && (
-            <View style={styles.lbDownloadOverlay}>
-              <ActivityIndicator color={Colors.white} size="large" />
-              <Text style={styles.lbDownloadText}>Preparing…</Text>
-              {lbCoverClose}
-            </View>
-          )}
-          {alertOverlay}
-        </GestureHandlerRootView>
-      </Modal>
+        onClose={() => setLightboxVisible(false)}
+        items={photos}
+        index={lightboxIndex}
+        onIndexChange={setLightboxIndex}
+        getKey={p => p.id}
+        getUri={p => photoUrls[p.id]?.displayUrl ?? photoUrls[p.id]?.thumbUrl ?? null}
+        onLoadingChange={l => { imageLoadingRef.current = l; setImageLoading(l); }}
+        busy={deletingPhoto ? 'delete' : downloadingPhoto ? 'download' : sharingPhoto ? 'share' : null}
+        actions={{
+          canDelete: showDeleteBtn && !adminDeleteClosed,
+          onDelete: () => { const p = photos[lightboxIndex]; if (p) handleLightboxDelete(p.id); },
+          onDownload: () => requestAppPermission('gallery', handleLightboxDownload, adminPhone || null),
+          onShare: handleLightboxShare,
+        }}
+        caption={{ uploadedBy: photos[lightboxIndex]?.uploadedByName, takenAt: photos[lightboxIndex]?.takenAt }}
+        overlays={<>{lightboxVisible && primingOverlay}{alertOverlay}</>}
+      />
     </>
   );
 }

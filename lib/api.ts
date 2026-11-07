@@ -225,7 +225,7 @@ export async function getUploadUrl(eventSlug: string, filename: string, contentT
   return post('/api/upload-url', { eventSlug, filename, contentType, uploaderMobile });
 }
 
-export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, eventUserId?: string, sourceModifiedAt?: number | null) {
+export async function processUpload(eventSlug: string, stagingKey: string, originalFilename: string, eventUserId?: string, sourceModifiedAt?: number | null, phoneDate?: number | null) {
   // uploaderMobile and uploaderName are deliberately NOT sent: since
   // 2026-10-08 the server takes the uploader from the login token and looks
   // the name up from app_users, so sending them implied identity came from
@@ -233,7 +233,11 @@ export async function processUpload(eventSlug: string, stagingKey: string, origi
   // sourceModifiedAt: the phone's "last changed" time for the photo (2026-10-29)
   // — stored so the already-uploaded check can tell an EDIT from the same photo.
   const timed = typeof sourceModifiedAt === 'number' && sourceModifiedAt > 0 ? { sourceModifiedAt } : {};
-  return post('/api/upload', { eventSlug, stagingKey, originalFilename, eventUserId, ...timed }, 60000);
+  // phoneDate: the date the photo has ON THE PHONE (2026-11-08, the user's "Yes")
+  // — the server shows Other Photos (no camera information) by it; display only,
+  // never part of duplicate detection.
+  const dated = typeof phoneDate === 'number' && phoneDate > 0 ? { phoneDate } : {};
+  return post('/api/upload', { eventSlug, stagingKey, originalFilename, eventUserId, ...timed, ...dated }, 60000);
 }
 
 // Only the ids are sent. The route takes the caller from the login token and
@@ -476,7 +480,7 @@ export async function updateEventSettings(slug: string, organiserPhone: string, 
 // ⭐ ONE CHUNK of the face search (2026-11-01): pass `after` = the previous
 // chunk's `next` until `next` is null. `total` comes on the first chunk only;
 // `failed` = photos that could not be checked even after a retry.
-export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string, after?: string | null): Promise<{ photos?: { id: string; taken_at: string }[]; otherPhotos?: { id: string; taken_at: string }[]; total?: number | null; checked?: number; failed?: number; next?: string | null; preparing?: number; error?: string }> {
+export async function findMyPhotos(slug: string, selfieBase64: string, adminPhone?: string, userMobile?: string, after?: string | null): Promise<{ photos?: { id: string; taken_at: string; uploaded_by_name?: string; download_name?: string | null }[]; otherPhotos?: { id: string; taken_at: string; uploaded_by_name?: string; download_name?: string | null }[]; total?: number | null; checked?: number; failed?: number; next?: string | null; preparing?: number; error?: string }> {
   // MUST go through authHeaders: this route requires the login token since
   // 2026-10-08. It used a bare fetch and broke the moment the server started
   // enforcing — the exact trap the token work warned about.

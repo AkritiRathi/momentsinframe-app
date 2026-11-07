@@ -3697,6 +3697,7 @@ export default function EventScreen() {
               <Text style={styles.skippedClose}>×</Text>
             </TouchableOpacity>
           </View>
+          <Text style={styles.notifKeepNote}>Notifications are deleted 48 hours after they arrive.</Text>
           {notifications.length === 0 && serverNotifications.length === 0 ? (
             <View style={[styles.notifEmpty, { paddingBottom: insets.bottom + 16 }]}>
               <Text style={styles.notifEmptyTitle}>No notifications yet.</Text>
@@ -3704,16 +3705,20 @@ export default function EventScreen() {
             </View>
           ) : (
             <FlatList
-              data={notifications}
-              keyExtractor={n => n.id}
-              ListHeaderComponent={serverNotifications.length > 0 ? (
-                <>
-                  {serverNotifications.map(n => (
+              data={[
+                ...serverNotifications.map(n => ({ kind: 'server' as const, key: `s_${n.id}`, at: new Date(n.created_at).getTime(), n })),
+                ...notifications.map(item => ({ kind: 'upload' as const, key: `u_${item.id}`, at: new Date(item.timestamp).getTime(), item })),
+              ].sort((x, y) => y.at - x.at)}
+              keyExtractor={row => row.key}
+              contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 16 }}
+              renderItem={({ item: row }) => {
+                if (row.kind === 'server') {
+                  const n = row.n;
+                  return (
                     <Swipeable
-                      key={n.id}
                       renderRightActions={() => (
                         <TouchableOpacity
-                          style={{ backgroundColor: '#E53E3E', justifyContent: 'center', alignItems: 'center', width: 80, borderRadius: 12, marginBottom: 10, marginRight: 16 }}
+                          style={{ backgroundColor: '#E53E3E', justifyContent: 'center', alignItems: 'center', width: 80, borderRadius: 12, marginLeft: 8 }}
                           onPress={async () => {
                             if (userMobile) await deleteServerNotification(n.id, slug);
                             setServerNotifications(prev => prev.filter(x => x.id !== n.id));
@@ -3723,7 +3728,7 @@ export default function EventScreen() {
                         </TouchableOpacity>
                       )}
                     >
-                      <View style={{ backgroundColor: '#1C1C1C', borderRadius: 12, marginHorizontal: 16, marginBottom: 10, padding: 14, borderLeftWidth: 3, borderLeftColor: '#F5C842' }}>
+                      <View style={{ backgroundColor: '#1C1C1C', borderRadius: 12, padding: 14, borderLeftWidth: 3, borderLeftColor: '#F5C842' }}>
                         <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
                           <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', marginBottom: 4, flex: 1 }}>{n.message}</Text>
                           <TouchableOpacity onPress={async () => {
@@ -3733,7 +3738,7 @@ export default function EventScreen() {
                             <Text style={styles.skippedClose}>×</Text>
                           </TouchableOpacity>
                         </View>
-                        <Text style={{ color: '#888780', fontSize: 12, marginBottom: n.photo_id ? 10 : 0 }}>{new Date(n.created_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
+                        <Text style={{ color: '#888780', fontSize: 12, marginBottom: n.photo_id ? 10 : 0 }}>{new Date(n.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' })} · {new Date(n.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' })}</Text>
                         {((n.photo_ids && n.photo_ids.length > 0) || n.photo_id) && (
                           <TouchableOpacity onPress={async () => {
                             const ids = (n.photo_ids && n.photo_ids.length > 0) ? n.photo_ids : [n.photo_id!];
@@ -3759,14 +3764,9 @@ export default function EventScreen() {
                         )}
                       </View>
                     </Swipeable>
-                  ))}
-                  {notifications.length > 0 && (
-                    <Text style={{ color: '#888780', fontSize: 11, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase', marginHorizontal: 16, marginBottom: 8, marginTop: 4 }}>Upload History</Text>
-                  )}
-                </>
-              ) : null}
-              contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: insets.bottom + 16 }}
-              renderItem={({ item }) => {
+                  );
+                }
+                const item = row.item;
                 const d = new Date(item.timestamp);
                 const dateStr = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
                 const timeStr = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
@@ -4098,6 +4098,7 @@ const styles = StyleSheet.create({
 
   // Notifications
   notifPanelTitle: { fontSize: 18, fontWeight: '700', color: Colors.white, flex: 1 },
+  notifKeepNote: { fontSize: 12, color: '#888780', paddingHorizontal: 20, paddingTop: 10 },
   notifEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36, gap: 12 },
   notifEmptyTitle: { fontSize: 17, fontWeight: '600', color: Colors.textMuted, textAlign: 'center' },
   notifEmptySub: { fontSize: 14, color: '#666', textAlign: 'center', lineHeight: 22 },

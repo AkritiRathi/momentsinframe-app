@@ -318,6 +318,11 @@ let _bgCancelled = false;
 // finished summary so the user can screenshot it. Remove with the other timers.
 let _uiTimerStart = 0;   // when the user started the upload
 let _uiTimerFirst = 0;   // when the first photo actually started uploading
+// ⏱ TEMPORARY (2026-11-08, the user's yes): split the wait before the first photo
+// (photo picker upload only) — looking up the photos on the phone, then loading
+// the event list for the already-uploaded check. Remove with the other timers.
+let _uiTimerLookup = 0;  // seconds spent looking up the chosen photos
+let _uiTimerList = 0;    // seconds spent loading the event list
 function uiTimerLabel(count: number): string {
   if (!_uiTimerStart) return '';
   const total = (Date.now() - _uiTimerStart) / 1000;
@@ -326,7 +331,8 @@ function uiTimerLabel(count: number): string {
   _uiTimerStart = 0;
   return ` · ⏱ ${fmt(total)} for ${count} photo${count === 1 ? '' : 's'}`
     + (count > 0 ? ` (${(total / count).toFixed(1)} s each)` : '')
-    + (first !== null ? ` · 1st photo started after ${fmt(first)}` : '');
+    + (first !== null ? ` · 1st photo started after ${fmt(first)}` : '')
+    + (_uiTimerLookup || _uiTimerList ? ` (photo lookup ${_uiTimerLookup.toFixed(1)} s · event list ${_uiTimerList.toFixed(1)} s)` : '');
 }
 let _bgDeselectedIds: Set<string> = new Set();
 // ⛔ THESE TWO MUST MATCH WHAT THE REVIEW SCREEN USED.
@@ -663,7 +669,7 @@ async function backgroundUploadTask(): Promise<void> {
   const timingRunStart = Date.now();
 
   async function uploadOne(asset: MediaLibrary.Asset, index: number): Promise<void> {
-    const tStart = Date.now(); let tUrl: number | null = null; let tCopy: number | null = null; let tPut: number | null = null; let tSave: number | null = null;
+    const tStart = Date.now(); let tUrl: number | null = null; let tCopy: number | null = null; let tPut: number | null = null; let tSave: number | null = null; let iosErr: string | null = null; // ⏱ iosErr: timer only
     const filename = asset.filename;
     const uploadUri = localUris[index];
     const contentType = getMimeType(uploadUri ?? asset.uri);
@@ -682,12 +688,42 @@ async function backgroundUploadTask(): Promise<void> {
           try {
             await FileSystem.copyAsync({ from: uploadUri!, to: cacheUri });
             tCopy = Date.now(); // ⏱ timer only
-            const iosResult = await FileSystem.uploadAsync(uploadUrl, cacheUri, {
+            // ⭐ 2026-11-09 (the user's "Yes for both"): send the normal (foreground)
+            // way while the app is open. The background way hands the photo to
+            // iOS, which treats it as low priority even with the app on screen
+            // (measured: same iPhone 1.9 vs 0.2 MB/s). App not open → background,
+            // as before. A normal send that fails (e.g. the user left the app) is
+            // sent ONCE more — the normal way if the app is open again. The cache
+            // copy above and the delete below are unchanged (protected item 2).
+            const sendIos = (open: boolean) => FileSystem.uploadAsync(uploadUrl, cacheUri, {
               httpMethod: 'PUT',
               uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
               headers: { 'Content-Type': contentType },
+              sessionType: open ? FileSystem.FileSystemSessionType.FOREGROUND : FileSystem.FileSystemSessionType.BACKGROUND,
             });
+            const openAtStart = AppState.currentState === 'active';
+            // ⏱ timer only: why a send failed (short), sent with the timer line.
+            const why = (e: any) => String(e?.code ?? e?.message ?? e).replace(/https?:\S+/g, '<url>').slice(0, 80);
+            let iosResult: FileSystem.FileSystemUploadResult;
+            try {
+              iosResult = await sendIos(openAtStart);
+            } catch (e) {
+              iosErr = why(e); // ⏱ timer only
+              if (!openAtStart) throw e;
+              const openNow = AppState.currentState === 'active';
+              try {
+                iosResult = await sendIos(openNow);
+              } catch (e2) {
+                iosErr += ' / ' + why(e2); // ⏱ timer only
+                if (!openNow) throw e2;
+                // 2026-11-09 (the user's "1. Yes"): last try with the background
+                // way — it keeps retrying through a stalled connection (5G) until
+                // the photo gets through, as before 2026-11-09. No photo lost to a stall.
+                iosResult = await sendIos(false);
+              }
+            }
             uploadOk = iosResult.status >= 200 && iosResult.status < 300;
+            if (!uploadOk) iosErr = (iosErr ? iosErr + ' / ' : '') + 'HTTP ' + iosResult.status; // ⏱ timer only
           } catch {
             // upload failed, uploadOk stays false
           } finally {
@@ -721,7 +757,7 @@ async function backgroundUploadTask(): Promise<void> {
       result = { status: 'failed', section: null, uri: asset.uri, filename };
     }
     results[index] = result;
-    reportUploadTiming({ src: Platform.OS + '-date', run: timingRun, i: index, startMs: tStart - timingRunStart, urlMs: tUrl ? tUrl - tStart : null, copyMs: tCopy ? tCopy - (tUrl ?? tStart) : null, putMs: tPut ? tPut - (tCopy ?? tUrl ?? tStart) : null, saveMs: tSave && tPut ? tSave - tPut : null, totalMs: Date.now() - tStart, status: result.status }); // ⏱ timer only
+    reportUploadTiming({ src: Platform.OS + '-date', run: timingRun, i: index, startMs: tStart - timingRunStart, urlMs: tUrl ? tUrl - tStart : null, copyMs: tCopy ? tCopy - (tUrl ?? tStart) : null, putMs: tPut ? tPut - (tCopy ?? tUrl ?? tStart) : null, saveMs: tSave && tPut ? tSave - tPut : null, totalMs: Date.now() - tStart, status: result.status, err: iosErr }); // ⏱ timer only
     completed += 1;
     _bgProgressCb?.(completed, toUpload.length);
     try {
@@ -1498,7 +1534,7 @@ export default function EventScreen() {
       return;
     }
 
-    _uiTimerStart = Date.now(); _uiTimerFirst = 0; // ⏱ timer only
+    _uiTimerStart = Date.now(); _uiTimerFirst = 0; _uiTimerLookup = 0; _uiTimerList = 0; // ⏱ timer only
     bgUploadCancelledRef.current = false;
     _bgCancelled = false;
     setBgCancelRequested(false);
@@ -1587,6 +1623,7 @@ export default function EventScreen() {
 
       return { uri, filename, modifiedAt, phoneAt };
     }));
+    _uiTimerLookup = (Date.now() - _uiTimerStart) / 1000; // ⏱ timer only
     const localUris = resolved.map(r => r.uri);
 
     if (bgUploadCancelledRef.current) {
@@ -1629,6 +1666,7 @@ export default function EventScreen() {
     // Only this user's own photos count: the same filename from someone else is
     // a different photo and must still go through backend pHash detection.
     let pickerPreSkipped = 0;
+    const tList = Date.now(); // ⏱ timer only
     try {
       const existingRes = await getEventPhotos(slug);
       if (!existingRes.error) {
@@ -1652,6 +1690,7 @@ export default function EventScreen() {
         }
       }
     } catch {}
+    _uiTimerList = (Date.now() - tList) / 1000; // ⏱ timer only
 
     if (assets.length === 0) {
       setBgUploading(false);
@@ -1688,7 +1727,7 @@ export default function EventScreen() {
     const timingRunStart = Date.now();
 
     async function uploadOne(asset: ImagePicker.ImagePickerAsset, index: number) {
-      const tStart = Date.now(); let tUrl: number | null = null; let tCopy: number | null = null; let tPut: number | null = null; let tSave: number | null = null;
+      const tStart = Date.now(); let tUrl: number | null = null; let tCopy: number | null = null; let tPut: number | null = null; let tSave: number | null = null; let iosErr: string | null = null; // ⏱ iosErr: timer only
       const filename = resolvedFilenames[index];
       const uploadUri = localUris[index];
       const contentType = getMimeType(uploadUri);
@@ -1711,12 +1750,42 @@ export default function EventScreen() {
               try {
                 await FileSystem.copyAsync({ from: uploadUri, to: cacheUri });
                 tCopy = Date.now(); // ⏱ timer only
-                const iosResult = await FileSystem.uploadAsync(uploadUrl, cacheUri, {
+                // ⭐ 2026-11-09 (the user's "Yes for both"): send the normal (foreground)
+                // way while the app is open. The background way hands the photo to
+                // iOS, which treats it as low priority even with the app on screen
+                // (measured: same iPhone 1.9 vs 0.2 MB/s). App not open → background,
+                // as before. A normal send that fails (e.g. the user left the app) is
+                // sent ONCE more — the normal way if the app is open again. The cache
+                // copy above and the delete below are unchanged (protected item 2).
+                const sendIos = (open: boolean) => FileSystem.uploadAsync(uploadUrl, cacheUri, {
                   httpMethod: 'PUT',
                   uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
                   headers: { 'Content-Type': contentType },
+                  sessionType: open ? FileSystem.FileSystemSessionType.FOREGROUND : FileSystem.FileSystemSessionType.BACKGROUND,
                 });
+                const openAtStart = AppState.currentState === 'active';
+                // ⏱ timer only: why a send failed (short), sent with the timer line.
+                const why = (e: any) => String(e?.code ?? e?.message ?? e).replace(/https?:\S+/g, '<url>').slice(0, 80);
+                let iosResult: FileSystem.FileSystemUploadResult;
+                try {
+                  iosResult = await sendIos(openAtStart);
+                } catch (e) {
+                  iosErr = why(e); // ⏱ timer only
+                  if (!openAtStart) throw e;
+                  const openNow = AppState.currentState === 'active';
+                  try {
+                    iosResult = await sendIos(openNow);
+                  } catch (e2) {
+                    iosErr += ' / ' + why(e2); // ⏱ timer only
+                    if (!openNow) throw e2;
+                    // 2026-11-09 (the user's "1. Yes"): last try with the background
+                    // way — it keeps retrying through a stalled connection (5G) until
+                    // the photo gets through, as before 2026-11-09. No photo lost to a stall.
+                    iosResult = await sendIos(false);
+                  }
+                }
                 uploadOk = iosResult.status >= 200 && iosResult.status < 300;
+                if (!uploadOk) iosErr = (iosErr ? iosErr + ' / ' : '') + 'HTTP ' + iosResult.status; // ⏱ timer only
               } catch {
                 // upload failed, uploadOk stays false
               } finally {
@@ -1752,7 +1821,7 @@ export default function EventScreen() {
       }
 
       results[index] = result;
-      reportUploadTiming({ src: Platform.OS + '-pick', run: timingRun, i: index, kb: typeof asset.fileSize === 'number' ? Math.round(asset.fileSize / 1024) : null, startMs: tStart - timingRunStart, urlMs: tUrl ? tUrl - tStart : null, copyMs: tCopy ? tCopy - (tUrl ?? tStart) : null, putMs: tPut ? tPut - (tCopy ?? tUrl ?? tStart) : null, saveMs: tSave && tPut ? tSave - tPut : null, totalMs: Date.now() - tStart, status: result.status }); // ⏱ timer only
+      reportUploadTiming({ src: Platform.OS + '-pick', run: timingRun, i: index, kb: typeof asset.fileSize === 'number' ? Math.round(asset.fileSize / 1024) : null, startMs: tStart - timingRunStart, urlMs: tUrl ? tUrl - tStart : null, copyMs: tCopy ? tCopy - (tUrl ?? tStart) : null, putMs: tPut ? tPut - (tCopy ?? tUrl ?? tStart) : null, saveMs: tSave && tPut ? tSave - tPut : null, totalMs: Date.now() - tStart, status: result.status, err: iosErr }); // ⏱ timer only
       completedCount++;
       setBgUploadProgress({ current: completedCount, total: assets.length });
     }
@@ -1845,7 +1914,7 @@ export default function EventScreen() {
     // user had just switched on and ticked.
     _bgIncludeWhatsapp = includeWhatsapp;
     _bgEventName = params.name ?? '';
-    _uiTimerStart = Date.now(); _uiTimerFirst = 0; // ⏱ timer only
+    _uiTimerStart = Date.now(); _uiTimerFirst = 0; _uiTimerLookup = 0; _uiTimerList = 0; // ⏱ timer only
     _bgCancelled = false;
     bgUploadCancelledRef.current = false;
     setBgCancelRequested(false);

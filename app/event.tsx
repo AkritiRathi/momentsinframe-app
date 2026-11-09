@@ -54,6 +54,7 @@ import { Typography } from '../constants/typography';
 import { useAlert, alertStyles } from '../lib/useAlert';
 import { askAndDeletePhotos } from '../lib/deletePrompt';
 import { consumeGalleryRestored } from '../lib/galleryRefresh';
+import { reportPerf, perfView, perfZipArrived } from '../lib/perf'; // ⏱ TEMPORARY — remove before the launch
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const GAP = 2;
@@ -323,11 +324,17 @@ let _uiTimerFirst = 0;   // when the first photo actually started uploading
 // the event list for the already-uploaded check. Remove with the other timers.
 let _uiTimerLookup = 0;  // seconds spent looking up the chosen photos
 let _uiTimerList = 0;    // seconds spent loading the event list
-function uiTimerLabel(count: number): string {
+function uiTimerLabel(count: number, op?: string, results?: { status: string }[], preSkipped?: number): string {
   if (!_uiTimerStart) return '';
   const total = (Date.now() - _uiTimerStart) / 1000;
   const fmt = (s: number) => (s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${s.toFixed(1)} s`);
   const first = _uiTimerFirst ? (_uiTimerFirst - _uiTimerStart) / 1000 : null;
+  // ⏱ TEMPORARY (2026-11-10, the user's "Yes"): the same numbers as the on-screen
+  // summary, sent as ONE RUN_SUMMARY line. Remove before the launch.
+  if (op && results) {
+    const n = (s: string) => results.filter(r => r.status === s).length;
+    reportPerf('ev', { kind: 'summary', op, n: count, ok: n('success'), upgraded: n('upgraded'), dups: n('duplicate'), fails: n('failed'), cancelled: n('cancelled'), ms: Math.round(total * 1000), eachMs: count > 0 ? Math.round(total * 1000 / count) : null, firstMs: first !== null ? Math.round(first * 1000) : null, lookupMs: Math.round(_uiTimerLookup * 1000), listMs: Math.round(_uiTimerList * 1000), skipped: preSkipped ?? null });
+  }
   _uiTimerStart = 0;
   return ` · ⏱ ${fmt(total)} for ${count} photo${count === 1 ? '' : 's'}`
     + (count > 0 ? ` (${(total / count).toFixed(1)} s each)` : '')
@@ -812,7 +819,7 @@ const PhotoThumb = memo(forwardRef<View, PhotoThumbProps>(function PhotoThumb({
       activeOpacity={0.85}
     >
       {thumbUrl
-        ? <ExpoImage source={{ uri: thumbUrl }} style={styles.thumbImage} contentFit="cover" cachePolicy="memory-disk" recyclingKey={photoId} />
+        ? <ExpoImage source={{ uri: thumbUrl }} style={styles.thumbImage} contentFit="cover" cachePolicy="memory-disk" recyclingKey={photoId} onLoadStart={() => perfView.thumbStart(thumbUrl)} onLoad={() => perfView.thumbLoaded(thumbUrl)} /* ⏱ PERF */ />
         : <View style={styles.thumbSkeleton} />
       }
       {isNew && !selectMode && !deleteMode && (
@@ -991,6 +998,13 @@ export default function EventScreen() {
 
   // Background upload by date
   const [bgUploading, setBgUploading] = useState(false);
+  // 2026-11-10 (the user's "Yes"): a "Preparing…" cover from the tap on an
+  // upload choice until the next thing appears (picker / "Start upload?" /
+  // the Upload by date box), so the screen cannot be tapped while the phone
+  // prepares the photos or checks the Photos permission. The ref is the
+  // guard: a second tap while preparing does nothing.
+  const [preparingUpload, setPreparingUpload] = useState(false);
+  const preparingUploadRef = useRef(false);
   const [bgUploadProgress, setBgUploadProgress] = useState({ current: 0, total: 0 });
   const [bgCancelRequested, setBgCancelRequested] = useState(false);
   const [showDatePickerModal, setShowDatePickerModal] = useState(false);
@@ -1192,7 +1206,9 @@ export default function EventScreen() {
     const lastVisitedAt = await getLastVisitedAt(slug);
     if (!skipSave) await saveLastVisitedAt(slug, visitedAt);
     async function attempt() {
+      perfView.open('ev'); // ⏱ PERF
       const data = await getEventPhotos(slug, params.adminPhone || undefined, userMobileRef.current ?? undefined);
+      perfView.listLoaded(); // ⏱ PERF
       if (data.error) { setLoading(false); showAlert('Error', data.error); return; }
       const main: Photo[] = data.photos ?? [];
       const other: Photo[] = data.otherPhotos ?? [];
@@ -1501,14 +1517,19 @@ export default function EventScreen() {
     if (retryAssets) {
       assets = retryAssets;
     } else {
-      const pickResult = source === 'camera'
-        ? await ImagePicker.launchCameraAsync({ quality: 1 })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            allowsMultipleSelection: true,
-            selectionLimit: UPLOAD_BATCH_LIMIT,
-            quality: 1,
-          });
+      if (!beginUploadPrep()) return;
+      const pickResult = await (async () => {
+        try {
+          return source === 'camera'
+            ? await ImagePicker.launchCameraAsync({ quality: 1 })
+            : await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsMultipleSelection: true,
+                selectionLimit: UPLOAD_BATCH_LIMIT,
+                quality: 1,
+              });
+        } finally { endUploadPrep(); }
+      })();
 
       if (pickResult.canceled || !pickResult.assets?.length) return;
       assets = pickResult.assets;
@@ -1854,7 +1875,7 @@ export default function EventScreen() {
     // looks like 4 silently vanished. Same wording Upload by Date uses.
     const withSkipped = (base: string) =>
       pickerPreSkipped > 0 ? `${base} · ${pickerPreSkipped} already uploaded` : base;
-    const timerLabel = uiTimerLabel(finalResults.length); // ⏱ timer only
+    const timerLabel = uiTimerLabel(finalResults.length, 'upload-pick', finalResults, pickerPreSkipped); // ⏱ timer only
     setUploadSummary(withSkipped(summarizeUploadResults(finalResults)) + timerLabel);
 
     const summary = withSkipped(summarizeUploadResults(finalResults)) + timerLabel;
@@ -1957,7 +1978,7 @@ export default function EventScreen() {
         const base = summarizeUploadResults(results);
         summary = preSkipped > 0 ? `${base} · ${preSkipped} already uploaded` : base;
       }
-      summary += uiTimerLabel(results.length); // ⏱ timer only
+      summary += uiTimerLabel(results.length, 'upload-date', results, preSkipped); // ⏱ timer only
       setUploadSummary(summary);
       const dupsAndUpgrades = results.filter(r => r.status === 'duplicate' || r.status === 'upgraded');
       const failedResults = results.filter(r => r.status === 'failed');
@@ -2037,7 +2058,11 @@ export default function EventScreen() {
       showAlert('Upload in progress', 'A background upload is already running. Please wait for it to complete.');
       return;
     }
-    const perm = await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']);
+    if (!beginUploadPrep()) return;
+    const perm = await (async () => {
+      try { return await MediaLibrary.requestPermissionsAsync(false, ['photo', 'video']); }
+      finally { endUploadPrep(); }
+    })();
     if (!perm.granted) {
       if (shouldShowDeniedAlert(perm.granted, perm.canAskAgain)) {
         showPermissionDeniedAlert('Photos');
@@ -2117,6 +2142,17 @@ export default function EventScreen() {
   async function toggleIncludeWhatsapp(next: boolean) {
     setIncludeWhatsapp(next);
     await loadPhotoSelectAssets(photoSelectDate, next);
+  }
+
+  function beginUploadPrep(): boolean {
+    if (preparingUploadRef.current) return false;
+    preparingUploadRef.current = true;
+    setPreparingUpload(true);
+    return true;
+  }
+  function endUploadPrep() {
+    preparingUploadRef.current = false;
+    setPreparingUpload(false);
   }
 
   function showUploadOptions() {
@@ -2208,6 +2244,7 @@ export default function EventScreen() {
     // BETWEEN parts, so pressing it during the transfer did nothing and on
     // the LAST part did nothing at all — the download just finished
     // (reported 2026-10-18). `cancelAsync` stops it mid-transfer.
+    const tPerfDl = Date.now(); // ⏱ PERF
     zipTaskRef.current = task;
     try {
       const dlResult = await task.downloadAsync();
@@ -2215,6 +2252,7 @@ export default function EventScreen() {
       // the flag before treating that as a failure.
       if (downloadCancelledRef.current) throw new DownloadCancelled();
       if (!dlResult || dlResult.status !== 200) throw new Error(`HTTP ${dlResult?.status ?? 'error'}`);
+      perfZipArrived('ev', cacheUri, Date.now() - tPerfDl); // ⏱ PERF
     } finally {
       zipTaskRef.current = null;
     }
@@ -2249,10 +2287,12 @@ export default function EventScreen() {
         text: 'Download', onPress: async () => {
           setDownloadingPhoto(true);
           try {
+            const tPerf = Date.now(); // ⏱ PERF
             await savePhotoToPhone({
               photoId: id, fileName: photo?.download_name, eventSlug: slug, eventName: params.name, idPhone,
               dateTakenMs: photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined,
             });
+            reportPerf('ev', { kind: 'download', op: 'full-jpg', ms: Date.now() - tPerf }); // ⏱ PERF
             const folderName = Platform.OS === 'android' ? await androidFolderName(slug, params.name) : '';
             showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : `Photo saved to Downloads/${folderName}.`);
           } catch (e) {
@@ -2272,7 +2312,9 @@ export default function EventScreen() {
     const photo = [...photos, ...otherPhotos].find(p => p.id === id);
     setSharingPhoto(true);
     try {
+      const tPerf = Date.now(); // ⏱ PERF
       await sharePhoto({ photoId: id, fileName: photo?.download_name, idPhone, stillOpen: () => lightboxVisibleRef.current });
+      reportPerf('ev', { kind: 'download', op: 'full-share', ms: Date.now() - tPerf }); // ⏱ PERF
     } catch (e) {
       showAlert('Share failed', isPhotoGoneError(e) ? 'This photo is no longer in the event.' : "This photo couldn't be shared. Please try again.");
     } finally {
@@ -2280,7 +2322,14 @@ export default function EventScreen() {
     }
   }
 
+  // ⏱ TEMPORARY (2026-11-10, the user's "Yes"): one RUN_SUMMARY line per finished
+  // multi-photo download. Remove before the launch (project_performance_tests.md).
   async function saveAsJpgs(ids: string[], folderPath: string | null, mode: 'downloads' | 'gallery') {
+    const tRun = Date.now(); // ⏱ PERF
+    try { await saveAsJpgsInner(ids, folderPath, mode); }
+    finally { reportPerf('ev', { kind: 'summary', op: 'select-jpg', n: ids.length, cancelled: downloadCancelledRef.current ? 1 : 0, ms: Date.now() - tRun }); } // ⏱ PERF
+  }
+  async function saveAsJpgsInner(ids: string[], folderPath: string | null, mode: 'downloads' | 'gallery') {
     const allPhotos = [...photos, ...otherPhotos];
     downloadCancelledRef.current = false;
     setDownloadMode('jpg');
@@ -2303,10 +2352,12 @@ export default function EventScreen() {
         try {
           const photo = allPhotos.find(p => p.id === id);
           // ⭐ The one save step (lib/photoSave.ts); no name → counted as failed.
+          const tPerf = Date.now(); // ⏱ PERF
           await savePhotoToPhone({
             photoId: id, fileName: photo?.download_name, eventSlug: slug, eventName: params.name, idPhone,
             dateTakenMs: photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined,
           });
+          reportPerf('ev', { kind: 'download', op: 'select-jpg', ms: Date.now() - tPerf }); // ⏱ PERF
           saved++;
         } catch (e) { (isPhotoGoneError(e) ? goneIds : failedIds).push(id); }
         completed++;
@@ -2353,7 +2404,14 @@ export default function EventScreen() {
     }
   }
 
+  // ⏱ TEMPORARY (2026-11-10, the user's "Yes"): one RUN_SUMMARY line per finished
+  // multi-photo download. Remove before the launch (project_performance_tests.md).
   async function downloadAsZip(ids: string[]) {
+    const tRun = Date.now(); // ⏱ PERF
+    try { await downloadAsZipInner(ids); }
+    finally { reportPerf('ev', { kind: 'summary', op: 'zip', n: ids.length, cancelled: downloadCancelledRef.current ? 1 : 0, ms: Date.now() - tRun }); } // ⏱ PERF
+  }
+  async function downloadAsZipInner(ids: string[]) {
     // Kept apart on purpose — only the unreadable ones can be retried.
     const allMissing: string[] = [];
     const allUnreadable: string[] = [];
@@ -2378,7 +2436,9 @@ export default function EventScreen() {
         setZipBytes(null); // next part is being built again — spinner, not bar
         // A fresh controller per part: aborting one must not poison the next.
         zipAbortRef.current = new AbortController();
+        const tPerfZip = Date.now(); // ⏱ PERF
         const zipRes = await prepareZip(slug, batchIds, idPhone || undefined, zipAbortRef.current.signal);
+        reportPerf('ev', { kind: 'download', op: 'zip-wait', n: batchIds.length, ms: Date.now() - tPerfZip }); // ⏱ PERF
         // ⛔ Check AFTER every await, not only at the top of the loop. The
         // awaits are where all the time goes, so a Cancel pressed during one
         // must take effect the moment it returns — otherwise the next step
@@ -3410,7 +3470,7 @@ export default function EventScreen() {
         onIndexChange={setLightboxIndex}
         getKey={p => p.id}
         getUri={p => photoUrls[p.id]?.displayUrl ?? photoUrls[p.id]?.url ?? null}
-        onLoadingChange={l => { imageLoadingRef.current = l; setImageLoading(l); }}
+        onLoadingChange={l => { imageLoadingRef.current = l; setImageLoading(l); perfView.fullLoading(l); /* ⏱ PERF */ }}
         busy={deletingPhoto ? 'delete' : downloadingPhoto ? 'download' : sharingPhoto ? 'share' : null}
         actions={{
           canDelete: !!(canDelete && (
@@ -3560,6 +3620,13 @@ export default function EventScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {preparingUpload && (
+        <View style={styles.preparingCover}>
+          <ActivityIndicator size="large" color="#F5C842" />
+          <Text style={styles.preparingText}>Preparing…</Text>
+        </View>
+      )}
 
       {alertOverlay}
 
@@ -4167,6 +4234,8 @@ const styles = StyleSheet.create({
 
   // Notifications
   notifPanelTitle: { fontSize: 18, fontWeight: '700', color: Colors.white, flex: 1 },
+  preparingCover: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', gap: 12, zIndex: 50 },
+  preparingText: { fontSize: 15, fontWeight: '600', color: Colors.white },
   notifKeepNote: { fontSize: 12, color: '#888780', paddingHorizontal: 20, paddingTop: 10 },
   notifEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36, gap: 12 },
   notifEmptyTitle: { fontSize: 17, fontWeight: '600', color: Colors.textMuted, textAlign: 'center' },

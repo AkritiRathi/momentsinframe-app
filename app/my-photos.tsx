@@ -30,6 +30,7 @@ import { API_BASE_URL } from '../constants/config';
 import { Colors } from '../constants/colors';
 import { Typography } from '../constants/typography';
 import { useAlert } from '../lib/useAlert';
+import { reportPerf, perfView, perfZipArrived } from '../lib/perf'; // ⏱ TEMPORARY — remove before the launch
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const OVAL_W = SCREEN_WIDTH * 0.65;
@@ -85,7 +86,7 @@ const Thumb = memo(forwardRef<View, ThumbProps>(function Thumb(
       delayLongPress={350}
     >
       {thumbUrl
-        ? <ExpoImage source={{ uri: thumbUrl }} style={{ width: THUMB_SIZE, height: THUMB_SIZE }} contentFit="cover" recyclingKey={id} />
+        ? <ExpoImage source={{ uri: thumbUrl }} style={{ width: THUMB_SIZE, height: THUMB_SIZE }} contentFit="cover" recyclingKey={id} onLoadStart={() => perfView.thumbStart(thumbUrl)} onLoad={() => perfView.thumbLoaded(thumbUrl)} /* ⏱ PERF */ />
         : <View style={styles.thumbPlaceholder}><ActivityIndicator color={Colors.accent} /></View>
       }
       {downloadMode && (
@@ -424,10 +425,12 @@ export default function MyPhotosScreen() {
           try {
             const photo = [...photos, ...otherPhotos].find(p => p.id === id);
             // ⭐ The one save step (lib/photoSave.ts, 2026-11-08); name from the server.
+            const tPerf = Date.now(); // ⏱ PERF
             await savePhotoToPhone({
               photoId: id, fileName: photo?.download_name, eventSlug: slug, eventName, idPhone,
               dateTakenMs: photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined,
             });
+            reportPerf('fmp', { kind: 'download', op: 'full-jpg', ms: Date.now() - tPerf }); // ⏱ PERF
             const folderName = Platform.OS === 'android' ? await androidFolderName(slug, eventName) : '';
             showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : `Photo saved to Downloads/${folderName}.`);
           } catch (e) {
@@ -450,7 +453,9 @@ export default function MyPhotosScreen() {
     try {
       const photo = [...photos, ...otherPhotos].find(p => p.id === id);
       // ⭐ The one share step (lib/photoSave.ts): the date-stamped file.
+      const tPerf = Date.now(); // ⏱ PERF
       await sharePhoto({ photoId: id, fileName: photo?.download_name, idPhone, stillOpen: () => lightboxVisibleRef.current });
+      reportPerf('fmp', { kind: 'download', op: 'full-share', ms: Date.now() - tPerf }); // ⏱ PERF
     } catch (e) {
       showAlert('Share failed', isPhotoGoneError(e) ? 'This photo is no longer in the event.' : "This photo couldn't be shared. Please try again.");
     } finally {
@@ -550,6 +555,7 @@ export default function MyPhotosScreen() {
       const fresh = (list: Photo[]) => list.filter(p => !seen.has(p.id) && (seen.add(p.id), true));
       setPreparing(0);
       setSearchProgress({ checked: 0, total, found: 0 });
+      const tPerfSearch = Date.now(); // ⏱ PERF
       do {
         const result = await findMyPhotos(slug, base64, adminPhone, userMobile, after);
         if (result.error) {
@@ -593,6 +599,8 @@ export default function MyPhotosScreen() {
       setPhotos(main);
       setOtherPhotos(other);
       setMode('results');
+      reportPerf('fmp', { kind: 'search', op: 'app', matches: main.length + other.length, ms: Date.now() - tPerfSearch }); // ⏱ PERF
+      perfView.open('fmp'); // ⏱ PERF
       const ids = [...main.map(p => p.id), ...other.map(p => p.id)];
       // The first screens straight away; the grid asks for the rest as it scrolls.
       if (ids.length > 0) requestUrls(ids.slice(0, 60));
@@ -672,6 +680,7 @@ export default function MyPhotosScreen() {
     });
     // ⛔ Hand the task to Cancel — see event.tsx for why the flag alone
     // was not enough. `cancelAsync` stops the transfer mid-flight.
+    const tPerfDl = Date.now(); // ⏱ PERF
     zipTaskRef.current = task;
     let dlResult;
     try {
@@ -682,9 +691,17 @@ export default function MyPhotosScreen() {
     // A cancelled task resolves undefined rather than throwing.
     if (downloadCancelledRef.current) throw new DownloadCancelled();
     if (!dlResult || dlResult.status !== 200) throw new Error(`HTTP ${dlResult?.status ?? 'error'}`);
+    perfZipArrived('fmp', cacheUri, Date.now() - tPerfDl); // ⏱ PERF
   }
 
+  // ⏱ TEMPORARY (2026-11-10, the user's "Yes"): one RUN_SUMMARY line per finished
+  // multi-photo download. Remove before the launch (project_performance_tests.md).
   async function doDownloadJpgs(ids: string[]) {
+    const tRun = Date.now(); // ⏱ PERF
+    try { await doDownloadJpgsInner(ids); }
+    finally { reportPerf('fmp', { kind: 'summary', op: 'select-jpg', n: ids.length, cancelled: downloadCancelledRef.current ? 1 : 0, ms: Date.now() - tRun }); } // ⏱ PERF
+  }
+  async function doDownloadJpgsInner(ids: string[]) {
     downloadCancelledRef.current = false;
     setDownloadKind('jpg');
     setDownloadProgress({ current: 0, total: ids.length });
@@ -711,10 +728,12 @@ export default function MyPhotosScreen() {
         try {
           const photo = [...photos, ...otherPhotos].find(p => p.id === id);
           // ⭐ The one save step (lib/photoSave.ts); no name → counted as failed.
+          const tPerf = Date.now(); // ⏱ PERF
           await savePhotoToPhone({
             photoId: id, fileName: photo?.download_name, eventSlug: slug, eventName, idPhone,
             dateTakenMs: photo?.taken_at ? new Date(photo.taken_at).getTime() : undefined,
           });
+          reportPerf('fmp', { kind: 'download', op: 'select-jpg', ms: Date.now() - tPerf }); // ⏱ PERF
           saved++;
         // ⛔ This used to be a bare `catch {}` — a photo could vanish from a
         // download and the alert still read "N photos saved". Nothing was
@@ -765,7 +784,14 @@ export default function MyPhotosScreen() {
     }
   }
 
+  // ⏱ TEMPORARY (2026-11-10, the user's "Yes"): one RUN_SUMMARY line per finished
+  // multi-photo download. Remove before the launch (project_performance_tests.md).
   async function doDownloadZip(ids: string[]) {
+    const tRun = Date.now(); // ⏱ PERF
+    try { await doDownloadZipInner(ids); }
+    finally { reportPerf('fmp', { kind: 'summary', op: 'zip', n: ids.length, cancelled: downloadCancelledRef.current ? 1 : 0, ms: Date.now() - tRun }); } // ⏱ PERF
+  }
+  async function doDownloadZipInner(ids: string[]) {
     // Kept apart on purpose — only the unreadable ones can be retried.
     const allMissing: string[] = [];
     const allUnreadable: string[] = [];
@@ -788,7 +814,9 @@ export default function MyPhotosScreen() {
           ? `${slug}-photos-part${i + 1}of${batches.length}.zip`
           : `${slug}-photos.zip`;
         zipAbortRef.current = new AbortController();
+        const tPerfZip = Date.now(); // ⏱ PERF
         const zipRes = await prepareZip(slug, batches[i], idPhone, zipAbortRef.current.signal);
+        reportPerf('fmp', { kind: 'download', op: 'zip-wait', n: batches[i].length, ms: Date.now() - tPerfZip }); // ⏱ PERF
         // ⛔ Check AFTER the await — that is where the time goes.
         if (downloadCancelledRef.current) throw new DownloadCancelled();
         if (zipRes.error) throw new Error(zipRes.error);
@@ -1122,6 +1150,7 @@ export default function MyPhotosScreen() {
         items={allIds}
         index={lightboxIndex}
         onIndexChange={setLightboxIndex}
+        onLoadingChange={l => perfView.fullLoading(l)} /* ⏱ PERF */
         getKey={id => id}
         getUri={id => photoUrls[id]?.displayUrl ?? photoUrls[id]?.url ?? null}
         busy={lightboxBusy ?? null}

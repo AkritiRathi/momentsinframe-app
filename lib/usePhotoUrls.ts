@@ -25,6 +25,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { getPhotoUrls } from './api';
+import { perfView } from './perf'; // ⏱ TEMPORARY — remove before the launch
 
 export type PhotoUrls = {
   thumbUrl: string | null;
@@ -70,8 +71,10 @@ export function usePhotoUrls(slug: string, getPhone: () => string | undefined) {
       if (batch.length === 0) break;
       running.current++;
       const asked = new Map(batch.map(id => [id, versions.current.get(id) ?? '']));
+      const tPerf = Date.now(); // ⏱ PERF
       getPhotoUrls(slug, batch, phoneRef.current())
         .then((result: { urls?: Record<string, PhotoUrls> }) => {
+          perfView.urlBatch(batch.length, Date.now() - tPerf); // ⏱ PERF
           if (!alive.current || !result?.urls) return;
           // Keep only answers for the photo's CURRENT version: if the gallery
           // reloaded while this was on its way and the photo was replaced, the

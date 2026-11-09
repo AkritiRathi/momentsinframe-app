@@ -34,6 +34,7 @@ import { Typography } from '../constants/typography';
 import { useAlert } from '../lib/useAlert';
 import { askAndDeletePhotos } from '../lib/deletePrompt';
 import { markGalleryChanged } from '../lib/galleryRefresh';
+import { reportPerf, perfView, perfZipArrived } from '../lib/perf'; // ⏱ TEMPORARY — remove before the launch
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const GAP = 2;
@@ -101,7 +102,7 @@ const PhotoThumb = memo(forwardRef<View, ThumbProps>(function PhotoThumb({
       activeOpacity={0.85}
     >
       {thumbUrl
-        ? <ExpoImage source={{ uri: thumbUrl }} style={styles.thumbImage} contentFit="cover" cachePolicy="memory-disk" recyclingKey={photoId} />
+        ? <ExpoImage source={{ uri: thumbUrl }} style={styles.thumbImage} contentFit="cover" cachePolicy="memory-disk" recyclingKey={photoId} onLoadStart={() => perfView.thumbStart(thumbUrl)} onLoad={() => perfView.thumbLoaded(thumbUrl)} /* ⏱ PERF */ />
         : <View style={styles.thumbSkeleton} />
       }
       {mode !== 'normal' && (
@@ -236,7 +237,9 @@ export default function GuestUploadsScreen() {
     setLoading(true);
     setError(null);
     try {
+      perfView.open('gu'); // ⏱ PERF
       const data = await getEventPhotos(eventSlug, adminPhone);
+      perfView.listLoaded(); // ⏱ PERF
       // For the Admin-after-expiry rule below (the server refuses anyway).
       setEventExpired(!!(data?.event?.expires_at && new Date(data.event.expires_at) < new Date()));
       // ⚠ These two were MERGED into one list until 2026-10-17, so this screen
@@ -573,10 +576,12 @@ export default function GuestUploadsScreen() {
           setDownloadingPhoto(true);
           try {
             // ⭐ The one save step (lib/photoSave.ts, 2026-11-08); name from the server.
+            const tPerf = Date.now(); // ⏱ PERF
             await savePhotoToPhone({
               photoId: photo.id, fileName: photo.downloadName, eventSlug, eventName, idPhone: adminPhone,
               dateTakenMs: photo.takenAt ? new Date(photo.takenAt).getTime() : undefined,
             });
+            reportPerf('gu', { kind: 'download', op: 'full-jpg', ms: Date.now() - tPerf }); // ⏱ PERF
             const folderName = Platform.OS === 'android' ? await androidFolderName(eventSlug, eventName) : '';
             showAlert('Downloaded', Platform.OS === 'ios' ? 'Photo saved to your Photos.' : `Photo saved to Downloads/${folderName}.`);
           } catch (e) {
@@ -596,7 +601,9 @@ export default function GuestUploadsScreen() {
     setSharingPhoto(true);
     try {
       // ⭐ The one share step (lib/photoSave.ts): the date-stamped file.
+      const tPerf = Date.now(); // ⏱ PERF
       await sharePhoto({ photoId: photo.id, fileName: photo.downloadName, idPhone: adminPhone, stillOpen: () => lightboxVisibleRef.current });
+      reportPerf('gu', { kind: 'download', op: 'full-share', ms: Date.now() - tPerf }); // ⏱ PERF
     } catch (e) {
       showAlert('Share failed', isPhotoGoneError(e) ? 'This photo is no longer in the event.' : "This photo couldn't be shared. Please try again.");
     } finally {
@@ -674,7 +681,14 @@ export default function GuestUploadsScreen() {
     );
   }
 
+  // ⏱ TEMPORARY (2026-11-10, the user's "Yes"): one RUN_SUMMARY line per finished
+  // multi-photo download. Remove before the launch (project_performance_tests.md).
   async function doDownloadZip(ids: string[]) {
+    const tRun = Date.now(); // ⏱ PERF
+    try { await doDownloadZipInner(ids); }
+    finally { reportPerf('gu', { kind: 'summary', op: 'zip', n: ids.length, cancelled: downloadCancelledRef.current ? 1 : 0, ms: Date.now() - tRun }); } // ⏱ PERF
+  }
+  async function doDownloadZipInner(ids: string[]) {
     // Kept apart on purpose — only the unreadable ones can be retried.
     const allMissing: string[] = [];
     const allUnreadable: string[] = [];
@@ -704,7 +718,9 @@ export default function GuestUploadsScreen() {
           ? `${eventSlug}-photos-part${i + 1}of${batches.length}.zip`
           : `${eventSlug}-photos.zip`;
         zipAbortRef.current = new AbortController();
+        const tPerfZip = Date.now(); // ⏱ PERF
         const zipRes = await prepareZip(eventSlug, batchIds, adminPhone, zipAbortRef.current.signal);
+        reportPerf('gu', { kind: 'download', op: 'zip-wait', n: batchIds.length, ms: Date.now() - tPerfZip }); // ⏱ PERF
         // ⛔ Check AFTER the await — that is where the time goes.
         if (downloadCancelledRef.current) throw new DownloadCancelled();
         if (zipRes.error) throw new Error(zipRes.error);
@@ -751,7 +767,14 @@ export default function GuestUploadsScreen() {
     }
   }
 
+  // ⏱ TEMPORARY (2026-11-10, the user's "Yes"): one RUN_SUMMARY line per finished
+  // multi-photo download. Remove before the launch (project_performance_tests.md).
   async function doDownloadJpgs(ids: string[]) {
+    const tRun = Date.now(); // ⏱ PERF
+    try { await doDownloadJpgsInner(ids); }
+    finally { reportPerf('gu', { kind: 'summary', op: 'select-jpg', n: ids.length, cancelled: downloadCancelledRef.current ? 1 : 0, ms: Date.now() - tRun }); } // ⏱ PERF
+  }
+  async function doDownloadJpgsInner(ids: string[]) {
     downloadCancelledRef.current = false;
     setDownloadKind('jpg');
     setDownloadProgress({ current: 0, total: ids.length });
@@ -775,10 +798,12 @@ export default function GuestUploadsScreen() {
         try {
           const photo = photos.find(p => p.id === id);
           // ⭐ The one save step (lib/photoSave.ts); no name → counted as failed.
+          const tPerf = Date.now(); // ⏱ PERF
           await savePhotoToPhone({
             photoId: id, fileName: photo?.downloadName, eventSlug, eventName, idPhone: adminPhone,
             dateTakenMs: photo?.takenAt ? new Date(photo.takenAt).getTime() : undefined,
           });
+          reportPerf('gu', { kind: 'download', op: 'select-jpg', ms: Date.now() - tPerf }); // ⏱ PERF
           saved++;
         } catch (e) { (isPhotoGoneError(e) ? goneIds : failedIds).push(id); }
         done++;
@@ -843,6 +868,7 @@ export default function GuestUploadsScreen() {
     });
     // ⛔ Hand the task to Cancel — see event.tsx for why the flag alone
     // was not enough. `cancelAsync` stops the transfer mid-flight.
+    const tPerfDl = Date.now(); // ⏱ PERF
     zipTaskRef.current = task;
     let dlResult;
     try {
@@ -853,6 +879,7 @@ export default function GuestUploadsScreen() {
     // A cancelled task resolves undefined rather than throwing.
     if (downloadCancelledRef.current) throw new DownloadCancelled();
     if (!dlResult || dlResult.status !== 200) throw new Error(`HTTP ${dlResult?.status ?? 'error'}`);
+    perfZipArrived('gu', cacheUri, Date.now() - tPerfDl); // ⏱ PERF
     if (Platform.OS === 'android') {
       let folderName = await SecureStore.getItemAsync(`downloads_folder_name_${eventSlug}`);
       if (!folderName) {
@@ -1172,7 +1199,7 @@ export default function GuestUploadsScreen() {
         onIndexChange={setLightboxIndex}
         getKey={p => p.id}
         getUri={p => photoUrls[p.id]?.displayUrl ?? photoUrls[p.id]?.thumbUrl ?? null}
-        onLoadingChange={l => { imageLoadingRef.current = l; setImageLoading(l); }}
+        onLoadingChange={l => { imageLoadingRef.current = l; setImageLoading(l); perfView.fullLoading(l); /* ⏱ PERF */ }}
         busy={deletingPhoto ? 'delete' : downloadingPhoto ? 'download' : sharingPhoto ? 'share' : null}
         actions={{
           canDelete: showDeleteBtn && !adminDeleteClosed,

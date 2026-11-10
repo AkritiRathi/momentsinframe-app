@@ -134,11 +134,13 @@ export const alertStyles = StyleSheet.create({
   btn: { backgroundColor: '#2a2a2a', borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 0.5, borderColor: '#3a3a3a' },
   btnPrimary: { backgroundColor: Colors.accent, borderColor: Colors.accent },
   btnCancel: { backgroundColor: 'transparent', borderColor: '#2a2a2a' },
-  btnDestructive: { backgroundColor: '#2a2a2a', borderColor: 'rgba(229,57,53,0.6)', borderWidth: 1 },
+  // Red pop-up buttons (2026-11-10, the user's "Yes"): solid red, bold white
+  // text — the same look as Continue, Delete Account and Delete Event.
+  btnDestructive: { backgroundColor: Colors.danger, borderColor: Colors.danger },
   btnText: { fontSize: 16, fontWeight: '600', color: Colors.white },
   btnPrimaryText: { color: Colors.background },
   btnCancelText: { color: Colors.textMuted, fontWeight: '400' },
-  btnDestructiveText: { color: Colors.danger, fontWeight: '700' },
+  btnDestructiveText: { color: '#fff', fontWeight: '800' },
   detailCard: { backgroundColor: '#111', borderRadius: 12, padding: 14, marginBottom: 16 },
   detailText: { fontSize: 15, fontWeight: '600', color: Colors.white, textAlign: 'center', lineHeight: 22 },
 });

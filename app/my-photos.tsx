@@ -21,9 +21,10 @@ const MediaStore = Platform.OS === 'android' ? require('media-store').default : 
 // (project_prelaunch_tidyup.md). Unused since the iPhone save chain moved to lib/photoSave.ts.
 // let PhotoSaver: { saveToPhotos: (fileUri: string, dateTakenMs: number, albumName: string) => Promise<string | null> } | null = null;
 // try { PhotoSaver = require('photo-saver').default; } catch {}
-import { findMyPhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
+import { findMyPhotos, findMyPhotosOpen, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
 import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
 import PhotoLightbox from '../components/PhotoLightbox';
+import PhotoActionRow from '../components/PhotoActionRow';
 import { savePhotoToPhone, sharePhoto, androidFolderName } from '../lib/photoSave';
 import { useAppPermission } from '../lib/permissions';
 import { API_BASE_URL } from '../constants/config';
@@ -44,7 +45,9 @@ const JPG_LIMIT = 40;
 type Photo = { id: string; taken_at: string; uploaded_by_name?: string; download_name?: string | null };
 // Plan C: a row counts as "on screen" as soon as any of it shows.
 const VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 1, minimumViewTime: 100 };
-type Mode = 'camera' | 'searching' | 'results';
+// 'loading' = asking the server for this person's saved results; 'consent' =
+// the Agree screen before the first selfie in an event (2026-11-10).
+type Mode = 'loading' | 'consent' | 'camera' | 'searching' | 'results';
 
 type ListItem =
   | { type: 'section_header'; label: string; count: number; sub: string; key: string }
@@ -113,7 +116,10 @@ export default function MyPhotosScreen() {
   const cameraRef = useRef<CameraView>(null);
   const [cameraReady, setCameraReady] = useState(false);
 
-  const [mode, setMode] = useState<Mode>('camera');
+  const [mode, setMode] = useState<Mode>('loading');
+  // True once results have been shown, so the camera's ← goes back to them
+  // (Search again) instead of leaving the screen.
+  const hasResultsRef = useRef(false);
 
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [otherPhotos, setOtherPhotos] = useState<Photo[]>([]);
@@ -494,14 +500,52 @@ export default function MyPhotosScreen() {
   }
 
   // ── Init ────────────────────────────────────────────────────────────────────
+  // ⭐ FIND MY PHOTOS REMEMBERS YOU, PER EVENT (2026-11-10, the user's
+  // decisions; RULES G56): opening the screen first asks the server. With a
+  // kept face in this event → straight to the saved results (no camera). The
+  // first time in an event → the Agree screen, then the camera.
+  // (The one-time 'Your selfie is never saved' pop-up was removed 2026-11-04.)
   useEffect(() => {
     async function init() {
-      // The one-time 'Your selfie is never saved' pop-up was removed here
-      // (the user: "Remove it", 2026-11-04) — the screen opens on the camera.
-      if (!permission?.granted) await requestPermission();
+      const res = await findMyPhotosOpen(slug);
+      if (res.needsSelfie) {
+        // The Agree screen is the app's standard pop-up card (the user,
+        // 2026-11-10: "I do not like the Agree and cancel buttons. Fix it").
+        setMode('consent');
+        showAlert(
+          'Find My Photos',
+          'Your selfie will be used to find your photos in this event only. It is deleted when the event is deleted.',
+          [
+            { text: 'Agree', onPress: () => { openCamera(); } },
+            { text: 'Cancel', style: 'cancel', onPress: () => router.back() },
+          ],
+        );
+        return;
+      }
+      if (res.error) {
+        showAlert('Find My Photos', res.error, [{ text: 'OK', onPress: () => router.back() }]);
+        return;
+      }
+      const main = (res.photos ?? []) as Photo[];
+      const other = (res.otherPhotos ?? []) as Photo[];
+      setPhotos(main);
+      setOtherPhotos(other);
+      setPreparing(typeof res.preparing === 'number' ? res.preparing : 0);
+      hasResultsRef.current = true;
+      setMode('results');
+      const ids = [...main.map(p => p.id), ...other.map(p => p.id)];
+      if (ids.length > 0) requestUrls(ids.slice(0, 60));
     }
     init();
   }, []);
+
+  // Agree (first time) and Search again: open the camera, asking for camera
+  // access first if needed.
+  async function openCamera() {
+    if (!permission?.granted) await requestPermission();
+    setCameraReady(false);
+    setMode('camera');
+  }
 
   async function handleTakeSelfie() {
     if (capturing) return;
@@ -541,7 +585,9 @@ export default function MyPhotosScreen() {
       // checks ~150 photos per request; we ask for the next chunk until the
       // whole event is covered (no 1,000-photo cap), showing progress.
       // Photos that could not be checked are counted and reported — never
-      // silently treated as "not you". Nothing about the face is stored.
+      // silently treated as "not you". The selfie picture is never stored; since
+      // 2026-11-10 the server keeps its FACE CODE for this event only (the
+      // person agreed first — RULES G56).
       let total = totalPhotos;
       let checked = 0;
       let failedCount = 0;
@@ -563,7 +609,10 @@ export default function MyPhotosScreen() {
             // First chunk failed (e.g. no face in the selfie): back to the camera.
             setCameraReady(false);
             // B9.5: "getting ready" is not an error — titled as the feature.
-            const title = result.error.startsWith('Find my photos is getting ready') ? 'Find my photos' : 'Error';
+            // ⚠ LOAD-BEARING (RULES G28): matches the server's GETTING_READY text.
+            // Case-insensitive so the 2026-11-10 rename ("Find My Photos") works
+            // with the old and the new server wording.
+            const title = result.error.toLowerCase().startsWith('find my photos is getting ready') ? 'Find My Photos' : 'Error';
             showAlert(title, result.error, [{ text: 'Try Again', onPress: () => setMode('camera') }]);
             setMode('camera');
             setCapturing(false);
@@ -598,6 +647,7 @@ export default function MyPhotosScreen() {
       }
       setPhotos(main);
       setOtherPhotos(other);
+      hasResultsRef.current = true;
       setMode('results');
       reportPerf('fmp', { kind: 'search', op: 'app', matches: main.length + other.length, ms: Date.now() - tPerfSearch }); // ⏱ PERF
       perfView.open('fmp'); // ⏱ PERF
@@ -935,10 +985,10 @@ export default function MyPhotosScreen() {
             </View>
         }
         <View style={[styles.cameraHeader, { paddingTop: insets.top + 12 }]}>
-          <TouchableOpacity onPress={() => router.back()}>
+          <TouchableOpacity onPress={() => { if (hasResultsRef.current) { setMode('results'); return; } router.back(); }}>
             <Text style={styles.camBackText}>←</Text>
           </TouchableOpacity>
-          <Text style={styles.cameraTitle}>My Photos</Text>
+          <Text style={styles.cameraTitle}>Find My Photos</Text>
           <View style={{ width: 32 }} />
         </View>
         <View style={[styles.cameraFooter, { paddingBottom: insets.bottom + 32 }]}>
@@ -971,6 +1021,27 @@ export default function MyPhotosScreen() {
     );
   }
 
+  // ── Loading (asking the server for saved results) ───────────────────────────
+  if (mode === 'loading') {
+    return (
+      <View style={styles.centeredScreen}>
+        <ActivityIndicator size="large" color={Colors.accent} />
+        {alertOverlay}
+      </View>
+    );
+  }
+
+  // ── Agree screen — the first time in this event (2026-11-10) ────────────────
+  // The Agree card itself is the standard pop-up, shown from init above; this
+  // is only the dark screen behind it.
+  if (mode === 'consent') {
+    return (
+      <View style={styles.centeredScreen}>
+        {alertOverlay}
+      </View>
+    );
+  }
+
   // ── Results screen ──────────────────────────────────────────────────────────
   const currentLbId = allIds[lightboxIndex];
   const currentLbUrls = photoUrls[currentLbId];
@@ -991,7 +1062,7 @@ export default function MyPhotosScreen() {
           <Text style={styles.backText}>←</Text>
         </TouchableOpacity>
         <View style={{ alignItems: 'center' }}>
-          <Text style={styles.headerTitle}>My Photos</Text>
+          <Text style={styles.headerTitle}>Find My Photos</Text>
           {totalFound > 0 && <Text style={styles.headerSub}>{totalFound} photo{totalFound !== 1 ? 's' : ''} found</Text>}
           {photos.length > 0 && otherPhotos.length > 0 && (
             <Text style={styles.headerSubLine}>
@@ -1005,26 +1076,30 @@ export default function MyPhotosScreen() {
       {/* B9: photos not searched yet (still being scanned). */}
       {preparing > 0 && (
         <Text style={[styles.searchingText, { marginHorizontal: 16, marginTop: 8 }]}>
-          {preparing} photo{preparing !== 1 ? 's are' : ' is'} still being prepared. Search again in a few minutes to include {preparing !== 1 ? 'them' : 'it'}.
+          {preparing} photo{preparing !== 1 ? 's are' : ' is'} still being prepared. {preparing !== 1 ? 'They' : 'It'} will be included the next time you open Find My Photos.
         </Text>
       )}
 
       {totalFound === 0 ? (
         <View style={styles.emptyState}>
           <Text style={styles.emptyText}>No photos of you were found in this event.</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={() => { setCameraReady(false); setMode('camera'); }}>
-            <Text style={styles.retryBtnText}>Try Again</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={openCamera}>
+            <Text style={styles.retryBtnText}>Search again</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <>
           {/* Action row / select bar */}
           {!downloadMode ? (
-            <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.downloadPhotosBtn} onPress={() => setDownloadMode(true)}>
-                <Text style={styles.downloadPhotosBtnText}>Download Photos</Text>
-              </TouchableOpacity>
-            </View>
+            // ⭐ The shared photo-screen button row (components/PhotoActionRow.tsx,
+            // 2026-11-10): Search again at the FAR LEFT where Delete Photos sits
+            // on the Event screen, gold outline (the user's "Yes for both"); a
+            // new selfie replaces the kept face. Download Photos far right.
+            <PhotoActionRow
+              leftKind="accent"
+              left={{ label: 'Search again', onPress: openCamera }}
+              right={{ label: 'Download Photos', onPress: () => setDownloadMode(true) }}
+            />
           ) : (
             <View style={styles.selectBar}>
               <Text style={styles.selectCount}>{selected.size}</Text>
@@ -1276,9 +1351,7 @@ const styles = StyleSheet.create({
   headerSubLine: { fontSize: 12, color: '#666', textAlign: 'center' },
 
   // Action row — matches event screen button style
-  actionRow: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 16, paddingVertical: 8 },
-  downloadPhotosBtn: { backgroundColor: Colors.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
-  downloadPhotosBtnText: { ...Typography.buttonText, color: Colors.background },
+  // Search again / Download Photos row → shared components/PhotoActionRow.tsx (2026-11-10).
 
   // Select bar — matches event screen
   selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8, backgroundColor: Colors.background, gap: 8 },

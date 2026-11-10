@@ -487,10 +487,31 @@ export async function findMyPhotos(slug: string, selfieBase64: string, adminPhon
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/find-my-photos`, {
     method: 'POST',
     headers: await authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ selfieBase64, ...(after ? { after } : {}), ...(adminPhone ? { adminPhone } : {}), ...(userMobile ? { userMobile } : {}) }),
+    // keep: true — the person has agreed (Agree screen, 2026-11-10): the server
+    // keeps the face from this selfie for THIS event only (RULES G56), replacing
+    // any earlier one. This app only ever sends a selfie after that agreement.
+    body: JSON.stringify({ selfieBase64, keep: true, ...(after ? { after } : {}), ...(adminPhone ? { adminPhone } : {}), ...(userMobile ? { userMobile } : {}) }),
   });
   const text = await res.text();
   try { return JSON.parse(text); } catch { return { error: 'Server returned an unexpected response. Please try again.' }; }
+}
+
+// ⭐ FIND MY PHOTOS REMEMBERS YOU (2026-11-10, the user's decisions): opening
+// the screen. needsSelfie: true → no kept face in this event yet (show the
+// Agree screen). Otherwise the saved results — with one search by the kept
+// face first on the server when new photos were scanned since the last look.
+export async function findMyPhotosOpen(slug: string): Promise<{ needsSelfie?: boolean; photos?: { id: string; taken_at: string; uploaded_by_name?: string; download_name?: string | null }[]; otherPhotos?: { id: string; taken_at: string; uploaded_by_name?: string; download_name?: string | null }[]; preparing?: number; error?: string }> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/find-my-photos`, {
+      method: 'POST',
+      headers: await authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ open: true }),
+    });
+    const text = await res.text();
+    try { return JSON.parse(text); } catch { return { error: 'Server returned an unexpected response. Please try again.' }; }
+  } catch {
+    return { error: 'Could not reach the server. Please check your connection and try again.' };
+  }
 }
 
 // ⭐ B9.5 (2026-11-04, the user's yes): is Find my photos ready for this event?

@@ -244,13 +244,7 @@ export default function RecycleBinScreen() {
                 <Pressable style={styles.selBtn} onPress={() => { setSelectMode(false); setSelected(new Set()); }}>
                   <Text style={styles.selBtnText}>Cancel</Text>
                 </Pressable>
-                <Pressable
-                  style={[styles.selBtn, { borderColor: Colors.accent }, (selected.size === 0 || busy || !canRestore) && { opacity: 0.4 }]}
-                  disabled={selected.size === 0 || busy}
-                  onPress={() => restore(selectedIds)}
-                >
-                  <Text style={[styles.selBtnText, { color: Colors.accent }]}>Restore</Text>
-                </Pressable>
+                {/* Delete before Restore (2026-11-10, the user); the chips stay outlined. */}
                 <Pressable
                   style={[styles.selBtn, { borderColor: Colors.danger }, (selected.size === 0 || busy) && { opacity: 0.4 }]}
                   disabled={selected.size === 0 || busy}
@@ -261,6 +255,13 @@ export default function RecycleBinScreen() {
                       that follows and the full-screen view still say
                       "Delete permanently". */}
                   <Text style={[styles.selBtnText, { color: Colors.danger }]}>Delete</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.selBtn, { borderColor: Colors.accent }, (selected.size === 0 || busy || !canRestore) && { opacity: 0.4 }]}
+                  disabled={selected.size === 0 || busy}
+                  onPress={() => restore(selectedIds)}
+                >
+                  <Text style={[styles.selBtnText, { color: Colors.accent }]}>Restore</Text>
                 </Pressable>
               </View>
             </View>
@@ -362,19 +363,20 @@ export default function RecycleBinScreen() {
                 style={[styles.barRow, !isMine(current) && { opacity: 0 }]}
                 pointerEvents={isMine(current) ? 'auto' : 'none'}
               >
-                <TouchableOpacity
-                  style={[styles.restoreBtn, (busy || !canRestore) && { opacity: 0.4 }]}
-                  disabled={busy || !isMine(current)}
-                  onPress={() => restore([current.id])}
-                >
-                  <Text style={styles.restoreText}>Restore</Text>
-                </TouchableOpacity>
+                {/* Delete on the LEFT, Restore on the RIGHT (2026-11-10, the user). */}
                 <TouchableOpacity
                   style={[styles.deleteBtn, busy && { opacity: 0.4 }]}
                   disabled={busy || !isMine(current)}
                   onPress={() => deletePermanently([current.id])}
                 >
                   <Text style={styles.deleteText}>Delete permanently</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.restoreBtn, (busy || !canRestore) && { opacity: 0.4 }]}
+                  disabled={busy || !isMine(current)}
+                  onPress={() => restore([current.id])}
+                >
+                  <Text style={styles.restoreText}>Restore</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -419,8 +421,9 @@ const styles = StyleSheet.create({
   barRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
   restoreBtn: { flex: 1, backgroundColor: Colors.accent, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
   restoreText: { fontSize: 15, fontWeight: '700', color: Colors.background },
-  deleteBtn: { flex: 1, borderWidth: 1, borderColor: 'rgba(229,57,53,0.6)', backgroundColor: '#2a2a2a', borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
-  deleteText: { fontSize: 15, fontWeight: '700', color: Colors.danger },
+  // Solid red, bold white text (2026-11-10, the user's "Yes") — like Continue.
+  deleteBtn: { flex: 1, backgroundColor: Colors.danger, borderRadius: 12, paddingVertical: 13, alignItems: 'center' },
+  deleteText: { fontSize: 15, fontWeight: '800', color: '#fff' },
   busy: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)', alignItems: 'center', justifyContent: 'center' },
   viewerHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 8 },
   viewerCounter: { fontSize: 15, color: Colors.white, fontWeight: '600' },

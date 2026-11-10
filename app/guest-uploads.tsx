@@ -26,6 +26,7 @@ const MediaStore = Platform.OS === 'android' ? require('media-store').default : 
 import { getEventPhotos, prepareZip, describeSkippedPhotos, isPhotoGoneError, DownloadCancelled, isDownloadCancelled } from '../lib/api';
 import { usePhotoUrls, idsAroundRows } from '../lib/usePhotoUrls';
 import PhotoLightbox from '../components/PhotoLightbox';
+import PhotoActionRow from '../components/PhotoActionRow';
 import { savePhotoToPhone, sharePhoto, androidFolderName } from '../lib/photoSave';
 import { useAppPermission } from '../lib/permissions';
 import { API_BASE_URL } from '../constants/config';
@@ -903,17 +904,13 @@ export default function GuestUploadsScreen() {
 
   function renderActionRow() {
     if (mode === 'normal') {
+      // ⭐ The shared photo-screen button row (components/PhotoActionRow.tsx,
+      // 2026-11-10) — the same as the Event screen and Find My Photos.
       return (
-        <View style={styles.btnRow}>
-          {showDeleteBtn && (
-            <TouchableOpacity style={[styles.deleteBtn, adminDeleteClosed && { opacity: 0.4 }]} disabled={adminDeleteClosed} onPress={() => setMode('delete')}>
-              <Text style={styles.deleteBtnText}>Delete Photos</Text>
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity style={styles.downloadBtn} onPress={() => setMode('download')}>
-            <Text style={styles.downloadBtnText}>Download Photos</Text>
-          </TouchableOpacity>
-        </View>
+        <PhotoActionRow
+          left={showDeleteBtn ? { label: 'Delete Photos', disabled: adminDeleteClosed, onPress: () => setMode('delete') } : undefined}
+          right={{ label: 'Download Photos', onPress: () => setMode('download') }}
+        />
       );
     }
 
@@ -1226,12 +1223,7 @@ const styles = StyleSheet.create({
   guestMetaLine: { fontSize: 12, color: '#888', textAlign: 'center', marginTop: 2 },
   guestMetaSub: { fontSize: 12, color: '#666', textAlign: 'center', marginTop: 2 },
 
-  // Normal mode buttons
-  btnRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8 },
-  deleteBtn: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: Colors.danger, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
-  deleteBtnText: { ...Typography.buttonText, color: Colors.danger },
-  downloadBtn: { backgroundColor: Colors.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8, marginLeft: 'auto' as any },
-  downloadBtnText: { ...Typography.buttonText, color: Colors.background },
+  // Normal mode buttons → shared components/PhotoActionRow.tsx (2026-11-10).
 
   // Select bar
   selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, backgroundColor: Colors.background, gap: 8 },

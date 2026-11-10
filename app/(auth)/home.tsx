@@ -1,6 +1,6 @@
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  ActivityIndicator, Dimensions, TextInput, LayoutAnimation, Animated,
+  ActivityIndicator, Dimensions, TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -15,6 +15,7 @@ import { useAlert } from '../../lib/useAlert';
 import * as Linking from 'expo-linking';
 import { PRIVACY_URL, TERMS_URL } from '../../constants/config';
 import { checkWhitelist, checkUserStatus, deleteAccount, organiserLogin, logoutUser, getOrganiserEventCount } from '../../lib/api';
+import { NavRow, ExpandRow, SubRow } from '../../components/SettingsRows';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -23,9 +24,8 @@ export default function HomeScreen() {
   const [isWhitelisted, setIsWhitelisted] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   // Privacy & Terms slide-open row: closed whenever Home is opened afresh.
+  // (The turning › now lives in the shared ExpandRow, components/SettingsRows.tsx.)
   const [privacyOpen, setPrivacyOpen] = useState(false);
-  // The same › as the other rows, turned down (closed) / up (open), animated.
-  const privacyArrow = useRef(new Animated.Value(0)).current;
   const [userDetailsVisible, setUserDetailsVisible] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [dropPos, setDropPos] = useState({ top: 0, right: 0 });
@@ -239,7 +239,7 @@ export default function HomeScreen() {
             <Text style={styles.userDetailsText}>Name: {profile?.firstName ?? ''} {profile?.lastName ?? ''}</Text>
             <Text style={styles.userDetailsText}>Mobile: +91 {profile?.mobile ?? ''}</Text>
             <View style={styles.userDetailsButtons}>
-              <TouchableOpacity style={styles.logoutBtn} onPress={async () => {
+              <TouchableOpacity style={[styles.logoutBtn, styles.logoutOutline]} onPress={async () => {
                 setUserDetailsVisible(false);
                 const eventCount = await checkOrganiserHasEvents();
                 if (eventCount === null) { showCouldNotCheck(); return; }
@@ -287,7 +287,7 @@ export default function HomeScreen() {
                   );
                 }, 300);
               }}>
-                <Text style={styles.logoutBtnText}>Logout</Text>
+                <Text style={[styles.logoutBtnText, { color: Colors.danger }]}>Logout</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.okBtn} onPress={() => setUserDetailsVisible(false)}>
                 <Text style={styles.okBtnText}>OK</Text>
@@ -383,34 +383,15 @@ export default function HomeScreen() {
         {/* 2026-11-07 (the user's design, like Manage Event): rows under a
             divider instead of items hidden in the ⚙️ menu. */}
         <View style={styles.homeDivider} />
-        <TouchableOpacity style={styles.navRow} onPress={() => setUserDetailsVisible(true)}>
-          <Text style={styles.navRowText}>Your Details</Text>
-          <Text style={styles.navRowArrow}>›</Text>
-        </TouchableOpacity>
-        {/* Privacy & Terms slides open like the Event Settings explanations
-            (2026-11-07, the user's design); both open the in-app page. */}
-        <View style={styles.navRowGroup}>
-          <TouchableOpacity style={styles.navRowInner} onPress={() => {
-            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-            Animated.timing(privacyArrow, { toValue: privacyOpen ? 0 : 1, duration: 200, useNativeDriver: true }).start();
-            setPrivacyOpen(o => !o);
-          }}>
-            <Text style={styles.navRowText}>Privacy & Terms</Text>
-            <Animated.Text style={[styles.navRowArrow, { transform: [{ rotate: privacyArrow.interpolate({ inputRange: [0, 1], outputRange: ['90deg', '-90deg'] }) }] }]}>›</Animated.Text>
-          </TouchableOpacity>
-          {privacyOpen && (
-            <>
-              <TouchableOpacity style={styles.subRow} onPress={() => router.push({ pathname: '/(auth)/legal', params: { doc: 'privacy' } })}>
-                <Text style={styles.subRowText}>Privacy Policy</Text>
-                <Text style={styles.navRowArrow}>›</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.subRow} onPress={() => router.push({ pathname: '/(auth)/legal', params: { doc: 'terms' } })}>
-                <Text style={styles.subRowText}>Terms of Use</Text>
-                <Text style={styles.navRowArrow}>›</Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
+        {/* ⭐ These rows are THE master look for every options list (the user,
+            2026-11-10) — drawn by the shared components/SettingsRows.tsx. */}
+        <NavRow label="Your Details" onPress={() => setUserDetailsVisible(true)} />
+        {/* Privacy & Terms slides open (2026-11-07, the user's design); both
+            open the in-app page. */}
+        <ExpandRow label="Privacy & Terms" open={privacyOpen} onToggle={() => setPrivacyOpen(o => !o)}>
+          <SubRow label="Privacy Policy" onPress={() => router.push({ pathname: '/(auth)/legal', params: { doc: 'privacy' } })} />
+          <SubRow label="Terms of Use" onPress={() => router.push({ pathname: '/(auth)/legal', params: { doc: 'terms' } })} />
+        </ExpandRow>
       </View>
 
       {alertOverlay}
@@ -540,19 +521,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   okBtnText: { fontSize: 15, fontWeight: '700', color: '#0F0F0F' },
-  // The app's destructive button look (2026-11-07, the user's yes): dark fill,
-  // red outline, bold red text — same as Delete Event and "Start fresh".
-  deleteAccountBtn: { marginTop: 12, alignItems: 'center', paddingVertical: 14, backgroundColor: '#2A2A2A', borderRadius: 12, borderWidth: 1, borderColor: 'rgba(229,57,53,0.6)' },
-  deleteAccountBtnText: { fontSize: 15, color: Colors.danger, fontWeight: '700' },
+  // Logout (2026-11-10, the user's "Yes for both"): dark fill, red outline,
+  // bold red text. Its own piece, so the Cancel button sharing logoutBtn is unchanged.
+  // paddingVertical 13 (not 14) + the 1-point outline = exactly OK's height.
+  logoutOutline: { borderWidth: 1, borderColor: 'rgba(229,57,53,0.6)', paddingVertical: 13 },
+  // Delete Account (2026-11-10, the user's "Yes for both"): solid red with bold
+  // white text — the same look as Continue on Manage Event's Delete Event and
+  // as the Delete Event button itself.
+  deleteAccountBtn: { marginTop: 12, alignItems: 'center', paddingVertical: 14, backgroundColor: Colors.danger, borderRadius: 12 },
+  deleteAccountBtnText: { fontSize: 15, color: '#fff', fontWeight: '800' },
   homeDivider: { height: 0.5, backgroundColor: '#333', marginTop: 20, marginBottom: 16 },
-  navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1A1A1A', borderWidth: 0.5, borderColor: '#2A2A2A', borderRadius: 8, paddingVertical: 14, paddingHorizontal: 12, marginBottom: 8 },
-  navRowText: { fontSize: 15, fontWeight: '700', color: Colors.white },
-  navRowArrow: { fontSize: 22, color: Colors.textMuted },
-  navRowArrowSmall: { fontSize: 18, color: Colors.textMuted },
-  navRowGroup: { backgroundColor: '#1A1A1A', borderWidth: 0.5, borderColor: '#2A2A2A', borderRadius: 8, marginBottom: 8, overflow: 'hidden' },
-  navRowInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 12 },
-  subRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 0.5, borderTopColor: '#333', paddingVertical: 12, paddingLeft: 24, paddingRight: 12 },
-  subRowText: { fontSize: 14, fontWeight: '600', color: Colors.white },
+  // The row styles moved into the shared components/SettingsRows.tsx (2026-11-10).
   legalRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 16 },
   legalLink: { fontSize: 13, color: Colors.textMuted, fontWeight: '600', textDecorationLine: 'underline' },
   legalDot: { fontSize: 13, color: Colors.textMuted },

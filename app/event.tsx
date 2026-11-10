@@ -3,6 +3,8 @@ import {
   Modal, ActivityIndicator, Dimensions,
   Platform, BackHandler, AppState, RefreshControl, Alert, Switch,
 } from 'react-native';
+import { NavRow, ExpandRow, SubRow, SettingsHeader, SETTINGS_PAGE_MARGIN } from '../components/SettingsRows';
+import PhotoActionRow from '../components/PhotoActionRow';
 import { FlashList } from '@shopify/flash-list';
 import { Image as ExpoImage } from 'expo-image';
 const MediaStore = Platform.OS === 'android' ? require('media-store').default : null;
@@ -924,7 +926,7 @@ export default function EventScreen() {
     setSkippedViewerVisible(false);
     setDuplicateViewerVisible(false);
     setMenuVisible(false);
-    setSortPanelVisible(false);
+    setMySettingsVisible(false);
     setShowPhotoSelectModal(false);
     setShowDatePickerModal(false);
     setNotificationsVisible(false);
@@ -944,14 +946,20 @@ export default function EventScreen() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // newest first by default
   // Photos are always grouped by date now — the option was removed from Sort & Display.
   const [groupByDate] = useState(true);
-  const [sortPanelVisible, setSortPanelVisible] = useState(false);
+  // ⭐ MY SETTINGS (2026-11-10, the user's layout): the ⋮ item that replaced
+  // 'Sort & Display' — a full page with Photo order and Find My Photos (later
+  // also Reported Photos, Trusted Circle). Memory: project_event_menu.md.
+  const [mySettingsVisible, setMySettingsVisible] = useState(false);
+  // Photo order slides open like Home's 'Privacy & Terms' row (the user,
+  // 2026-11-10); closed each time My Settings opens. The turning › is in the
+  // shared ExpandRow (components/SettingsRows.tsx).
+  const [photoOrderOpen, setPhotoOrderOpen] = useState(false);
   const [myUploadsFilter, setMyUploadsFilter] = useState(false);
   const [coadminPhones, setCoadminPhones] = useState<Set<string>>(new Set());
   const [findMyPhotosEnabled, setFindMyPhotosEnabled] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const menuBtnRef = useRef<any>(null);
   const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
-  const [draftSortOrder, setDraftSortOrder] = useState<'asc' | 'desc'>('desc');
   const [stickySection, setStickySection] = useState<'main' | 'other' | null>(null);
   const [selectBarSticky, setSelectBarSticky] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -1085,7 +1093,7 @@ export default function EventScreen() {
 
   useEffect(() => {
     getEventUserId().then(id => { if (id) setEventUserId(id); });
-    SecureStore.getItemAsync('gallery_sort_order').then(v => { if (v === 'asc' || v === 'desc') { setSortOrder(v); setDraftSortOrder(v); } });
+    SecureStore.getItemAsync('gallery_sort_order').then(v => { if (v === 'asc' || v === 'desc') { setSortOrder(v); } });
     saveLastEvent({
       slug: params.slug,
       name: params.name ?? '',
@@ -3027,18 +3035,21 @@ export default function EventScreen() {
 
       case 'select_photos_btn':
         return (
-          <View style={styles.selectPhotosRow}>
-            <TouchableOpacity
-              style={[styles.deleteModeBtn, (bgUploading || !canDelete) && { opacity: 0.4 }]}
-              disabled={bgUploading || !canDelete}
-              onPress={() => { if (!bgUploading && canDelete) { setDeleteMode(true); setSelectMode(false); } }}
-            >
-              <Text style={styles.deleteModeBtnText}>Delete Photos</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.selectPhotosBtn, styles.selectPhotosRowRight, bgUploading && { opacity: 0.4 }]} onPress={() => { if (!bgUploading) { setSelectMode(true); setDeleteMode(false); } }}>
-              <Text style={styles.selectPhotosBtnText}>Download Photos</Text>
-            </TouchableOpacity>
-          </View>
+          // ⭐ The shared photo-screen button row (components/PhotoActionRow.tsx,
+          // 2026-11-10) — the same on Guest Uploads and Find My Photos.
+          <PhotoActionRow
+            style={{ paddingTop: 0 }}
+            left={{
+              label: 'Delete Photos',
+              disabled: bgUploading || !canDelete,
+              onPress: () => { if (!bgUploading && canDelete) { setDeleteMode(true); setSelectMode(false); } },
+            }}
+            right={{
+              label: 'Download Photos',
+              dim: bgUploading,
+              onPress: () => { if (!bgUploading) { setSelectMode(true); setDeleteMode(false); } },
+            }}
+          />
         );
 
       case 'select_bar':
@@ -3580,33 +3591,15 @@ export default function EventScreen() {
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
           <View style={[styles.menuDropdown, menuBtnLayout ? { top: menuBtnLayout.top, right: menuBtnLayout.right } : {}]}>
-            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode) && { opacity: 0.4 }]} disabled={selectMode || deleteMode} onPress={() => { setMenuVisible(false); setDraftSortOrder(sortOrder); setSortPanelVisible(true); }}>
-              <Text style={styles.menuItemText}>Sort & Display</Text>
+            {/* ⭐ ⋮ MENU (2026-11-10, the user's layout): My Settings · Manage
+                Guests (Organiser + Admins) · Recycle bin. Photo order and Find
+                My Photos moved INTO My Settings. Memory: project_event_menu.md. */}
+            <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode) && { opacity: 0.4 }]} disabled={selectMode || deleteMode} onPress={() => { setMenuVisible(false); setPhotoOrderOpen(false); setMySettingsVisible(true); }}>
+              <Text style={styles.menuItemText}>My Settings</Text>
             </TouchableOpacity>
             {isAdmin && (
               <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); router.push({ pathname: '/manage-guests', params: { slug, adminPhone: userMobile ?? params.adminPhone ?? '', viewerRole: userRole === 'organiser' ? 'organiser' : 'coadmin', userMobile: userMobile ?? '', eventName: params.name ?? '' } }); }}>
                 <Text style={styles.menuItemText}>Manage Guests</Text>
-              </TouchableOpacity>
-            )}
-            {findMyPhotosEnabled && (
-              <TouchableOpacity style={styles.menuItem} onPress={async () => {
-                setMenuVisible(false);
-                // B9.5 (2026-11-04, the user's yes): while many photos are still
-                // being scanned, say so here — the camera does not open.
-                const readiness = await findMyPhotosReady(slug);
-                if (!readiness.ready) {
-                  showAlert('Find my photos', readiness.error ?? 'Find my photos is getting ready for this event. Please try again in a few minutes.');
-                  return;
-                }
-                router.push({ pathname: '/my-photos', params: {
-                  slug,
-                  adminPhone: params.adminPhone ?? '',
-                  userMobile: userMobile ?? '',
-                  eventName: params.name ?? '',
-                  totalPhotos: String([...photos, ...otherPhotos].length),
-                }});
-              }}>
-                <Text style={styles.menuItemText}>View My Photos</Text>
               </TouchableOpacity>
             )}
             {/* ⭐ RECYCLE BIN (2026-10-30, the user's yes) — for everyone; each
@@ -3630,32 +3623,52 @@ export default function EventScreen() {
 
       {alertOverlay}
 
-      {/* Sort panel */}
-      <Modal visible={sortPanelVisible} transparent animationType="fade" onRequestClose={() => setSortPanelVisible(false)}>
-        <View style={alertStyles.overlay}>
-          <View style={alertStyles.card}>
-            <Text style={alertStyles.title}>Sort</Text>
+      {/* ⭐ MY SETTINGS page (2026-11-10, the user's layout and order): Photo
+          order → Reported Photos (when built, always shown) → Find My Photos
+          (while on) → Trusted Circle (when built, while on, not the Organiser).
+          Replaces the old Sort box. Photo order applies + is saved at once (the
+          same saved choice as before). Safe area by insets (RULES D33). */}
+      <Modal visible={mySettingsVisible} animationType="slide" onRequestClose={() => setMySettingsVisible(false)}>
+        {/* ⭐ Built from the shared components/SettingsRows.tsx — Home's rows
+            and fonts, Home's 24 side margin (the user, 2026-11-10). Any new
+            row added here is one of those pieces, so it always matches Home. */}
+        <View style={[styles.mySettingsScreen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+          <SettingsHeader title="My Settings" onBack={() => setMySettingsVisible(false)} />
+
+          {/* Photo order: tap to slide open; gold ✓ on the order in use; a tap
+              applies and remembers it at once. */}
+          <ExpandRow label="Photo order" open={photoOrderOpen} onToggle={() => setPhotoOrderOpen(o => !o)}>
             {(['asc', 'desc'] as const).map(mode => (
-              <TouchableOpacity key={mode} style={styles.sortPanelOption} onPress={() => setDraftSortOrder(mode)}>
-                <View style={[styles.sortRadio, draftSortOrder === mode && styles.sortRadioSelected]}>
-                  {draftSortOrder === mode && <View style={styles.sortRadioDot} />}
-                </View>
-                <Text style={styles.sortPanelOptionText}>{mode === 'asc' ? 'Oldest first' : 'Newest first'}</Text>
-              </TouchableOpacity>
+              <SubRow key={mode} label={mode === 'asc' ? 'Oldest first' : 'Newest first'}
+                mark={sortOrder === mode ? 'tick' : 'none'}
+                onPress={() => {
+                  setSortOrder(mode);
+                  SecureStore.setItemAsync('gallery_sort_order', mode);
+                }} />
             ))}
-            <View style={[alertStyles.buttons, { marginTop: 16 }]}>
-              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnPrimary]} onPress={() => {
-                setSortOrder(draftSortOrder);
-                SecureStore.setItemAsync('gallery_sort_order', draftSortOrder);
-                setSortPanelVisible(false);
-              }}>
-                <Text style={[alertStyles.btnText, alertStyles.btnPrimaryText]}>Done</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[alertStyles.btn, alertStyles.btnCancel]} onPress={() => setSortPanelVisible(false)}>
-                <Text style={[alertStyles.btnText, alertStyles.btnCancelText]}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          </ExpandRow>
+
+          {findMyPhotosEnabled && (
+            <NavRow label="Find My Photos" onPress={async () => {
+              // Close first: the "getting ready" message is drawn on the Event
+              // screen and would sit hidden behind this page.
+              setMySettingsVisible(false);
+              // B9.5 (2026-11-04, the user's yes): while many photos are still
+              // being scanned, say so here — the camera does not open.
+              const readiness = await findMyPhotosReady(slug);
+              if (!readiness.ready) {
+                showAlert('Find My Photos', readiness.error ?? 'Find My Photos is getting ready for this event. Please try again in a few minutes.');
+                return;
+              }
+              router.push({ pathname: '/my-photos', params: {
+                slug,
+                adminPhone: params.adminPhone ?? '',
+                userMobile: userMobile ?? '',
+                eventName: params.name ?? '',
+                totalPhotos: String([...photos, ...otherPhotos].length),
+              }});
+            }} />
+          )}
         </View>
       </Modal>
 
@@ -4059,12 +4072,7 @@ const styles = StyleSheet.create({
   uploadHint: { ...Typography.caption, color: '#888', textAlign: 'center', fontWeight: '700' },
 
   // Select photos button
-  selectPhotosRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 8 },
-  selectPhotosRowRight: { marginLeft: 'auto' },
-  selectPhotosBtn: { backgroundColor: Colors.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
-  selectPhotosBtnText: { ...Typography.buttonText, color: Colors.background },
-  deleteModeBtn: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: Colors.danger, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 },
-  deleteModeBtnText: { ...Typography.buttonText, color: Colors.danger },
+  // Delete Photos / Download Photos row → shared components/PhotoActionRow.tsx (2026-11-10).
 
   // Select mode bar (sticky)
   selectBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8, backgroundColor: Colors.background, gap: 8 },
@@ -4098,6 +4106,9 @@ const styles = StyleSheet.create({
   menuDropdown: { position: 'absolute', backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 0.5, borderColor: '#333', overflow: 'hidden' },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12 },
   menuItemText: { fontSize: 14, fontWeight: '600', color: '#fff' },
+  // My Settings page — the rows themselves are the shared SettingsRows pieces;
+  // only the page itself here, with Home's side margin.
+  mySettingsScreen: { flex: 1, backgroundColor: Colors.background, paddingHorizontal: SETTINGS_PAGE_MARGIN },
 
   dateHeaderRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 18, paddingBottom: 8, backgroundColor: Colors.background, gap: 10 },
   dateHeaderText: { fontSize: 15, fontWeight: '700', color: Colors.white },

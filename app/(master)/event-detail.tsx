@@ -1,5 +1,5 @@
 import {
-  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, Switch, BackHandler, TextInput, Platform, Dimensions, LayoutAnimation,
+  View, Text, TouchableOpacity, StyleSheet, Modal, ScrollView, ActivityIndicator, BackHandler, TextInput, Platform, Dimensions, LayoutAnimation,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
@@ -18,6 +18,7 @@ import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
 import SearchBox from '../../components/SearchBox';
 import { PersonLines } from '../../components/PersonLines';
+import { NavRow, SwitchRow, CardFooterRow, rowStyles } from '../../components/SettingsRows';
 
 // ⛔ ONE MATCH RULE FOR EVERY PEOPLE-SEARCH ON THIS SCREEN. Three lists use
 // it, so they cannot drift apart (app/manage-guests.tsx carries the same rule). It matches anything a row can DISPLAY: the
@@ -417,7 +418,7 @@ export default function EventDetailScreen() {
   // the first time they upload" — that guest notice was dropped 2026-11-03.
   function handleToggleFindMyPhotos(value: boolean) {
     showAlert(
-      value ? 'Turn on Find my photos?' : 'Turn off Find my photos?',
+      value ? 'Turn on Find My Photos?' : 'Turn off Find My Photos?',
       value
         ? '• Guests can find photos of themselves with a selfie.\n' +
           '• Faces in this event\'s photos will be scanned: the photos already uploaded and every new upload.\n' +
@@ -805,111 +806,64 @@ export default function EventDetailScreen() {
           <Text style={styles.pageTitle}>Event Settings</Text>
         </View>
         <Text style={styles.eventName}>{params.name}</Text>
-        <View style={styles.settingRow}>
-          <View style={styles.settingInfo}>
-            <TouchableOpacity onPress={() => toggleInfo('delete')} activeOpacity={0.7}>
-              <Text style={styles.settingLabel}>Allow guests to delete photos <Text style={styles.infoIcon}>ⓘ</Text></Text>
-            </TouchableOpacity>
-            {openInfo === 'delete' && <Text style={styles.settingInfoText}>{SETTING_INFO.delete}</Text>}
-            <Text style={styles.settingDesc}>{allowGuestDelete && !viewOnly ? 'Guests can delete their own uploaded photos' : 'Guests cannot delete photos'}</Text>
-          </View>
-          {settingsUpdating
-            ? <ActivityIndicator color={Colors.accent} />
-            : <Switch
-                value={viewOnly ? false : allowGuestDelete}
-                onValueChange={viewOnly ? undefined : handleToggleGuestDelete}
-                disabled={viewOnly}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-          }
-        </View>
-        <View style={[styles.settingRow, styles.settingCardColumn]}>
-          <View style={styles.settingTopRow}>
-            <View style={styles.settingInfo}>
-              <TouchableOpacity onPress={() => toggleInfo('invite')} activeOpacity={0.7}>
-                <Text style={styles.settingLabel}>Invite only event <Text style={styles.infoIcon}>ⓘ</Text></Text>
-              </TouchableOpacity>
-              {openInfo === 'invite' && <Text style={styles.settingInfoText}>{SETTING_INFO.invite}</Text>}
-              <Text style={styles.settingDesc}>
-                {isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
-              </Text>
-            </View>
-            {settingsUpdating
-              ? <ActivityIndicator color={Colors.accent} />
-              : <Switch
-                  value={isClosed}
-                  onValueChange={handleToggleInviteOnly}
-                  trackColor={{ false: '#333', true: Colors.accent }}
-                  thumbColor={Colors.white}
-                />
-            }
-          </View>
-          {/* 2026-11-07 (the user): a full-width row under a divider —
-              "Allowed Guests (n)" in gold, (0) when empty, and a gold ›. */}
-          {isClosed && (
-            <TouchableOpacity style={styles.allowedRow} onPress={() => { loadAllowedGuests(); setShowGuestsPanel(true); }}>
-              <Text style={styles.allowedRowText}>Allowed Guests ({allowedGuests.length})</Text>
-              <Text style={[styles.navRowArrow, { color: Colors.accent }]}>›</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-        <View style={styles.settingRow}>
-          <View style={styles.settingInfo}>
-            <TouchableOpacity onPress={() => toggleInfo('view')} activeOpacity={0.7}>
-              <Text style={styles.settingLabel}>View only event <Text style={styles.infoIcon}>ⓘ</Text></Text>
-            </TouchableOpacity>
-            {openInfo === 'view' && <Text style={styles.settingInfoText}>{SETTING_INFO.view}</Text>}
-            {/* ⚠ This line used to be STATIC — it read "Guests can only view and
-                download photos" even when the setting was OFF, describing a
-                state that was not active. Fixed 2026-10-20. */}
-            <Text style={styles.settingDesc}>
-              {viewOnly ? 'Guests can only view and download photos' : 'Guests can upload, view and download photos'}
-            </Text>
-          </View>
-          {settingsUpdating
-            ? <ActivityIndicator color={Colors.accent} />
-            : <Switch
-                value={viewOnly}
-                onValueChange={handleToggleViewOnly}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-          }
-        </View>
-        <View style={styles.settingRow}>
-          <View style={styles.settingInfo}>
-            <TouchableOpacity onPress={() => toggleInfo('fmp')} activeOpacity={0.7}>
-              <Text style={styles.settingLabel}>Find my photos <Text style={styles.infoIcon}>ⓘ</Text></Text>
-            </TouchableOpacity>
-            {openInfo === 'fmp' && <Text style={styles.settingInfoText}>{SETTING_INFO.fmp}</Text>}
-            <Text style={styles.settingDesc}>{findMyPhotos ? 'Guests can find photos of themselves using a selfie' : 'Guests cannot find photos of themselves using a selfie'}</Text>
-            {findMyPhotos && fmpStatus && fmpStatus.total > 0 && (
-              <>
-                {fmpStatus.waiting > 0 && (
-                  <Text style={styles.fmpStatus}>{`Preparing: ${formatCount(fmpStatus.ready)} of ${formatCount(fmpStatus.total)} photos ready`}</Text>
-                )}
-                {fmpStatus.waiting === 0 && fmpStatus.failed === 0 && (
-                  <Text style={styles.fmpStatus}>All photos ready</Text>
-                )}
-                {fmpStatus.failed > 0 && (
-                  <Text style={styles.fmpStatus}>{fmpStatus.failed === 1
-                    ? '1 photo could not be prepared and won\'t appear in searches'
-                    : `${formatCount(fmpStatus.failed)} photos could not be prepared and won't appear in searches`}</Text>
-                )}
-              </>
-            )}
-          </View>
-          {settingsUpdating
-            ? <ActivityIndicator color={Colors.accent} />
-            : <Switch
-                value={findMyPhotos}
-                onValueChange={handleToggleFindMyPhotos}
-                trackColor={{ false: '#333', true: Colors.accent }}
-                thumbColor={Colors.white}
-              />
-          }
-        </View>
+        {/* ⭐ The four switches use the shared SwitchRow (components/
+            SettingsRows.tsx, 2026-11-10) — same card + Home's row font. */}
+        <SwitchRow
+          label="Allow guests to delete photos"
+          info={SETTING_INFO.delete} infoOpen={openInfo === 'delete'} onInfoPress={() => toggleInfo('delete')}
+          status={allowGuestDelete && !viewOnly ? 'Guests can delete their own uploaded photos' : 'Guests cannot delete photos'}
+          busy={settingsUpdating}
+          value={viewOnly ? false : allowGuestDelete}
+          onValueChange={viewOnly ? undefined : handleToggleGuestDelete}
+          disabled={viewOnly}
+        />
+        <SwitchRow
+          label="Invite only event"
+          info={SETTING_INFO.invite} infoOpen={openInfo === 'invite'} onInfoPress={() => toggleInfo('invite')}
+          status={isClosed ? 'Only guests on the allowed list can join' : 'Anyone with the event code can join'}
+          busy={settingsUpdating}
+          value={isClosed}
+          onValueChange={handleToggleInviteOnly}
+          // 2026-11-07 (the user): a full-width row under a divider —
+          // "Allowed Guests (n)" in gold, (0) when empty, and a gold ›.
+          footer={isClosed ? (
+            <CardFooterRow label={`Allowed Guests (${allowedGuests.length})`} onPress={() => { loadAllowedGuests(); setShowGuestsPanel(true); }} />
+          ) : undefined}
+        />
+        {/* ⚠ The View only status line used to be STATIC — it read "Guests can
+            only view and download photos" even when the setting was OFF.
+            Fixed 2026-10-20. */}
+        <SwitchRow
+          label="View only event"
+          info={SETTING_INFO.view} infoOpen={openInfo === 'view'} onInfoPress={() => toggleInfo('view')}
+          status={viewOnly ? 'Guests can only view and download photos' : 'Guests can upload, view and download photos'}
+          busy={settingsUpdating}
+          value={viewOnly}
+          onValueChange={handleToggleViewOnly}
+        />
+        <SwitchRow
+          label="Find My Photos"
+          info={SETTING_INFO.fmp} infoOpen={openInfo === 'fmp'} onInfoPress={() => toggleInfo('fmp')}
+          status={findMyPhotos ? 'Guests can find photos of themselves using a selfie' : 'Guests cannot find photos of themselves using a selfie'}
+          extra={findMyPhotos && fmpStatus && fmpStatus.total > 0 ? (
+            <>
+              {fmpStatus.waiting > 0 && (
+                <Text style={rowStyles.extraLine}>{`Preparing: ${formatCount(fmpStatus.ready)} of ${formatCount(fmpStatus.total)} photos ready`}</Text>
+              )}
+              {fmpStatus.waiting === 0 && fmpStatus.failed === 0 && (
+                <Text style={rowStyles.extraLine}>All photos ready</Text>
+              )}
+              {fmpStatus.failed > 0 && (
+                <Text style={rowStyles.extraLine}>{fmpStatus.failed === 1
+                  ? '1 photo could not be prepared and won\'t appear in searches'
+                  : `${formatCount(fmpStatus.failed)} photos could not be prepared and won't appear in searches`}</Text>
+              )}
+            </>
+          ) : undefined}
+          busy={settingsUpdating}
+          value={findMyPhotos}
+          onValueChange={handleToggleFindMyPhotos}
+        />
 
         </>
         ) : (
@@ -959,19 +913,13 @@ export default function EventDetailScreen() {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={[styles.navRow, { marginTop: 16 }]} onPress={() => { setOpenInfo(null); setSettingsOpen(true); }}>
-          <Text style={styles.navRowText}>Event Settings</Text>
-          <Text style={styles.navRowArrow}>›</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navRow} onPress={() => {
-          // ONE Manage Guests for the whole app (2026-10-23): the same screen
-          // the Event screen's ⋮ menu opens. (Until 2026-11-06 it was the only
-          // item in a ⚙️ gear menu at the top right.)
+        <NavRow label="Event Settings" style={{ marginTop: 16 }} onPress={() => { setOpenInfo(null); setSettingsOpen(true); }} />
+        {/* ONE Manage Guests for the whole app (2026-10-23): the same screen
+            the Event screen's ⋮ menu opens. (Until 2026-11-06 it was the only
+            item in a ⚙️ gear menu at the top right.) */}
+        <NavRow label="Manage Guests" onPress={() => {
           router.push({ pathname: '/manage-guests', params: { slug: params.slug, adminPhone: params.organiserPhone ?? '', viewerRole: 'organiser', userMobile: params.organiserPhone ?? '', eventName: params.name ?? '' } });
-        }}>
-          <Text style={styles.navRowText}>Manage Guests</Text>
-          <Text style={styles.navRowArrow}>›</Text>
-        </TouchableOpacity>
+        }} />
 
         <View style={styles.divider} />
 
@@ -1594,25 +1542,8 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 13, color: '#555', marginBottom: 10 },
   panelEmpty: { fontSize: 13, color: '#555', lineHeight: 20, paddingHorizontal: 4 },
   manageGuestsInline: { fontSize: 13, fontWeight: '600', color: Colors.accent, marginTop: 6 },
-  settingRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: '#1A1A1A', borderRadius: 8, padding: 12, marginBottom: 4,
-    borderWidth: 0.5, borderColor: '#2A2A2A',
-  },
-  settingInfo: { flex: 1, marginRight: 12 },
-  settingLabel: { fontSize: 14, fontWeight: '700', color: Colors.white },
-  settingDesc: { fontSize: 12, color: Colors.textMuted, marginTop: 2 },
-  infoIcon: { fontSize: 13, fontWeight: '400', color: Colors.textMuted },
-  settingInfoText: { fontSize: 13, color: '#BBB', lineHeight: 19, marginTop: 6, marginBottom: 4, textAlign: 'justify' },
-  navRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#1A1A1A', borderWidth: 0.5, borderColor: '#2A2A2A', borderRadius: 8, paddingVertical: 14, paddingHorizontal: 12, marginBottom: 4 },
-  navRowText: { fontSize: 15, fontWeight: '700', color: Colors.white },
-  navRowArrow: { fontSize: 22, color: Colors.textMuted },
-  settingCardColumn: { flexDirection: 'column', alignItems: 'stretch' },
-  settingTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  allowedRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 0.5, borderTopColor: '#333', marginTop: 12, paddingTop: 10 },
-  allowedRowText: { fontSize: 14, fontWeight: '700', color: Colors.accent },
-  allowedRowCount: { fontSize: 14, color: Colors.textMuted },
-  fmpStatus: { fontSize: 12, color: Colors.textMuted, marginTop: 4 },
+  // The settings rows (switch cards, Allowed Guests row, Event Settings ›,
+  // Manage Guests ›) moved into the shared components/SettingsRows.tsx (2026-11-10).
   settingLocked: { fontSize: 11, color: '#555', marginTop: 4, fontStyle: 'italic' },
   coadminRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -1630,8 +1561,10 @@ const styles = StyleSheet.create({
   bottomBtnRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
   openBtn: { flex: 1, backgroundColor: Colors.accent, borderRadius: 12, padding: 16, alignItems: 'center' },
   openBtnText: { ...Typography.buttonText, color: Colors.background },
-  deleteBtn: { flex: 1, backgroundColor: '#2a2a2a', borderWidth: 1, borderColor: 'rgba(229,57,53,0.6)', borderRadius: 8, padding: 12, alignItems: 'center', justifyContent: 'center' },
-  deleteBtnText: { ...Typography.buttonText, color: '#E53935' },
+  // Delete Event (2026-11-10, the user's "Yes for both"): solid red, bold white
+  // text — the same look as its Continue button and Delete Account.
+  deleteBtn: { flex: 1, backgroundColor: '#E53935', borderRadius: 8, padding: 12, alignItems: 'center', justifyContent: 'center' },
+  deleteBtnText: { ...Typography.buttonText, fontWeight: '800', color: '#fff' },
   deletingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', gap: 16, padding: 24 },
   deletingText: { fontSize: 15, fontWeight: '700', color: Colors.white },
   deleteModal: { width: '100%', backgroundColor: '#1C1C1C', borderRadius: 16, padding: 24, borderWidth: 0.5, borderColor: '#333' },

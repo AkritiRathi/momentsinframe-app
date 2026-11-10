@@ -105,8 +105,11 @@ Thumb.displayName = 'Thumb';
 export default function MyPhotosScreen() {
   const params = useLocalSearchParams<{
     slug: string; adminPhone: string; userMobile: string;
-    eventName: string; totalPhotos: string;
+    eventName: string; totalPhotos: string; photographers?: string;
   }>();
+  // ⭐ Photographer's photos event (2026-11-11, the user): results in the
+  // photographer's order as the server sends them — one list, no date headings.
+  const photographerOrder = params.photographers === '1';
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { showAlert, alertOverlay } = useAlert();
@@ -216,6 +219,20 @@ export default function MyPhotosScreen() {
   const listItems = useMemo((): ListItem[] => {
     const items: ListItem[] = [];
 
+    // Photographer's photos event: one list straight through, the server's order.
+    if (photographerOrder) {
+      const all = [...photos, ...otherPhotos].map(p => p.id);
+      if (all.length > 0) {
+        items.push({ type: 'section_header', label: 'Photo Gallery', count: all.length,
+          sub: '(in file-name order)', key: 'header_main' });
+        for (let i = 0; i < all.length; i += COLS) {
+          items.push({ type: 'photo_row', ids: all.slice(i, i + COLS), startIndex: i, key: `row_pp_${i}` });
+        }
+      }
+      listDataRef.current = items;
+      return items;
+    }
+
     if (photos.length > 0) {
       items.push({ type: 'section_header', label: 'Photo Gallery', count: photos.length,
         sub: '(grouped by date · oldest first)', key: 'header_main' });
@@ -262,7 +279,7 @@ export default function MyPhotosScreen() {
 
     listDataRef.current = items;
     return items;
-  }, [photos, otherPhotos]);
+  }, [photos, otherPhotos, photographerOrder]);
 
   // ── Image addresses for what is about to be shown (plan C) ──────────────
   const visibleRowsRef = useRef<{ first: number; last: number }>({ first: 0, last: 8 });
@@ -634,8 +651,11 @@ export default function MyPhotosScreen() {
       } while (after);
       // Each chunk comes back sorted; sort the whole list oldest first.
       const byTime = (a: Photo, b: Photo) => new Date(a.taken_at || 0).getTime() - new Date(b.taken_at || 0).getTime();
-      main.sort(byTime);
-      other.sort(byTime);
+      // A Photographer's photos event keeps the server's order (file names).
+      if (!photographerOrder) {
+        main.sort(byTime);
+        other.sort(byTime);
+      }
       setSearchProgress(null);
       if (stoppedEarly) {
         showAlert('Search stopped part-way', `Checked ${checked} of ${total} photos. Try again to search the rest.`);

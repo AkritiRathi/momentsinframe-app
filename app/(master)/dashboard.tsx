@@ -23,6 +23,8 @@ type Event = {
   allow_guest_delete: boolean;
   view_only: boolean;
   find_my_photos_enabled: boolean;
+  photographers_photos?: boolean;
+  show_all_photos?: boolean;
   photo_count: number;
   total_size_bytes: number;
 };
@@ -141,6 +143,8 @@ export default function DashboardScreen() {
         allow_guest_delete: item.allow_guest_delete ? 'true' : 'false',
         view_only: item.view_only ? 'true' : 'false',
         find_my_photos: item.find_my_photos_enabled ? 'true' : 'false',
+        photographers_photos: item.photographers_photos ? 'true' : 'false',
+        show_all_photos: item.show_all_photos ? 'true' : 'false',
         organiserPhone: organiserPhone ?? '',
       },
     });

@@ -166,6 +166,9 @@ export default function GuestUploadsScreen() {
   // a download can never be captioned "Deleting...".
   const [deletingBulk, setDeletingBulk] = useState(false);
   const [eventExpired, setEventExpired] = useState(false);
+  // ⭐ Photographer's photos event (2026-11-11, the user): one list in the
+  // photographer's order (as the server sends it), and only the Organiser deletes.
+  const [photographersPhotos, setPhotographersPhotos] = useState(false);
   const [downloadingPhoto, setDownloadingPhoto] = useState(false);
   // ⛔ THE PROGRESS DIALOG — added 2026-10-17, this screen had NONE.
   // It showed only a small spinner where the Download button had been, so a
@@ -243,14 +246,20 @@ export default function GuestUploadsScreen() {
       perfView.listLoaded(); // ⏱ PERF
       // For the Admin-after-expiry rule below (the server refuses anyway).
       setEventExpired(!!(data?.event?.expires_at && new Date(data.event.expires_at) < new Date()));
+      const pp = data?.event?.photographers_photos === true;
+      setPhotographersPhotos(pp);
       // ⚠ These two were MERGED into one list until 2026-10-17, so this screen
       // showed every photo under "Photo Gallery" while the Event and My Photos
       // screens separated them. Kept apart now, main first.
       type Row = { id: string; taken_at: string; uploaded_by_mobile: string | null; thumbnail_path?: string | null; download_name?: string | null; uploaded_by_name?: string | null };
       const byDate = (a: Row, b: Row) =>
         new Date(a.taken_at).getTime() - new Date(b.taken_at).getTime();
-      const forGuest = (rows: Row[]) =>
-        rows.filter(p => p.uploaded_by_mobile === guest.mobile).sort(byDate);
+      // A Photographer's photos event keeps the server's order (the
+      // photographer's file-name order); every other event: by date, as before.
+      const forGuest = (rows: Row[]) => {
+        const own = rows.filter(p => p.uploaded_by_mobile === guest.mobile);
+        return pp ? own : own.sort(byDate);
+      };
 
       const mainRows = forGuest((data.photos ?? []) as Row[]);
       const otherRows = forGuest((data.otherPhotos ?? []) as Row[]);
@@ -296,6 +305,16 @@ export default function GuestUploadsScreen() {
       if (list.length === 0) return;   // no empty heading
       items.push({ type: 'gallery_header', label, count: list.length, sub, key: `gallery_${tag}` });
 
+      // Photographer's photos event: no date headings — rows straight through.
+      if (photographersPhotos) {
+        const rows = chunk(list, 3);
+        for (let r = 0; r < rows.length; r++) {
+          items.push({ type: 'photo_row', photos: rows[r], startIndex: flatIndex, key: `row_${tag}_pp_${r}` });
+          flatIndex += rows[r].length;
+        }
+        return;
+      }
+
       const groups: { date: string; photos: GuestPhotoItem[] }[] = [];
       for (const photo of list) {
         const existing = groups.find(g => g.date === photo.date);
@@ -316,7 +335,7 @@ export default function GuestUploadsScreen() {
     };
 
     section(photos.filter(p => !p.isOther), 'Photo Gallery',
-      '(grouped by date · oldest first)', 'main');
+      photographersPhotos ? '(in file-name order)' : '(grouped by date · oldest first)', 'main');
     // ⚠ A DIFFERENT SUBTITLE ON PURPOSE: these photos are here BECAUSE their
     // date cannot be trusted, so "grouped by date" would be untrue. Same
     // wording the Event screen uses.
@@ -325,7 +344,7 @@ export default function GuestUploadsScreen() {
 
     listDataRef.current = items;
     return items;
-  }, [photos]);
+  }, [photos, photographersPhotos]);
 
   // photoUrls is here so a row already on screen re-draws when its addresses arrive.
   const flatListExtraData = useMemo(() => ({ selected, mode, photoUrls }), [selected, mode, photoUrls]);
@@ -386,7 +405,9 @@ export default function GuestUploadsScreen() {
   // ⭐ An Admin cannot delete after the event expires (the server refuses with
   // "This event has expired."): the button stays but is greyed out, matching
   // the event screen (decided 2026-10-27, built 2026-10-30).
-  const adminDeleteClosed = viewerRole === 'coadmin' && eventExpired;
+  // Photographer's photos event (2026-11-11): only the Organiser deletes — an
+  // Admin's Delete stays in place, greyed, like after expiry.
+  const adminDeleteClosed = viewerRole === 'coadmin' && (eventExpired || photographersPhotos);
 
   function navigateLightbox(delta: number) {
     setLightboxIndex(prev => {

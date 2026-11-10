@@ -173,8 +173,10 @@ export async function listMyEvents() {
 // it is created and never changes (the user's decision, 2026-10-20).
 // Every new event starts open with uploads allowed (2026-11-06); Invite only
 // and View only are switches in Manage Event.
-export async function createEvent(organiserPhone: string, organiserPassword: string, name: string, expiresAt: string) {
-  return post('/api/native/events', { organiserPhone, organiserPassword, name, expiresAt });
+// ⭐ photographersPhotos (2026-11-11): a "Photographer's photos event" is chosen
+// HERE, once, and can never be changed afterwards (the server refuses it).
+export async function createEvent(organiserPhone: string, organiserPassword: string, name: string, expiresAt: string, photographersPhotos = false) {
+  return post('/api/native/events', { organiserPhone, organiserPassword, name, expiresAt, ...(photographersPhotos ? { photographersPhotos: true } : {}) });
 }
 
 export async function extendEvent(slug: string, organiserPhone: string, organiserPassword: string, newExpiresAt: string) {
@@ -468,7 +470,7 @@ export async function joinEvent(joinCode: string, phone?: string) {
   return post('/api/native/events/join', { joinCode, phone });
 }
 
-export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean; closeMode?: 'keep' | 'fresh'; viewOnly?: boolean; findMyPhotosEnabled?: boolean }) {
+export async function updateEventSettings(slug: string, organiserPhone: string, organiserPassword: string, settings: { allowGuestDelete?: boolean; isClosed?: boolean; closeMode?: 'keep' | 'fresh'; viewOnly?: boolean; findMyPhotosEnabled?: boolean; showAllPhotos?: boolean }) {
   const res = await fetch(`${API_BASE_URL}/api/native/events/${slug}/settings`, {
     method: 'PATCH',
     headers: await authHeaders({ 'Content-Type': 'application/json' }),

@@ -13,6 +13,8 @@ import { Colors } from '../../constants/colors';
 import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
 import { API_BASE_URL } from '../../constants/config';
+import { SwitchRow, BulletLines } from '../../components/SettingsRows';
+import { ALBUM_EVENT_NAME, ALBUM_EVENT_BULLETS_CREATE, ALBUM_EVENT_OFF_LINE } from '../../constants/albumEvent';
 
 function formatDisplay(date: Date): string {
   const dd = String(date.getDate()).padStart(2, '0');
@@ -35,6 +37,9 @@ export default function CreateEventScreen() {
   const [expiryDate, setExpiryDate] = useState<Date | null>(null);
   const [showPicker, setShowPicker] = useState(false);
   const [loading, setLoading] = useState(false);
+  // ⭐ "Photographer's photos event" (2026-11-11, the user): ONE switch, off by
+  // default, chosen here and never changed afterwards (the server refuses it).
+  const [photographersPhotos, setPhotographersPhotos] = useState(false);
 
   // ⭐ Invite only and View only are NOT chosen here any more (2026-11-06,
   // the user's decision): every new event starts open with uploads allowed,
@@ -95,7 +100,7 @@ export default function CreateEventScreen() {
         return;
       }
 
-      const result = await createEvent(profile.mobile, organiserPassword, name.trim(), toAPIFormat(expiryDate!));
+      const result = await createEvent(profile.mobile, organiserPassword, name.trim(), toAPIFormat(expiryDate!), photographersPhotos);
       if (result.error) {
         showAlert('Error', result.error);
         return;
@@ -152,6 +157,18 @@ export default function CreateEventScreen() {
               <Text style={styles.dateIcon}>📅</Text>
             </TouchableOpacity>
             <Text style={styles.hint}>Guests lose access after this date.</Text>
+
+            {/* ⭐ Album event (2026-11-11, the user's name and wording —
+                constants/albumEvent.ts). */}
+            <View style={{ marginBottom: 12 }}>
+            <SwitchRow
+              label={ALBUM_EVENT_NAME}
+              status={photographersPhotos ? undefined : ALBUM_EVENT_OFF_LINE}
+              extra={photographersPhotos ? <BulletLines lines={ALBUM_EVENT_BULLETS_CREATE} /> : undefined}
+              value={photographersPhotos}
+              onValueChange={setPhotographersPhotos}
+            />
+            </View>
 
             {showPicker && Platform.OS === 'android' && (
               <DateTimePicker
@@ -213,6 +230,12 @@ export default function CreateEventScreen() {
             <Text style={styles.modalWarning}>
               You are about to create <Text style={styles.modalStrong}>{name.trim()}</Text>.
             </Text>
+            {photographersPhotos && (
+              <View style={{ marginBottom: 12 }}>
+                <Text style={styles.modalStrong}>{ALBUM_EVENT_NAME}</Text>
+                <BulletLines lines={ALBUM_EVENT_BULLETS_CREATE} size="large" />
+              </View>
+            )}
             <TextInput
               style={styles.modalInput}
               value={password}
@@ -244,6 +267,14 @@ export default function CreateEventScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Create “{name.trim()}”?</Text>
+            <Text style={styles.modalWarning}>
+              {ALBUM_EVENT_NAME}: <Text style={styles.modalStrong}>{photographersPhotos ? 'On' : 'Off'}</Text>
+            </Text>
+            {photographersPhotos && (
+              <View style={{ marginBottom: 12, marginTop: -4 }}>
+                <BulletLines lines={ALBUM_EVENT_BULLETS_CREATE} size="large" />
+              </View>
+            )}
             <View style={styles.modalButtons}>
               <TouchableOpacity style={styles.modalCancel} onPress={() => setCreateStep(null)}>
                 <Text style={styles.modalCancelText}>Cancel</Text>

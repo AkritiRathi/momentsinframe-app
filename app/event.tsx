@@ -3,7 +3,7 @@ import {
   Modal, ActivityIndicator, Dimensions,
   Platform, BackHandler, AppState, RefreshControl, Alert, Switch,
 } from 'react-native';
-import { NavRow, ExpandRow, SubRow, SettingsHeader, SETTINGS_PAGE_MARGIN } from '../components/SettingsRows';
+import { NavRow, ExpandRow, SubRow, SettingsHeader, SETTINGS_PAGE_MARGIN, rowStyles } from '../components/SettingsRows';
 import PhotoActionRow from '../components/PhotoActionRow';
 import { FlashList } from '@shopify/flash-list';
 import { Image as ExpoImage } from 'expo-image';
@@ -230,7 +230,11 @@ function daysUntil(iso: string): number {
 }
 
 
-function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther, hideMyUploads, newCount, uploading }: {
+function SectionHeader({ section, items, selectMode, deleteMode, selected, onGroupToggle, isCoadmin, isAdmin, sortOrder, groupByDate, myUploadsFilter, onMyUploadsToggle, showMyUploadsOnOther, hideMyUploads, newCount, uploading, photographerOrder, myUploadsDisabled }: {
+  // Photographer's photos event (2026-11-11): one list in the photographer's
+  // order; a guest's My Uploads stays in place, greyed (guests cannot upload).
+  photographerOrder?: boolean;
+  myUploadsDisabled?: boolean;
   section: 'main' | 'other';
   items: Photo[];
   selectMode: boolean;
@@ -251,7 +255,9 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
   const isMain = section === 'main';
   const label = isMain ? 'Photo Gallery' : 'Other Photos Gallery';
   const allSelected = items.length > 0 && items.every(p => selected.has(p.id));
-  const subText = isMain
+  const subText = photographerOrder
+    ? '(in file-name order)'
+    : isMain
     ? groupByDate
       ? `(grouped by date · ${sortOrder === 'desc' ? 'newest first' : 'oldest first'})`
       : `(sorted by date taken · ${sortOrder === 'desc' ? 'newest first' : 'oldest first'})`
@@ -272,8 +278,8 @@ function SectionHeader({ section, items, selectMode, deleteMode, selected, onGro
           </View>
           {(isMain || showMyUploadsOnOther) && !hideMyUploads && (
             <TouchableOpacity
-              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode || uploading) && { opacity: 0.35 }]}
-              disabled={selectMode || deleteMode || uploading}
+              style={[styles.myUploadsPill, myUploadsFilter && styles.myUploadsPillActive, (selectMode || deleteMode || uploading || myUploadsDisabled) && { opacity: 0.35 }]}
+              disabled={selectMode || deleteMode || uploading || myUploadsDisabled}
               onPress={onMyUploadsToggle}
             >
               <Text style={[styles.myUploadsPillText, myUploadsFilter && styles.myUploadsPillTextActive]}>
@@ -957,6 +963,14 @@ export default function EventScreen() {
   const [myUploadsFilter, setMyUploadsFilter] = useState(false);
   const [coadminPhones, setCoadminPhones] = useState<Set<string>>(new Set());
   const [findMyPhotosEnabled, setFindMyPhotosEnabled] = useState(false);
+  // ⭐ Photographer's photos event (2026-11-11, the user's decisions): the type,
+  // and what THIS person is shown ('all' | 'mine' | 'selfie_needed' | 'none',
+  // decided by the server). Read from the photo list.
+  const [photographersPhotos, setPhotographersPhotos] = useState(false);
+  const [photoVisibility, setPhotoVisibility] = useState<string>('all');
+  // How many photos the WHOLE event has (server, a number only) — 0 shows
+  // "No photos uploaded yet." to everyone in a Complete event photos event.
+  const [eventPhotoCount, setEventPhotoCount] = useState<number | null>(null);
   const [menuVisible, setMenuVisible] = useState(false);
   const menuBtnRef = useRef<any>(null);
   const [menuBtnLayout, setMenuBtnLayout] = useState<{ top: number; right: number } | null>(null);
@@ -1248,6 +1262,9 @@ export default function EventScreen() {
         }
         if (Array.isArray(data.event.coadminPhones)) setCoadminPhones(new Set(data.event.coadminPhones));
         if (typeof data.event.find_my_photos_enabled === 'boolean') setFindMyPhotosEnabled(data.event.find_my_photos_enabled);
+        setPhotographersPhotos(data.event.photographers_photos === true);
+        setPhotoVisibility(typeof data.event.photo_visibility === 'string' ? data.event.photo_visibility : 'all');
+        setEventPhotoCount(typeof data.event.photo_count === 'number' ? data.event.photo_count : null);
       }
       setLoading(false);
       // Drop addresses made for an older version of a photo (replaced by a
@@ -2587,9 +2604,14 @@ export default function EventScreen() {
   // Who may delete at all. The Delete button always shows; when this is false
   // it is greyed out and a hint explains why, like the Upload button.
   // Guests cannot even open an expired event, so expiry only affects co-admins.
-  const canDelete = isAdmin ? !(isEventExpired && isCoadmin) : (allowGuestDelete && !viewOnly);
+  // Photographer's photos event (2026-11-11, the user): only the Organiser
+  // deletes; guests cannot upload. Both buttons stay in place, greyed, with the
+  // reason in the hint (RULES D53/D54).
+  const ppNotOrganiser = photographersPhotos && userRole !== 'organiser';
+  const ppGuest = photographersPhotos && !isAdmin;
+  const canDelete = ppNotOrganiser ? false : isAdmin ? !(isEventExpired && isCoadmin) : (allowGuestDelete && !viewOnly);
   const deleteClosedHint = !canDelete
-    ? (isEventExpired ? 'Deletes are closed for this event' : 'The Organiser has turned off deleting for guests.')
+    ? (ppNotOrganiser ? 'Only the Organiser can delete photos in this event.' : isEventExpired ? 'Deletes are closed for this event' : 'The Organiser has turned off deleting for guests.')
     : null;
   const deletablePhotos = myUploadsFilter && userMobile
     ? [...photos, ...otherPhotos].filter(p => p.uploaded_by_mobile === userMobile)
@@ -2618,7 +2640,9 @@ export default function EventScreen() {
     if (daysLeft <= 3) items.push({ type: 'expiry_banner', key: 'expiry_banner' });
     items.push({ type: 'upload_card', key: 'upload_card' });
 
-    if (totalPhotos > 0 && !selectMode && !deleteMode) {
+    // Delete / Download always shown (2026-11-11, the user: every event) —
+    // greyed while there are no photos, so the screen never changes shape.
+    if (!selectMode && !deleteMode) {
       items.push({ type: 'select_photos_btn', key: 'select_photos_btn' });
     }
 
@@ -2650,8 +2674,13 @@ export default function EventScreen() {
       ? (myUploadsFilter && userMobile ? deleteFilteredOther.filter(p => p.uploaded_by_mobile === userMobile) : deleteFilteredOther)
       : myUploadsFilter && userMobile ? otherPhotos.filter(p => p.uploaded_by_mobile === userMobile) : otherPhotos;
 
-    const orderedMain = sortOrder === 'desc' ? [...baseMain].reverse() : baseMain;
-    const otherList = sortOrder === 'desc' ? [...baseOther].reverse() : baseOther;
+    // ⭐ Photographer's photos event (2026-11-11, the user): ONE list in the
+    // photographer's file-name order (the server sends it in that order and
+    // nothing under Other Photos) — no date headings, no order choice.
+    const effSort: 'asc' | 'desc' = photographersPhotos ? 'asc' : sortOrder;
+    const effGroup = photographersPhotos ? false : groupByDate;
+    const orderedMain = effSort === 'desc' ? [...baseMain].reverse() : baseMain;
+    const otherList = effSort === 'desc' ? [...baseOther].reverse() : baseOther;
 
     function formatDateLabel(takenAt: string): string {
       return new Date(takenAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'Asia/Kolkata' });
@@ -2659,9 +2688,9 @@ export default function EventScreen() {
 
     if (orderedMain.length > 0) {
       items.push({ type: 'section_header', section: 'main', key: 'header_main' });
-      if (groupByDate) {
+      if (effGroup) {
         // Group by date respecting sortOrder: sortOrder=desc → newest date first
-        const sourceForGroups = sortOrder === 'desc' ? [...baseMain].reverse() : [...baseMain];
+        const sourceForGroups = effSort === 'desc' ? [...baseMain].reverse() : [...baseMain];
         const groups: { date: string; photos: Photo[] }[] = [];
         for (const p of sourceForGroups) {
           const dateLabel = formatDateLabel(p.taken_at);
@@ -2686,8 +2715,8 @@ export default function EventScreen() {
 
     if (otherList.length > 0) {
       items.push({ type: 'section_header', section: 'other', key: 'header_other' });
-      if (groupByDate) {
-        const sourceForGroups = sortOrder === 'desc' ? [...baseOther].reverse() : [...baseOther];
+      if (effGroup) {
+        const sourceForGroups = effSort === 'desc' ? [...baseOther].reverse() : [...baseOther];
         const groups: { date: string; photos: Photo[] }[] = [];
         for (const p of sourceForGroups) {
           const dateLabel = formatDateLabel(p.taken_at);
@@ -2724,7 +2753,7 @@ export default function EventScreen() {
     }
 
     return { listData: items, stickyIndices: sticky, orderedMain, orderedOther: otherList };
-  }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, sortOrder, groupByDate, myUploadsFilter]);
+  }, [photos, otherPhotos, selectMode, deleteMode, daysLeft, totalPhotos, loading, userMobile, isAdmin, sortOrder, groupByDate, myUploadsFilter, photographersPhotos]);
 
   const lightboxPhotos = lightboxSection === 'main' ? (orderedMain ?? photos) : (orderedOther ?? otherPhotos);
 
@@ -3012,6 +3041,11 @@ export default function EventScreen() {
               <TouchableOpacity style={[styles.uploadBtn, { opacity: 0.4 }]} disabled>
                 <Text style={styles.uploadBtnText}>View Only Event</Text>
               </TouchableOpacity>
+            ) : ppGuest ? (
+              // Photographer's photos event: a guest's Upload stays in place, greyed.
+              <TouchableOpacity style={[styles.uploadBtn, { opacity: 0.4 }]} disabled>
+                <Text style={styles.uploadBtnText}>Upload Photos</Text>
+              </TouchableOpacity>
             ) : (
               <TouchableOpacity style={[styles.uploadBtn, (selectMode || deleteMode || myUploadsFilter) && { opacity: 0.5 }, uploadsClosed && { opacity: 0.4 }]} onPress={() => requestAppPermission('gallery', showUploadOptions, userMobile ?? params.adminPhone ?? null)} disabled={selectMode || deleteMode || myUploadsFilter || uploadsClosed}>
                 <Text style={styles.uploadBtnText}>Upload Photos</Text>
@@ -3020,12 +3054,20 @@ export default function EventScreen() {
             <Text style={styles.uploadHint}>
               {viewOnly && !isAdmin
                 ? 'The Organiser has disabled uploads for this event.'
+                : ppGuest
+                ? 'Only the Organiser and Admins upload in this event.'
                 : uploadsClosed
                   ? 'Uploads are closed for this event'
                   : `Max ${UPLOAD_BATCH_LIMIT} photos per batch.\nKeep the app open while uploading.`}
             </Text>
             {deleteClosedHint && (
               <Text style={styles.uploadHint}>{deleteClosedHint}</Text>
+            )}
+            {/* Every event while Find My Photos is on (2026-11-11, the user's
+                wording) — not for a Complete event photos guest whose photos are
+                not shown to all: their gallery message already says it. */}
+            {findMyPhotosEnabled && !(ppGuest && photoVisibility !== 'all') && (
+              <Text style={styles.uploadHint}>Find your photos with a selfie: ⋮ → My Settings → Find My Photos</Text>
             )}
             {uploadSummary && (
               <Text style={styles.uploadSummary}>{uploadSummary}</Text>
@@ -3041,13 +3083,14 @@ export default function EventScreen() {
             style={{ paddingTop: 0 }}
             left={{
               label: 'Delete Photos',
-              disabled: bgUploading || !canDelete,
-              onPress: () => { if (!bgUploading && canDelete) { setDeleteMode(true); setSelectMode(false); } },
+              disabled: bgUploading || !canDelete || totalPhotos === 0,
+              onPress: () => { if (!bgUploading && canDelete && totalPhotos > 0) { setDeleteMode(true); setSelectMode(false); } },
             }}
             right={{
               label: 'Download Photos',
               dim: bgUploading,
-              onPress: () => { if (!bgUploading) { setSelectMode(true); setDeleteMode(false); } },
+              disabled: totalPhotos === 0,
+              onPress: () => { if (!bgUploading && totalPhotos > 0) { setSelectMode(true); setDeleteMode(false); } },
             }}
           />
         );
@@ -3079,6 +3122,8 @@ export default function EventScreen() {
               myUploadsFilter={myUploadsFilter}
               showMyUploadsOnOther={item.section === 'other' && (photos.length === 0 || (myUploadsFilter && !!userMobile && !photos.some(p => p.uploaded_by_mobile === userMobile)))}
               hideMyUploads={viewOnly && !isAdmin}
+              photographerOrder={photographersPhotos}
+              myUploadsDisabled={ppGuest}
               newCount={item.section === 'main' ? newMainCount : newOtherCount}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
@@ -3124,6 +3169,43 @@ export default function EventScreen() {
         );
 
       case 'empty':
+        // ⭐ Complete event photos with NO photos at all (2026-11-11, the
+        // user's "Yes"): the same line for everyone, from the server's count.
+        if (photographersPhotos && eventPhotoCount === 0) {
+          return (
+            <View style={styles.empty}>
+              <Text style={styles.emptyText}>No photos uploaded yet.</Text>
+              <Text style={styles.emptySub}>{isAdmin ? 'Upload the event\'s photos to share them with guests.' : 'Photos will appear here once they are added.'}</Text>
+            </View>
+          );
+        }
+        // ⭐ Photographer's photos event, a guest (2026-11-11, the user's
+        // decisions): say WHY the list is empty — never a bare empty gallery.
+        if (ppGuest && photoVisibility === 'none') {
+          return (
+            <View style={styles.empty}>
+              <Text style={styles.emptyText}>The Organiser hasn't shared photos with guests yet.</Text>
+            </View>
+          );
+        }
+        if (ppGuest && photoVisibility === 'selfie_needed') {
+          return (
+            <View style={styles.empty}>
+              <Text style={styles.emptyText}>Take a selfie in Find My Photos to see the photos you are in.</Text>
+              <Text style={styles.emptySub}>Open ⋮ → My Settings → Find My Photos.</Text>
+            </View>
+          );
+        }
+        if (ppGuest && photoVisibility === 'mine') {
+          return (
+            <View style={styles.empty}>
+              {/* A selfie was taken: the guest's photos are shown ONLY in Find
+                  My Photos (2026-11-11, the user) — this screen points there. */}
+              <Text style={styles.emptyText}>Your photos are in Find My Photos.</Text>
+              <Text style={styles.emptySub}>Open ⋮ → My Settings → Find My Photos.</Text>
+            </View>
+          );
+        }
         return (
           <View style={styles.empty}>
             <Text style={styles.emptyText}>No photos yet.</Text>
@@ -3569,6 +3651,8 @@ export default function EventScreen() {
               myUploadsFilter={myUploadsFilter}
               showMyUploadsOnOther={stickySection === 'other' && (photos.length === 0 || (myUploadsFilter && !!userMobile && !photos.some(p => p.uploaded_by_mobile === userMobile)))}
               hideMyUploads={viewOnly && !isAdmin}
+              photographerOrder={photographersPhotos}
+              myUploadsDisabled={ppGuest}
               newCount={stickySection === 'main' ? newMainCount : newOtherCount}
               onMyUploadsToggle={() => {
                 if (!myUploadsFilter && (selectMode || deleteMode)) exitSelectMode();
@@ -3637,7 +3721,10 @@ export default function EventScreen() {
 
           {/* Photo order: tap to slide open; gold ✓ on the order in use; a tap
               applies and remembers it at once. */}
-          <ExpandRow label="Photo order" open={photoOrderOpen} onToggle={() => setPhotoOrderOpen(o => !o)}>
+          {/* Photographer's photos event (2026-11-11, the user): no order
+              choice — the row stays in place, greyed, with the reason. */}
+          <View style={photographersPhotos ? { opacity: 0.4 } : undefined} pointerEvents={photographersPhotos ? 'none' : 'auto'}>
+          <ExpandRow label="Photo order" open={photographersPhotos ? false : photoOrderOpen} onToggle={() => setPhotoOrderOpen(o => !o)}>
             {(['asc', 'desc'] as const).map(mode => (
               <SubRow key={mode} label={mode === 'asc' ? 'Oldest first' : 'Newest first'}
                 mark={sortOrder === mode ? 'tick' : 'none'}
@@ -3647,6 +3734,10 @@ export default function EventScreen() {
                 }} />
             ))}
           </ExpandRow>
+          </View>
+          {photographersPhotos && (
+            <Text style={[rowStyles.status, { marginHorizontal: SETTINGS_PAGE_MARGIN, marginTop: -4, marginBottom: 8 }]}>Shown in file-name order</Text>
+          )}
 
           {findMyPhotosEnabled && (
             <NavRow label="Find My Photos" onPress={async () => {
@@ -3666,6 +3757,9 @@ export default function EventScreen() {
                 userMobile: userMobile ?? '',
                 eventName: params.name ?? '',
                 totalPhotos: String([...photos, ...otherPhotos].length),
+                // Photographer's photos event (2026-11-11): results in the
+                // photographer's order, no date headings.
+                photographers: photographersPhotos ? '1' : '0',
               }});
             }} />
           )}

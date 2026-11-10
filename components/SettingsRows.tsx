@@ -78,22 +78,26 @@ export function SubRow({ label, onPress, mark = 'chevron' }: {
 // A setting with a switch (Event Settings). Same card, name font and colours
 // as the rows above. Tapping the name (with ⓘ) opens / closes the explanation.
 export function SwitchRow({
-  label, info, infoOpen, onInfoPress, status, extra,
+  label, info, infoNode, infoOpen, onInfoPress, status, extra,
   value, onValueChange, disabled, busy, footer,
 }: {
   label: string; info?: string; infoOpen?: boolean; onInfoPress?: () => void;
+  // Shown instead of `info` when the name is tapped (e.g. the Album event's
+  // bullets, 2026-11-11 — the user: closed by default, opens on the name).
+  infoNode?: React.ReactNode;
   status?: string; extra?: React.ReactNode;
   value: boolean; onValueChange?: (v: boolean) => void; disabled?: boolean; busy?: boolean;
   footer?: React.ReactNode;
 }) {
+  const hasInfo = !!info || !!infoNode;
   return (
     <View style={[rowStyles.switchCard, footer ? rowStyles.switchCardColumn : null]}>
       <View style={rowStyles.switchTop}>
         <View style={rowStyles.switchInfo}>
           <TouchableOpacity onPress={onInfoPress} activeOpacity={0.7} disabled={!onInfoPress}>
-            <Text style={rowStyles.rowText}>{label}{info ? <Text style={rowStyles.infoIcon}> ⓘ</Text> : null}</Text>
+            <Text style={rowStyles.rowText}>{label}{hasInfo ? <Text style={rowStyles.infoIcon}> ⓘ</Text> : null}</Text>
           </TouchableOpacity>
-          {infoOpen && info ? <Text style={rowStyles.infoText}>{info}</Text> : null}
+          {infoOpen && infoNode ? infoNode : infoOpen && info ? <Text style={rowStyles.infoText}>{info}</Text> : null}
           {status ? <Text style={rowStyles.status}>{status}</Text> : null}
           {extra}
         </View>
@@ -122,6 +126,31 @@ export function CardFooterRow({ label, onPress }: { label: string; onPress: () =
   );
 }
 
+// A switch line inside a card's footer, under the same thin line as
+// CardFooterRow — "Show all photos to everyone" under "Photographer's photos"
+// (2026-11-11, the user: "like the Allowed Guests for Invite only event").
+export function CardFooterSwitch({ label, status, value, onValueChange, busy }: {
+  label: string; status?: string; value: boolean; onValueChange?: (v: boolean) => void; busy?: boolean;
+}) {
+  return (
+    <View style={rowStyles.footerRow}>
+      <View style={rowStyles.switchInfo}>
+        <Text style={rowStyles.footerText}>{label}</Text>
+        {status ? <Text style={rowStyles.status}>{status}</Text> : null}
+      </View>
+      {busy
+        ? <ActivityIndicator color={Colors.accent} />
+        : <Switch
+            value={value}
+            onValueChange={onValueChange}
+            trackColor={{ false: '#333', true: Colors.accent }}
+            thumbColor={Colors.white}
+          />
+      }
+    </View>
+  );
+}
+
 export function SettingsHeader({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <View style={rowStyles.header}>
@@ -130,6 +159,23 @@ export function SettingsHeader({ title, onBack }: { title: string; onBack: () =>
       </TouchableOpacity>
       <Text style={rowStyles.headerTitle}>{title}</Text>
       <View style={{ width: 40 }} />
+    </View>
+  );
+}
+
+// Bulleted, justified lines — the Album event explanation (2026-11-11, the
+// user: "justified with bullet points"). `size` 'small' = under a switch,
+// 'large' = inside a pop-up box.
+export function BulletLines({ lines, size = 'small' }: { lines: string[]; size?: 'small' | 'large' }) {
+  const text = size === 'large' ? rowStyles.bulletTextLarge : rowStyles.bulletText;
+  return (
+    <View style={{ marginTop: 4 }}>
+      {lines.map((l, i) => (
+        <View key={i} style={rowStyles.bulletRow}>
+          <Text style={text}>•</Text>
+          <Text style={[text, rowStyles.bulletBody]}>{l}</Text>
+        </View>
+      ))}
     </View>
   );
 }
@@ -156,6 +202,10 @@ export const rowStyles = StyleSheet.create({
   extraLine: { fontSize: 12, color: Colors.textMuted, marginTop: 4 },
   footerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderTopWidth: 0.5, borderTopColor: '#333', marginTop: 12, paddingTop: 10 },
   footerText: { fontSize: 14, fontWeight: '700', color: Colors.accent },
+  bulletRow: { flexDirection: 'row', marginTop: 2 },
+  bulletBody: { flex: 1, paddingLeft: 6, textAlign: 'justify' },
+  bulletText: { fontSize: 12, lineHeight: 17, color: Colors.textMuted },
+  bulletTextLarge: { fontSize: 13, lineHeight: 20, color: '#BBB' },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 },
   headerBack: { fontSize: 24, color: Colors.white },
   headerTitle: { fontSize: 18, fontWeight: '700', color: Colors.white },

@@ -18,7 +18,8 @@ import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
 import SearchBox from '../../components/SearchBox';
 import { PersonLines } from '../../components/PersonLines';
-import { NavRow, SwitchRow, CardFooterRow, rowStyles } from '../../components/SettingsRows';
+import { NavRow, SwitchRow, CardFooterRow, CardFooterSwitch, BulletLines, rowStyles } from '../../components/SettingsRows';
+import { ALBUM_EVENT_NAME, ALBUM_EVENT_BULLETS_SETTINGS, ALBUM_EVENT_NOT_USED } from '../../constants/albumEvent';
 
 // ⛔ ONE MATCH RULE FOR EVERY PEOPLE-SEARCH ON THIS SCREEN. Three lists use
 // it, so they cannot drift apart (app/manage-guests.tsx carries the same rule). It matches anything a row can DISPLAY: the
@@ -63,7 +64,12 @@ export default function EventDetailScreen() {
     id: string; name: string; slug: string; join_code: string;
     created_at: string; expires_at: string; photo_count: string; total_size_bytes: string;
     is_closed: string; allow_guest_delete: string; view_only: string; find_my_photos: string; organiserPhone: string;
+    photographers_photos?: string; show_all_photos?: string;
   }>();
+  // ⭐ Photographer's photos event (2026-11-11): chosen at creation, never
+  // changed; "Show all photos to everyone" can be turned on and off any time.
+  const photographersPhotos = params.photographers_photos === 'true';
+  const [showAllPhotos, setShowAllPhotos] = useState(params.show_all_photos === 'true');
 
   const [showExtendPicker, setShowExtendPicker] = useState(false);
   const [extendPickerDate, setExtendPickerDate] = useState<Date>(new Date());
@@ -423,7 +429,11 @@ export default function EventDetailScreen() {
         ? '• Guests can find photos of themselves with a selfie.\n' +
           '• Faces in this event\'s photos will be scanned: the photos already uploaded and every new upload.\n' +
           '• Face data is kept until you delete the event.'
-        : 'Guests can no longer search for their photos. Face data already made is kept until you delete the event.',
+        // Photographer's photos event with photos not shown to all (2026-11-11,
+        // the user's "Yes"): guests would then see nothing — say so first.
+        : photographersPhotos && !showAllPhotos
+          ? 'Guests will not see any photos until you turn Find My Photos back on or turn on Show all photos to everyone.'
+          : 'Guests can no longer search for their photos. Face data already made is kept until you delete the event.',
       [
         {
           text: value ? 'Turn on' : 'Turn off',
@@ -438,6 +448,33 @@ export default function EventDetailScreen() {
             } else {
               setFindMyPhotos(value);
             }
+          },
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  }
+
+  // ⭐ "Show all photos to everyone" (2026-11-11, the user's decisions): on/off
+  // at any time, asks first; turning it on tells the event's guests (bell) —
+  // the server sends that notice.
+  function handleToggleShowAll(value: boolean) {
+    showAlert(
+      value ? 'Show all photos to everyone?' : 'Show guests only their own photos?',
+      value
+        ? 'Every guest in this event will see all photos. They can still use Find My Photos to find their own.'
+        : 'Each guest will see only the photos they are in. Photos guests already downloaded stay on their phones.',
+      [
+        {
+          text: value ? 'Show all' : 'Turn off',
+          onPress: async () => {
+            const pw = await getOrganiserPassword();
+            if (!pw || !params.organiserPhone) return;
+            setSettingsUpdating(true);
+            const result = await updateEventSettings(params.slug, params.organiserPhone, pw, { showAllPhotos: value });
+            setSettingsUpdating(false);
+            if (result.error) showAlert('Error', result.error);
+            else setShowAllPhotos(value);
           },
         },
         { text: 'Cancel', style: 'cancel' },
@@ -806,17 +843,49 @@ export default function EventDetailScreen() {
           <Text style={styles.pageTitle}>Event Settings</Text>
         </View>
         <Text style={styles.eventName}>{params.name}</Text>
+        {/* ⭐ Photographer's photos (2026-11-11, the user): chosen when the event
+            was created, shown here locked (never changed). In such an event,
+            "Show all photos to everyone" sits under it like Allowed Guests
+            under Invite only, and can be turned on and off at any time. */}
+        {/* Named "Album event" (2026-11-11, the user); the bullets come from
+            constants/albumEvent.ts so they match the New event screen. */}
+        {/* Closed by default — only the name; tapping the name opens the
+            bullets (normal event: the one line). The user, 2026-11-11: "It should
+            show nothing - it should only expand when I press the name". */}
+        <SwitchRow
+          label={ALBUM_EVENT_NAME}
+          infoNode={photographersPhotos
+            ? <BulletLines lines={ALBUM_EVENT_BULLETS_SETTINGS} />
+            : <Text style={rowStyles.infoText}>Chosen when the event was created. It can't be changed.</Text>}
+          infoOpen={openInfo === 'album'} onInfoPress={() => toggleInfo('album')}
+          value={photographersPhotos}
+          disabled
+          footer={photographersPhotos ? (
+            <CardFooterSwitch
+              label="Show all photos to everyone"
+              status={showAllPhotos ? 'Everyone in this event sees all photos.' : 'Each guest sees only the photos they are in.'}
+              value={showAllPhotos}
+              busy={settingsUpdating}
+              onValueChange={handleToggleShowAll}
+            />
+          ) : undefined}
+        />
         {/* ⭐ The four switches use the shared SwitchRow (components/
             SettingsRows.tsx, 2026-11-10) — same card + Home's row font. */}
+        {/* Photographer's photos event (2026-11-11, the user's "Yes"): guests
+            cannot upload or delete there, so this switch and View only stay in
+            place, greyed, with the reason (RULES D53). */}
+        <View style={photographersPhotos ? { opacity: 0.4 } : undefined} pointerEvents={photographersPhotos ? 'none' : 'auto'}>
         <SwitchRow
           label="Allow guests to delete photos"
           info={SETTING_INFO.delete} infoOpen={openInfo === 'delete'} onInfoPress={() => toggleInfo('delete')}
-          status={allowGuestDelete && !viewOnly ? 'Guests can delete their own uploaded photos' : 'Guests cannot delete photos'}
+          status={photographersPhotos ? ALBUM_EVENT_NOT_USED : allowGuestDelete && !viewOnly ? 'Guests can delete their own uploaded photos' : 'Guests cannot delete photos'}
           busy={settingsUpdating}
-          value={viewOnly ? false : allowGuestDelete}
-          onValueChange={viewOnly ? undefined : handleToggleGuestDelete}
-          disabled={viewOnly}
+          value={viewOnly || photographersPhotos ? false : allowGuestDelete}
+          onValueChange={viewOnly || photographersPhotos ? undefined : handleToggleGuestDelete}
+          disabled={viewOnly || photographersPhotos}
         />
+        </View>
         <SwitchRow
           label="Invite only event"
           info={SETTING_INFO.invite} infoOpen={openInfo === 'invite'} onInfoPress={() => toggleInfo('invite')}
@@ -833,14 +902,17 @@ export default function EventDetailScreen() {
         {/* ⚠ The View only status line used to be STATIC — it read "Guests can
             only view and download photos" even when the setting was OFF.
             Fixed 2026-10-20. */}
+        <View style={photographersPhotos ? { opacity: 0.4 } : undefined} pointerEvents={photographersPhotos ? 'none' : 'auto'}>
         <SwitchRow
           label="View only event"
           info={SETTING_INFO.view} infoOpen={openInfo === 'view'} onInfoPress={() => toggleInfo('view')}
-          status={viewOnly ? 'Guests can only view and download photos' : 'Guests can upload, view and download photos'}
+          status={photographersPhotos ? ALBUM_EVENT_NOT_USED : viewOnly ? 'Guests can only view and download photos' : 'Guests can upload, view and download photos'}
           busy={settingsUpdating}
-          value={viewOnly}
-          onValueChange={handleToggleViewOnly}
+          value={photographersPhotos ? false : viewOnly}
+          onValueChange={photographersPhotos ? undefined : handleToggleViewOnly}
+          disabled={photographersPhotos}
         />
+        </View>
         <SwitchRow
           label="Find My Photos"
           info={SETTING_INFO.fmp} infoOpen={openInfo === 'fmp'} onInfoPress={() => toggleInfo('fmp')}

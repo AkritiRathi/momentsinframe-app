@@ -2547,7 +2547,10 @@ export default function EventScreen() {
     if (Platform.OS === 'android' && !folderPath && mode === 'downloads') return;
 
     // ⭐ Always a choice (2026-11-07). Above JPG_LIMIT, JPG asks once more.
-    // More than one ZIP → Save as ZIP asks once more, naming how many.
+    // Save as ZIP always asks once more, naming how many ZIPs — also for one
+    // ZIP (50 or fewer), the user 2026-11-11/12: "The message should be shown
+    // with less that 50 photos to zip" → "Yes". Same on Guest Uploads, Find My
+    // Photos and the website.
     const zipCount = Math.ceil(ids.length / 50);
     showAlert(
       `Download ${ids.length} photo${ids.length > 1 ? 's' : ''}`,
@@ -2574,19 +2577,17 @@ export default function EventScreen() {
         {
           text: 'Save as ZIP',
           onPress: () => {
-            if (zipCount > 1) {
-              showAlert(
-                `Save as ${zipCount} ZIP files?`,
-                `A ZIP holds up to 50 photos, so your ${ids.length} photos will be saved as ${zipCount} ZIP files.`,
-                [
-                  { text: 'Save as ZIP', onPress: () => downloadAsZip(ids) },
-                  { text: 'Cancel', style: 'cancel' },
-                ],
-                undefined, false, true
-              );
-              return;
-            }
-            downloadAsZip(ids);
+            showAlert(
+              zipCount > 1 ? `Save as ${zipCount} ZIP files?` : 'Save as a ZIP file?',
+              zipCount > 1
+                ? `A ZIP holds up to 50 photos, so your ${ids.length} photos will be saved as ${zipCount} ZIP files.`
+                : `A ZIP holds up to 50 photos, so your ${ids.length} photo${ids.length === 1 ? '' : 's'} will be saved as one ZIP file.`,
+              [
+                { text: 'Save as ZIP', onPress: () => downloadAsZip(ids) },
+                { text: 'Cancel', style: 'cancel' },
+              ],
+              undefined, false, true
+            );
           },
         },
         { text: 'Cancel', style: 'cancel' },

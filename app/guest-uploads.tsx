@@ -683,19 +683,18 @@ export default function GuestUploadsScreen() {
         {
           text: 'Save as ZIP',
           onPress: () => {
-            if (zipCount > 1) {
-              showAlert(
-                `Save as ${zipCount} ZIP files?`,
-                `A ZIP holds up to 50 photos, so your ${ids.length} photos will be saved as ${zipCount} ZIP files.`,
-                [
-                  { text: 'Save as ZIP', onPress: () => doDownloadZip(ids) },
-                  { text: 'Cancel', style: 'cancel' },
-                ],
-                undefined, false, true
-              );
-              return;
-            }
-            doDownloadZip(ids);
+            // Always asked, also for one ZIP (2026-11-12, the user's "Yes").
+            showAlert(
+              zipCount > 1 ? `Save as ${zipCount} ZIP files?` : 'Save as a ZIP file?',
+              zipCount > 1
+                ? `A ZIP holds up to 50 photos, so your ${ids.length} photos will be saved as ${zipCount} ZIP files.`
+                : `A ZIP holds up to 50 photos, so your ${ids.length} photo${ids.length === 1 ? '' : 's'} will be saved as one ZIP file.`,
+              [
+                { text: 'Save as ZIP', onPress: () => doDownloadZip(ids) },
+                { text: 'Cancel', style: 'cancel' },
+              ],
+              undefined, false, true
+            );
           },
         },
         { text: 'Cancel', style: 'cancel' },

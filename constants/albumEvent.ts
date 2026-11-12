@@ -25,3 +25,13 @@ export const ALBUM_EVENT_OFF_LINE = 'Event settings can be changed from Organise
 
 // Settings that do not apply in an Album event.
 export const ALBUM_EVENT_NOT_USED = 'Not used with Complete event photos.';
+
+// Manage Event → Admins, in a Complete event photos event (2026-11-12, the
+// user's "Yes"): Admins upload, only the Organiser deletes, View only is not
+// used — so the normal "Admins can delete…" and "Upload even when the event is
+// view-only" lines would be wrong here. Normal events keep their own wording.
+export const ALBUM_EVENT_ADMIN_PANEL_LINE = 'Admins can upload photos. Only you can delete photos in this event. They join using the event code, just like other guests.';
+export const ALBUM_EVENT_ADMIN_POWERS =
+  '• Upload photos (only you can delete photos in this event)\n' +
+  '• Block a guest from this event\n' +
+  "• See guests' names and phone numbers\n\n";

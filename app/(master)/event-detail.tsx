@@ -19,7 +19,7 @@ import { useAlert } from '../../lib/useAlert';
 import SearchBox from '../../components/SearchBox';
 import { PersonLines } from '../../components/PersonLines';
 import { NavRow, SwitchRow, CardFooterRow, CardFooterSwitch, BulletLines, rowStyles } from '../../components/SettingsRows';
-import { ALBUM_EVENT_NAME, ALBUM_EVENT_BULLETS_SETTINGS, ALBUM_EVENT_NOT_USED } from '../../constants/albumEvent';
+import { ALBUM_EVENT_NAME, ALBUM_EVENT_BULLETS_SETTINGS, ALBUM_EVENT_NOT_USED, ALBUM_EVENT_ADMIN_PANEL_LINE, ALBUM_EVENT_ADMIN_POWERS } from '../../constants/albumEvent';
 
 // ⛔ ONE MATCH RULE FOR EVERY PEOPLE-SEARCH ON THIS SCREEN. Three lists use
 // it, so they cannot drift apart (app/manage-guests.tsx carries the same rule). It matches anything a row can DISPLAY: the
@@ -681,10 +681,12 @@ export default function EventDetailScreen() {
       // vague, so each power is spelled out. Keep in step with the server:
       // an Admin cannot delete the Organiser's or another Admin's photos.
       "An Admin can:\n" +
-        "• Delete photos uploaded by guests (not yours or other Admins')\n" +
-        "• Block a guest from this event\n" +
-        "• See guests' names and phone numbers\n" +
-        "• Upload even when the event is view-only\n\n" +
+        (photographersPhotos
+          ? ALBUM_EVENT_ADMIN_POWERS
+          : "• Delete photos uploaded by guests (not yours or other Admins')\n" +
+            "• Block a guest from this event\n" +
+            "• See guests' names and phone numbers\n" +
+            "• Upload even when the event is view-only\n\n") +
         "You can remove them as an Admin at any time.",
       [
         {
@@ -1165,7 +1167,7 @@ export default function EventDetailScreen() {
               <Text style={styles.panelClose}>×</Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.panelDesc}>Admins can delete photos uploaded by guests, but not photos by you or other Admins. They join using the event code, just like other guests.</Text>
+          <Text style={styles.panelDesc}>{photographersPhotos ? ALBUM_EVENT_ADMIN_PANEL_LINE : 'Admins can delete photos uploaded by guests, but not photos by you or other Admins. They join using the event code, just like other guests.'}</Text>
           <SearchBox value={coadminListSearch} onChangeText={setCoadminListSearch} />
           <ScrollView contentContainerStyle={styles.panelScroll}>
             {coadminsLoading ? (

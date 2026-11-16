@@ -20,8 +20,10 @@ export const ALBUM_EVENT_BULLETS_CREATE = [...COMMON, 'This cannot be changed af
 // In Event Settings, once created.
 export const ALBUM_EVENT_BULLETS_SETTINGS = [...COMMON, 'Chosen when the event was created. It can\'t be changed.'];
 
-// The line under the switch when it is OFF — the user's own wording.
-export const ALBUM_EVENT_OFF_LINE = 'Event settings can be changed from Organiser login → Manage Event → Event Settings.';
+// (2026-11-16: the line under the switch when OFF — "Event settings can be
+// changed from Organiser login → Manage Event → Event Settings." — was removed;
+// the New event info box now says it once, the user: "Manage Event → Event
+// Settings is only mentioned once".)
 
 // Settings that do not apply in an Album event.
 export const ALBUM_EVENT_NOT_USED = 'Not used with Complete event photos.';

@@ -14,7 +14,7 @@ import { Typography } from '../../constants/typography';
 import { useAlert } from '../../lib/useAlert';
 import { API_BASE_URL } from '../../constants/config';
 import { SwitchRow, BulletLines } from '../../components/SettingsRows';
-import { ALBUM_EVENT_NAME, ALBUM_EVENT_BULLETS_CREATE, ALBUM_EVENT_OFF_LINE } from '../../constants/albumEvent';
+import { ALBUM_EVENT_NAME, ALBUM_EVENT_BULLETS_CREATE } from '../../constants/albumEvent';
 
 function formatDisplay(date: Date): string {
   const dd = String(date.getDate()).padStart(2, '0');
@@ -143,8 +143,6 @@ export default function CreateEventScreen() {
               style={styles.input}
               value={name}
               onChangeText={(v) => setName(v.slice(0, 50))}
-              placeholder="e.g. Rathi Family Wedding"
-              placeholderTextColor="#444"
               maxLength={50}
             />
             <Text style={styles.charCount}>{name.length}/50</Text>
@@ -159,11 +157,12 @@ export default function CreateEventScreen() {
             <Text style={styles.hint}>Guests lose access after this date.</Text>
 
             {/* ⭐ Album event (2026-11-11, the user's name and wording —
-                constants/albumEvent.ts). */}
+                constants/albumEvent.ts). No line under the name while OFF
+                (2026-11-16, the user: "Manage Event → Event Settings is only
+                mentioned once" — the info box below says it). */}
             <View style={{ marginBottom: 12 }}>
             <SwitchRow
               label={ALBUM_EVENT_NAME}
-              status={photographersPhotos ? undefined : ALBUM_EVENT_OFF_LINE}
               extra={photographersPhotos ? <BulletLines lines={ALBUM_EVENT_BULLETS_CREATE} /> : undefined}
               value={photographersPhotos}
               onValueChange={setPhotographersPhotos}
@@ -211,7 +210,7 @@ export default function CreateEventScreen() {
 
             <View style={styles.noteCard}>
               <Text style={styles.noteIcon}>ℹ️</Text>
-              <Text style={styles.noteText}>An event code will be auto-generated. Share it with guests so they can join.</Text>
+              <Text style={styles.noteText}>An event code will be auto-generated. You can share it with guests, and change the event settings any time, from Manage Event.</Text>
             </View>
 
             <View style={styles.divider} />

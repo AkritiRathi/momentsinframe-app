@@ -9,7 +9,7 @@ import * as Contacts from 'expo-contacts';
 import { listJoinedGuestsForUser, setGuestBlockedByUser } from '../lib/api';
 
 // ⭐ THE ONLY "Manage Guests" IN THE APP (since 2026-10-23). It is opened
-// from the Event screen's ⋮ menu (Organiser and Admins) AND from the gear
+// from the Event screen's ⚙️ menu (Organiser and Admins) AND from the gear
 // menu in app/(master)/event-detail.tsx (Organiser). That file used to carry
 // its own copy as a panel; the two drifted apart several times, so it was
 // removed. ⛔ Do not build a second copy — route here.

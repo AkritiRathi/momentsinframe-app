@@ -9,7 +9,7 @@ import { deletePhotos } from './api';
 //
 // The three choices (the user, 2026-10-30), in this order:
 //   Move to Recycle bin — main button (first). Restorable for 30 days from
-//                         the event's ⋮ menu → Recycle bin.
+//                         the event's ⚙️ menu → Recycle bin.
 //   Delete permanently  — red. TODAY'S delete, unchanged.
 //   Cancel              — last.
 

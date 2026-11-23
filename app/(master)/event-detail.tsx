@@ -989,7 +989,7 @@ export default function EventDetailScreen() {
 
         <NavRow label="Event Settings" style={{ marginTop: 16 }} onPress={() => { setOpenInfo(null); setSettingsOpen(true); }} />
         {/* ONE Manage Guests for the whole app (2026-10-23): the same screen
-            the Event screen's ⋮ menu opens. (Until 2026-11-06 it was the only
+            the Event screen's ⚙️ menu opens. (Until 2026-11-06 it was the only
             item in a ⚙️ gear menu at the top right.) */}
         <NavRow label="Manage Guests" onPress={() => {
           router.push({ pathname: '/manage-guests', params: { slug: params.slug, adminPhone: params.organiserPhone ?? '', viewerRole: 'organiser', userMobile: params.organiserPhone ?? '', eventName: params.name ?? '' } });

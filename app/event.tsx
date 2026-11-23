@@ -952,7 +952,7 @@ export default function EventScreen() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc'); // newest first by default
   // Photos are always grouped by date now — the option was removed from Sort & Display.
   const [groupByDate] = useState(true);
-  // ⭐ MY SETTINGS (2026-11-10, the user's layout): the ⋮ item that replaced
+  // ⭐ MY SETTINGS (2026-11-10, the user's layout): the ⚙️ menu item that replaced
   // 'Sort & Display' — a full page with Photo order and Find My Photos (later
   // also Reported Photos, Trusted Circle). Memory: project_event_menu.md.
   const [mySettingsVisible, setMySettingsVisible] = useState(false);
@@ -2954,14 +2954,15 @@ export default function EventScreen() {
                   <Text style={styles.adminGearIcon}>🔔</Text>
                   {hasUnread && <View style={styles.notifDot} />}
                 </TouchableOpacity>
-                {/* ⋮ off while My Uploads, select / delete mode or an upload is on (2026-11-07, the user's "Yes"). */}
+                {/* ⚙️ menu button (was ⋮ until 2026-11-24 — the user: "the ... menu should be replaced with the <gear> everywhere").
+                    Off while My Uploads, select / delete mode or an upload is on (2026-11-07, the user's "Yes"). */}
                 <TouchableOpacity ref={menuBtnRef} style={[styles.menuBtn, (myUploadsFilter || selectMode || deleteMode || bgUploading) && { opacity: 0.35 }]} disabled={myUploadsFilter || selectMode || deleteMode || bgUploading} onPress={() => {
                   menuBtnRef.current?.measure((_x: number, _y: number, width: number, height: number, pageX: number, pageY: number) => {
                     setMenuBtnLayout({ top: pageY + height, right: SCREEN_WIDTH - pageX - width });
                     setMenuVisible(true);
                   });
                 }}>
-                  <Text style={styles.menuBtnText}>⋮</Text>
+                  <Text style={styles.menuBtnText}>⚙️</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -3068,7 +3069,7 @@ export default function EventScreen() {
                 wording) — not for a Complete event photos guest whose photos are
                 not shown to all: their gallery message already says it. */}
             {findMyPhotosEnabled && !(ppGuest && photoVisibility !== 'all') && (
-              <Text style={styles.uploadHint}>Find your photos with a selfie: ⋮ → My Settings → Find My Photos</Text>
+              <Text style={styles.uploadHint}>Find your photos with a selfie: ⚙️ → My Settings → Find My Photos</Text>
             )}
             {uploadSummary && (
               <Text style={styles.uploadSummary}>{uploadSummary}</Text>
@@ -3193,7 +3194,7 @@ export default function EventScreen() {
           return (
             <View style={styles.empty}>
               <Text style={styles.emptyText}>Take a selfie in Find My Photos to see the photos you are in.</Text>
-              <Text style={styles.emptySub}>Open ⋮ → My Settings → Find My Photos.</Text>
+              <Text style={styles.emptySub}>Open ⚙️ → My Settings → Find My Photos.</Text>
             </View>
           );
         }
@@ -3203,7 +3204,7 @@ export default function EventScreen() {
               {/* A selfie was taken: the guest's photos are shown ONLY in Find
                   My Photos (2026-11-11, the user) — this screen points there. */}
               <Text style={styles.emptyText}>Your photos are in Find My Photos.</Text>
-              <Text style={styles.emptySub}>Open ⋮ → My Settings → Find My Photos.</Text>
+              <Text style={styles.emptySub}>Open ⚙️ → My Settings → Find My Photos.</Text>
             </View>
           );
         }
@@ -3676,7 +3677,7 @@ export default function EventScreen() {
       <Modal visible={menuVisible} transparent animationType="fade" onRequestClose={() => setMenuVisible(false)}>
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setMenuVisible(false)}>
           <View style={[styles.menuDropdown, menuBtnLayout ? { top: menuBtnLayout.top, right: menuBtnLayout.right } : {}]}>
-            {/* ⭐ ⋮ MENU (2026-11-10, the user's layout): My Settings · Manage
+            {/* ⭐ ⚙️ MENU (was ⋮ until 2026-11-24; layout 2026-11-10, the user's): My Settings · Manage
                 Guests (Organiser + Admins) · Recycle bin. Photo order and Find
                 My Photos moved INTO My Settings. Memory: project_event_menu.md. */}
             <TouchableOpacity style={[styles.menuItem, (selectMode || deleteMode) && { opacity: 0.4 }]} disabled={selectMode || deleteMode} onPress={() => { setMenuVisible(false); setPhotoOrderOpen(false); setMySettingsVisible(true); }}>
@@ -4196,7 +4197,7 @@ const styles = StyleSheet.create({
   sectionCount: { fontSize: 14, color: '#888' },
   sectionSub: { fontSize: 13, color: '#666' },
   menuBtn: { padding: 4 },
-  menuBtnText: { fontSize: 22, color: '#fff', fontWeight: '700' },
+  menuBtnText: { fontSize: 20 }, // ⚙️ — same size as the Home / dashboard gear (settingsIcon)
   menuOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' },
   menuDropdown: { position: 'absolute', backgroundColor: '#1C1C1C', borderRadius: 12, borderWidth: 0.5, borderColor: '#333', overflow: 'hidden' },
   menuItem: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, gap: 12 },

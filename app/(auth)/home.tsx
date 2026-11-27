@@ -258,7 +258,9 @@ export default function HomeScreen() {
                   };
                   showAlert(
                     'Log out?',
-                    'You will be removed from all events you have joined, including any Admin roles. Your uploaded photos will remain with your name. If you log in again with the same number, you can rejoin open events and manage your photos.\n\n"Log out from all devices" also logs you out on your other phones and browsers.',
+                    // Wording 2026-11-27 (the user's "Yes"): Log out only ends the sign-in — the
+                    // person stays in their events and Admin roles (server logout route, since 031ff45).
+                    'You will be logged out on this phone. You stay in all your events and keep any Admin roles — log in again with the same number to carry on.\n\n"Log out from all devices" also logs you out on your other phones and browsers.',
                     [
                       {
                         text: 'Log out', onPress: async () => {

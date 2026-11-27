@@ -1,7 +1,8 @@
 import { Platform } from 'react-native';
 import { router } from 'expo-router';
 import { API_BASE_URL } from '../constants/config';
-import { getSessionToken, saveSessionToken, clearSessionToken } from './storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getSessionToken, saveSessionToken, clearUserProfile } from './storage';
 
 // Every request carries the login token issued at OTP verification, so the
 // server can read the caller's number from the token instead of trusting the
@@ -22,18 +23,22 @@ async function authHeaders(base: Record<string, string> = {}): Promise<Record<st
 let handlingExpiry = false;
 
 /**
- * The server refused our token: the 30-day login ended, or the user chose
- * "Log out from all devices" on another device. Send them straight to the
- * code screen for THEIR number ("Log in again").
- * ⛔ 2026-10-30: this used to go to `/(auth)/login`, which is only a redirect
- * to Home — the profile is kept, so the user sat on Home with no login and no
- * way to enter a code (the user hit this on device, 2026-10-29).
+ * The server refused our token: the 30-day login ended, the account was
+ * deleted, or "Log out from all devices" was chosen on another device.
+ * ⭐ 2026-11-27 (the user: "When a user logs out it should just comeback to the
+ * login page", then "1. Yes 2. Yes" — app too, 30-day limit too): clear this
+ * phone exactly like Log out (profile, login, remembered event code, saved
+ * lists) and open the plain sign-in page ("Let's get started"), no message.
+ * [Was: kept the profile and opened name-entry with renew=expired — the
+ * "Log in again / Your login has ended…" screen, now unused.]
+ * ⛔ 2026-10-30: never go to `/(auth)/login` — it only redirects to Home.
  */
 async function handleUnauthorised(res: Response): Promise<void> {
   if (res.status !== 401 || handlingExpiry) return;
   handlingExpiry = true;
-  try { await clearSessionToken(); } catch { /* keep going — the bounce matters more */ }
-  try { router.replace({ pathname: '/(auth)/name-entry', params: { renew: 'expired' } }); } catch { /* no navigator yet */ }
+  try { await clearUserProfile(); } catch { /* keep going — the bounce matters more */ }
+  try { await AsyncStorage.clear(); } catch { /* same */ }
+  try { router.replace('/(auth)/name-entry'); } catch { /* no navigator yet */ }
 }
 
 function makeTimeout(ms: number) {

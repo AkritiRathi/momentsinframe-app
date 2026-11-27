@@ -37,6 +37,9 @@ export default function NameEntryScreen() {
 
   // ⭐ RENEW MODE (2026-10-30, the user's yes): `renew=renew` from the Home
   // screen's "Renew now", `renew=expired` when the server refused the login.
+  // ⏸ UNUSED since 2026-11-27: nothing sends `renew=expired` any more — a
+  // refused login now opens this page plainly (lib/api.ts handleUnauthorised).
+  // Left in place for the pre-launch tidy-up (project_prelaunch_tidyup.md).
   // The user's own number is filled in and locked — this is a new code for the
   // same person, not a different login. The user still taps Go (no code is
   // sent without a tap).

@@ -26,8 +26,9 @@ export function useAlert() {
     return () => sub.remove();
   }, [config]);
 
-  // `justify` (2026-11-07, the user's yes): justified message text — used
-  // only by the download pop-ups; every other pop-up stays left-aligned.
+  // `justify` (2026-11-07, the user's yes): justified message text — used by
+  // the download pop-ups. Since 2026-11-27 EVERY message is justified (see
+  // alertStyles.message), so this option no longer changes anything.
   function showAlert(title: string, message?: string, buttons: AlertButton[] = [{ text: 'OK' }], detail?: string, rowButtons?: boolean, justify?: boolean) {
     setConfig({ title, message, detail, buttons, rowButtons, justify });
   }
@@ -122,7 +123,9 @@ export const alertStyles = StyleSheet.create({
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.65)', zIndex: 300, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 },
   card: { width: '100%', backgroundColor: '#1c1c1e', borderRadius: 16, padding: 24, borderWidth: 0.5, borderColor: '#333' },
   title: { fontSize: 18, fontWeight: '600', color: Colors.white, textAlign: 'center', marginBottom: 8 },
-  message: { fontSize: 15, color: Colors.textMuted, lineHeight: 21, textAlign: 'left', marginBottom: 16 },
+  // ⭐ Every pop-up message is justified (2026-11-27, the user's "Yes" — was
+  // left-aligned, with `justify` only on the download pop-ups since 2026-11-07).
+  message: { fontSize: 15, color: Colors.textMuted, lineHeight: 21, textAlign: 'justify', marginBottom: 16 },
   messageJustify: { textAlign: 'justify' },
   // Bulleted messages: the block keeps the message's bottom gap; its lines do not.
   messageBlock: { marginBottom: 16 },

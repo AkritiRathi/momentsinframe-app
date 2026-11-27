@@ -106,6 +106,11 @@ export async function clearUserProfile(): Promise<void> {
   // to survive logout for up to 24h, so the next person to log in on this phone
   // inherited the previous Organiser's saved password.
   await clearOrganiserSession();
+  // ⛔ And the remembered event code (2026-11-27, the user: "1. Yes, both."
+  // — Log out AND Delete Account). It lives in SecureStore, which
+  // AsyncStorage.clear() does not touch, so after a Delete Account the next
+  // sign-in on this phone found the previous person's event code pre-filled.
+  await SecureStore.deleteItemAsync(KEYS.LAST_EVENT_CODE);
 }
 
 // ── Last Event ────────────────────────────────────────────────────────────────
